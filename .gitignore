@@ -12,3 +12,6 @@
 *.tmp
 *.log
 .DS_Store
+sysinfo.txt
+Assets/Resources/football-data-config.json
+*.json
