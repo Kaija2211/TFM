@@ -15,109 +15,52 @@ namespace Data
         private readonly Dictionary<int, string> teamNames = new();
         private int nextTeamId = 1;
 
-        private string NormaliseTeamName(string teamName)
-{
-    teamName = teamName.Trim();
-
-    // Merge "Manchester City" and "Manchester City FC"
-    if (teamName.EndsWith(" FC"))
-    {
-        teamName = teamName.Substring(0, teamName.Length - 3);
-    }
-
-    return teamName;
-}
-
         private void Start()
-{
-    if (seasonFiles == null || seasonFiles.Length == 0)
-    {
-        Debug.LogError("No OpenFootball season files assigned.");
-        return;
-    }
-
-    Debug.Log($"Season file slots assigned: {seasonFiles.Length}");
-
-
-         matches.Clear();
-        teamIds.Clear();
-        teamNames.Clear();
-        nextTeamId = 1;
-
-    foreach (TextAsset file in seasonFiles)
-    {
-        if (file == null)
-            continue;
-
-        int beforeCount = matches.Count;
-
-        LoadMatches(file.text);
-
-        int loadedFromFile = matches.Count - beforeCount;
-
-        Debug.Log($"Loaded {loadedFromFile} matches from {file.name}.");
-    }
-
-    Debug.Log($"Loaded {matches.Count} total matches from {seasonFiles.Length} season files.");
-
-    List<MatchRecord> records = ConvertToMatchRecords();
-
-    LeagueTable table = new LeagueTable();
-
-    foreach (MatchRecord record in records)
-    {
-        table.Apply(record);
-    }
-
-    List<LeagueTable.Entry> sortedTable = table.Sorted();
-
-    Debug.Log("Combined league table from all loaded seasons:");
-
-    Debug.Log("Team appearance counts:");
-
-foreach (var pair in teamIds)
-{
-    string teamName = pair.Key;
-    int teamId = pair.Value;
-
-    int appearances = 0;
-
-    foreach (MatchRecord record in records)
-    {
-        if (record.HomeTeamId == teamId || record.AwayTeamId == teamId)
         {
-            appearances++;
+            if (seasonFiles == null || seasonFiles.Length == 0)
+            {
+                Debug.LogError("No OpenFootball season files assigned.");
+                return;
+            }
+
+            matches.Clear();
+            teamIds.Clear();
+            teamNames.Clear();
+            nextTeamId = 1;
+
+            foreach (TextAsset file in seasonFiles)
+            {
+                if (file == null)
+                {
+                    Debug.LogWarning("An assigned season file slot is empty.");
+                    continue;
+                }
+
+                int beforeCount = matches.Count;
+
+                LoadMatches(file.text);
+
+                int loadedFromFile = matches.Count - beforeCount;
+
+                Debug.Log($"Loaded {loadedFromFile} matches from {file.name}.");
+            }
+
+            Debug.Log($"Loaded {matches.Count} total matches from {seasonFiles.Length} season files.");
+
+            List<MatchRecord> records = ConvertToMatchRecords();
+
+            LeagueTable table = new LeagueTable();
+
+            foreach (MatchRecord record in records)
+            {
+                table.Apply(record);
+            }
+
+            PrintLeagueTable(table);
         }
-    }
-
-    Debug.Log($"{teamName}: {appearances} matches");
-}
-
-    for (int i = 0; i < sortedTable.Count; i++)
-    {
-        LeagueTable.Entry entry = sortedTable[i];
-
-        string teamName = teamNames.ContainsKey(entry.TeamId)
-            ? teamNames[entry.TeamId]
-            : $"Team {entry.TeamId}";
-
-        Debug.Log(
-            $"{i + 1}. {teamName} " +
-            $"Pts:{entry.Points} " +
-            $"P:{entry.Played} " +
-            $"W:{entry.Wins} " +
-            $"D:{entry.Draws} " +
-            $"L:{entry.Losses} " +
-            $"GF:{entry.GoalsFor} " +
-            $"GA:{entry.GoalsAgainst} " +
-            $"GD:{entry.GoalsFor - entry.GoalsAgainst}"
-        );
-    }
-}
 
         private void LoadMatches(string fileText)
         {
-
             string[] lines = fileText.Split('\n');
 
             foreach (string rawLine in lines)
@@ -136,7 +79,7 @@ foreach (var pair in teamIds)
                 {
                     matches.Add(parsedMatch.Value);
                 }
-                else if (line.Contains(" v "))
+                else if (Regex.IsMatch(line, @"\d+-\d+"))
                 {
                     Debug.LogWarning($"Could not parse match line: {line}");
                 }
@@ -144,49 +87,49 @@ foreach (var pair in teamIds)
         }
 
         private OpenFootballMatch? ParseLine(string line)
-{
-    // Removes optional kickoff time at start, e.g. "20:00 "
-    line = Regex.Replace(line, @"^\d{1,2}:\d{2}\s+", "");
-
-    // Newer format:
-    // Manchester United FC v Fulham FC 1-0 (0-0)
-    Match newerFormat = Regex.Match(
-        line,
-        @"^(.+?)\s+v\s+(.+?)\s+(\d+)-(\d+)(?:\s+\(\d+-\d+\))?\s*$"
-    );
-
-    if (newerFormat.Success)
-    {
-        return new OpenFootballMatch
         {
-            HomeTeam = NormaliseTeamName(newerFormat.Groups[1].Value),
-            AwayTeam = NormaliseTeamName(newerFormat.Groups[2].Value),
-            HomeGoals = int.Parse(newerFormat.Groups[3].Value),
-            AwayGoals = int.Parse(newerFormat.Groups[4].Value)
-        };
-    }
+            // Removes optional kickoff time at start, e.g. "20:00 "
+            line = Regex.Replace(line, @"^\d{1,2}:\d{2}\s+", "");
 
-   // Older format:
-// Arsenal 4-3 (2-2) Leicester City
-// Arsenal 4-3 Leicester City
-Match olderFormat = Regex.Match(
-    line,
-    @"^(.+?)\s+(\d+)-(\d+)(?:\s+\(\d+-\d+\))?\s+(.+?)\s*$"
-);
+            // Newer format:
+            // Manchester United v Fulham 1-0 (0-0)
+            Match newerFormat = Regex.Match(
+                line,
+                @"^(.+?)\s+v\s+(.+?)\s+(\d+)-(\d+)(?:\s+\(\d+-\d+\))?\s*$"
+            );
 
-if (olderFormat.Success)
-{
-    return new OpenFootballMatch
-    {
-        HomeTeam = NormaliseTeamName(olderFormat.Groups[1].Value),
-        AwayTeam = NormaliseTeamName(olderFormat.Groups[4].Value),
-        HomeGoals = int.Parse(olderFormat.Groups[2].Value),
-        AwayGoals = int.Parse(olderFormat.Groups[3].Value)
-    };
-}
+            if (newerFormat.Success)
+            {
+                return new OpenFootballMatch
+                {
+                    HomeTeam = NormaliseTeamName(newerFormat.Groups[1].Value),
+                    AwayTeam = NormaliseTeamName(newerFormat.Groups[2].Value),
+                    HomeGoals = int.Parse(newerFormat.Groups[3].Value),
+                    AwayGoals = int.Parse(newerFormat.Groups[4].Value)
+                };
+            }
 
-    return null;
-}
+            // Older format:
+            // Arsenal 4-3 (2-2) Leicester City
+            // Arsenal 4-3 Leicester City
+            Match olderFormat = Regex.Match(
+                line,
+                @"^(.+?)\s+(\d+)-(\d+)(?:\s+\(\d+-\d+\))?\s+(.+?)\s*$"
+            );
+
+            if (olderFormat.Success)
+            {
+                return new OpenFootballMatch
+                {
+                    HomeTeam = NormaliseTeamName(olderFormat.Groups[1].Value),
+                    AwayTeam = NormaliseTeamName(olderFormat.Groups[4].Value),
+                    HomeGoals = int.Parse(olderFormat.Groups[2].Value),
+                    AwayGoals = int.Parse(olderFormat.Groups[3].Value)
+                };
+            }
+
+            return null;
+        }
 
         private List<MatchRecord> ConvertToMatchRecords()
         {
@@ -205,6 +148,47 @@ if (olderFormat.Success)
             }
 
             return records;
+        }
+
+        private void PrintLeagueTable(LeagueTable table)
+        {
+            List<LeagueTable.Entry> sortedTable = table.Sorted();
+
+            Debug.Log("Combined league table from loaded seasons:");
+
+            for (int i = 0; i < sortedTable.Count; i++)
+            {
+                LeagueTable.Entry entry = sortedTable[i];
+
+                string teamName = teamNames.ContainsKey(entry.TeamId)
+                    ? teamNames[entry.TeamId]
+                    : $"Team {entry.TeamId}";
+
+                Debug.Log(
+                    $"{i + 1}. {teamName} " +
+                    $"Pts:{entry.Points} " +
+                    $"P:{entry.Played} " +
+                    $"W:{entry.Wins} " +
+                    $"D:{entry.Draws} " +
+                    $"L:{entry.Losses} " +
+                    $"GF:{entry.GoalsFor} " +
+                    $"GA:{entry.GoalsAgainst} " +
+                    $"GD:{entry.GoalsFor - entry.GoalsAgainst}"
+                );
+            }
+        }
+
+        private string NormaliseTeamName(string teamName)
+        {
+            teamName = teamName.Trim();
+
+            // Merge "Manchester City" and "Manchester City FC"
+            if (teamName.EndsWith(" FC"))
+            {
+                teamName = teamName.Substring(0, teamName.Length - 3);
+            }
+
+            return teamName;
         }
 
         private int GetTeamId(string teamName)
