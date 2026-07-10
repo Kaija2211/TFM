@@ -38,7 +38,7 @@ namespace Data
 
                 int beforeCount = matches.Count;
 
-                LoadMatches(file.text);
+                LoadMatches(file.text, file.name);
 
                 int loadedFromFile = matches.Count - beforeCount;
 
@@ -48,6 +48,12 @@ namespace Data
             Debug.Log($"Loaded {matches.Count} total matches from {seasonFiles.Length} season files.");
 
             List<MatchRecord> records = ConvertToMatchRecords();
+
+            List<OpenFootballMatch> trainingMatches = matches.FindAll(m => !m.Season.Contains("2025_26"));
+            List<OpenFootballMatch> evaluationMatches = matches.FindAll(m => m.Season.Contains("2025_26"));
+
+            Debug.Log($"Training matches: {trainingMatches.Count}");
+            Debug.Log($"Evaluation matches: {evaluationMatches.Count}");
 
             LeagueTable table = new LeagueTable();
 
@@ -59,7 +65,7 @@ namespace Data
             PrintLeagueTable(table);
         }
 
-        private void LoadMatches(string fileText)
+        private void LoadMatches(string fileText, string seasonName)
         {
             string[] lines = fileText.Split('\n');
 
@@ -73,7 +79,7 @@ namespace Data
                 if (line.StartsWith("#"))
                     continue;
 
-                OpenFootballMatch? parsedMatch = ParseLine(line);
+                OpenFootballMatch? parsedMatch = ParseLine(line, seasonName);
 
                 if (parsedMatch.HasValue)
                 {
@@ -86,7 +92,7 @@ namespace Data
             }
         }
 
-        private OpenFootballMatch? ParseLine(string line)
+        private OpenFootballMatch? ParseLine(string line, string seasonName)
         {
             // Removes optional kickoff time at start, e.g. "20:00 "
             line = Regex.Replace(line, @"^\d{1,2}:\d{2}\s+", "");
@@ -105,7 +111,8 @@ namespace Data
                     HomeTeam = NormaliseTeamName(newerFormat.Groups[1].Value),
                     AwayTeam = NormaliseTeamName(newerFormat.Groups[2].Value),
                     HomeGoals = int.Parse(newerFormat.Groups[3].Value),
-                    AwayGoals = int.Parse(newerFormat.Groups[4].Value)
+                    AwayGoals = int.Parse(newerFormat.Groups[4].Value),
+                    Season = seasonName,
                 };
             }
 
@@ -124,7 +131,8 @@ namespace Data
                     HomeTeam = NormaliseTeamName(olderFormat.Groups[1].Value),
                     AwayTeam = NormaliseTeamName(olderFormat.Groups[4].Value),
                     HomeGoals = int.Parse(olderFormat.Groups[2].Value),
-                    AwayGoals = int.Parse(olderFormat.Groups[3].Value)
+                    AwayGoals = int.Parse(olderFormat.Groups[3].Value),
+                    Season = seasonName,
                 };
             }
 
@@ -213,5 +221,6 @@ namespace Data
         public string AwayTeam;
         public int HomeGoals;
         public int AwayGoals;
+        public string Season;
     }
 }

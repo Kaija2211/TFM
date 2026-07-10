@@ -11,5 +11,6 @@ namespace Sim
         public int AwayTeamId;
         public int HomeGoals;
         public int AwayGoals;
+
     }
 }
