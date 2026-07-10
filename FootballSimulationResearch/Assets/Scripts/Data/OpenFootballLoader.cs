@@ -47,7 +47,7 @@ namespace Data
 
             Debug.Log($"Loaded {matches.Count} total matches from {seasonFiles.Length} season files.");
 
-            List<MatchRecord> records = ConvertToMatchRecords();
+            //List<MatchRecord> records = ConvertToMatchRecords();
 
             List<OpenFootballMatch> trainingMatches = matches.FindAll(m => !m.Season.Contains("2025_26"));
             List<OpenFootballMatch> evaluationMatches = matches.FindAll(m => m.Season.Contains("2025_26"));
@@ -55,15 +55,70 @@ namespace Data
             Debug.Log($"Training matches: {trainingMatches.Count}");
             Debug.Log($"Evaluation matches: {evaluationMatches.Count}");
 
-            LeagueTable table = new LeagueTable();
+            StatisticalModel statisticalModel = new StatisticalModel();
+            statisticalModel.Train(trainingMatches);
+            statisticalModel.PrintTeamStrengths(10);
+            statisticalModel.PrintExpectedGoalsSamples(evaluationMatches, 10);
+            statisticalModel.PrintSimulatedMatchSamples(evaluationMatches, 10);
 
-            foreach (MatchRecord record in records)
-            {
-                table.Apply(record);
-            }
+            List<StatisticalModel.SimulatedMatchResult> simulatedResults =
+                statisticalModel.SimulateSeason(evaluationMatches);
 
-            PrintLeagueTable(table);
+            PrintSimulatedLeagueTable(simulatedResults);
+
+            //LeagueTable table = new LeagueTable();
+
+            //foreach (MatchRecord record in records)
+            //{
+            //    table.Apply(record);
+            //}
+
+            //PrintLeagueTable(table);
         }
+
+        private void PrintSimulatedLeagueTable(List<StatisticalModel.SimulatedMatchResult> simulatedResults)
+{
+    LeagueTable simulatedTable = new LeagueTable();
+
+    foreach (StatisticalModel.SimulatedMatchResult result in simulatedResults)
+    {
+        MatchRecord record = new MatchRecord
+        {
+            Matchday = 0,
+            HomeTeamId = GetTeamId(result.HomeTeam),
+            AwayTeamId = GetTeamId(result.AwayTeam),
+            HomeGoals = result.HomeGoals,
+            AwayGoals = result.AwayGoals
+        };
+
+        simulatedTable.Apply(record);
+    }
+
+    List<LeagueTable.Entry> sortedTable = simulatedTable.Sorted();
+
+    Debug.Log("Statistical model simulated evaluation table:");
+
+    for (int i = 0; i < sortedTable.Count; i++)
+    {
+        LeagueTable.Entry entry = sortedTable[i];
+
+        string teamName = teamNames.ContainsKey(entry.TeamId)
+            ? teamNames[entry.TeamId]
+            : $"Team {entry.TeamId}";
+
+        Debug.Log(
+            $"{i + 1}. {teamName} " +
+            $"Pts:{entry.Points} " +
+            $"P:{entry.Played} " +
+            $"W:{entry.Wins} " +
+            $"D:{entry.Draws} " +
+            $"L:{entry.Losses} " +
+            $"GF:{entry.GoalsFor} " +
+            $"GA:{entry.GoalsAgainst} " +
+            $"GD:{entry.GoalsFor - entry.GoalsAgainst}"
+        );
+    }
+}
 
         private void LoadMatches(string fileText, string seasonName)
         {
