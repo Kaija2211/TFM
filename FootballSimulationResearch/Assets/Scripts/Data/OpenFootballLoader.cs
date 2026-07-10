@@ -15,6 +15,8 @@ namespace Data
         private readonly Dictionary<int, string> teamNames = new();
         private int nextTeamId = 1;
 
+
+
         private void Start()
         {
             if (seasonFiles == null || seasonFiles.Length == 0)
@@ -45,6 +47,8 @@ namespace Data
                 Debug.Log($"Loaded {loadedFromFile} matches from {file.name}.");
             }
 
+
+
             Debug.Log($"Loaded {matches.Count} total matches from {seasonFiles.Length} season files.");
 
             //List<MatchRecord> records = ConvertToMatchRecords();
@@ -62,9 +66,14 @@ namespace Data
             statisticalModel.PrintSimulatedMatchSamples(evaluationMatches, 10);
 
             List<StatisticalModel.SimulatedMatchResult> simulatedResults =
-                statisticalModel.SimulateSeason(evaluationMatches);
+     statisticalModel.SimulateSeason(evaluationMatches);
 
-            PrintSimulatedLeagueTable(simulatedResults);
+            LeagueTable simulatedTable = PrintSimulatedLeagueTable(simulatedResults);
+
+            LeagueTable actualTable = BuildActualEvaluationTable(evaluationMatches);
+
+            CompareTablesWithPointsMAE(actualTable, simulatedTable);
+
 
             //LeagueTable table = new LeagueTable();
 
@@ -76,49 +85,101 @@ namespace Data
             //PrintLeagueTable(table);
         }
 
-        private void PrintSimulatedLeagueTable(List<StatisticalModel.SimulatedMatchResult> simulatedResults)
-{
-    LeagueTable simulatedTable = new LeagueTable();
 
-    foreach (StatisticalModel.SimulatedMatchResult result in simulatedResults)
-    {
-        MatchRecord record = new MatchRecord
+        private LeagueTable PrintSimulatedLeagueTable(List<StatisticalModel.SimulatedMatchResult> simulatedResults)
         {
-            Matchday = 0,
-            HomeTeamId = GetTeamId(result.HomeTeam),
-            AwayTeamId = GetTeamId(result.AwayTeam),
-            HomeGoals = result.HomeGoals,
-            AwayGoals = result.AwayGoals
-        };
+            LeagueTable simulatedTable = new LeagueTable();
 
-        simulatedTable.Apply(record);
-    }
+            foreach (StatisticalModel.SimulatedMatchResult result in simulatedResults)
+            {
+                MatchRecord record = new MatchRecord
+                {
+                    Matchday = 0,
+                    HomeTeamId = GetTeamId(result.HomeTeam),
+                    AwayTeamId = GetTeamId(result.AwayTeam),
+                    HomeGoals = result.HomeGoals,
+                    AwayGoals = result.AwayGoals
+                };
 
-    List<LeagueTable.Entry> sortedTable = simulatedTable.Sorted();
+                simulatedTable.Apply(record);
+            }
 
-    Debug.Log("Statistical model simulated evaluation table:");
+            List<LeagueTable.Entry> sortedTable = simulatedTable.Sorted();
 
-    for (int i = 0; i < sortedTable.Count; i++)
-    {
-        LeagueTable.Entry entry = sortedTable[i];
+            Debug.Log("Statistical model simulated evaluation table:");
 
-        string teamName = teamNames.ContainsKey(entry.TeamId)
-            ? teamNames[entry.TeamId]
-            : $"Team {entry.TeamId}";
+            for (int i = 0; i < sortedTable.Count; i++)
+            {
+                LeagueTable.Entry entry = sortedTable[i];
 
-        Debug.Log(
-            $"{i + 1}. {teamName} " +
-            $"Pts:{entry.Points} " +
-            $"P:{entry.Played} " +
-            $"W:{entry.Wins} " +
-            $"D:{entry.Draws} " +
-            $"L:{entry.Losses} " +
-            $"GF:{entry.GoalsFor} " +
-            $"GA:{entry.GoalsAgainst} " +
-            $"GD:{entry.GoalsFor - entry.GoalsAgainst}"
-        );
-    }
-}
+                string teamName = teamNames.ContainsKey(entry.TeamId)
+                    ? teamNames[entry.TeamId]
+                    : $"Team {entry.TeamId}";
+
+                Debug.Log(
+                    $"{i + 1}. {teamName} " +
+                    $"Pts:{entry.Points} " +
+                    $"P:{entry.Played} " +
+                    $"W:{entry.Wins} " +
+                    $"D:{entry.Draws} " +
+                    $"L:{entry.Losses} " +
+                    $"GF:{entry.GoalsFor} " +
+                    $"GA:{entry.GoalsAgainst} " +
+                    $"GD:{entry.GoalsFor - entry.GoalsAgainst}"
+                );
+            }
+
+            return simulatedTable;
+        }
+
+        private void CompareTablesWithPointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
+        {
+            List<LeagueTable.Entry> actualEntries = actualTable.Sorted();
+            List<LeagueTable.Entry> simulatedEntries = simulatedTable.Sorted();
+
+            Dictionary<int, LeagueTable.Entry> simulatedByTeamId = new();
+
+            foreach (LeagueTable.Entry simulatedEntry in simulatedEntries)
+            {
+                simulatedByTeamId[simulatedEntry.TeamId] = simulatedEntry;
+            }
+
+            float totalAbsoluteError = 0f;
+            int comparedTeams = 0;
+
+            Debug.Log("Actual vs simulated points comparison:");
+
+            foreach (LeagueTable.Entry actualEntry in actualEntries)
+            {
+                if (!simulatedByTeamId.ContainsKey(actualEntry.TeamId))
+                {
+                    continue;
+                }
+
+                LeagueTable.Entry simulatedEntry = simulatedByTeamId[actualEntry.TeamId];
+
+                int absoluteError = Mathf.Abs(actualEntry.Points - simulatedEntry.Points);
+
+                totalAbsoluteError += absoluteError;
+                comparedTeams++;
+
+                string teamName = teamNames.ContainsKey(actualEntry.TeamId)
+                    ? teamNames[actualEntry.TeamId]
+                    : $"Team {actualEntry.TeamId}";
+
+                Debug.Log(
+                    $"{teamName} " +
+                    $"Actual:{actualEntry.Points} " +
+                    $"Simulated:{simulatedEntry.Points} " +
+                    $"Error:{absoluteError}"
+                );
+            }
+
+            float mae = totalAbsoluteError / comparedTeams;
+
+            Debug.Log($"Points MAE: {mae:F2}");
+        }
+
 
         private void LoadMatches(string fileText, string seasonName)
         {
@@ -241,6 +302,27 @@ namespace Data
             }
         }
 
+        private LeagueTable BuildActualEvaluationTable(List<OpenFootballMatch> evaluationMatches)
+        {
+            LeagueTable actualTable = new LeagueTable();
+
+            foreach (OpenFootballMatch match in evaluationMatches)
+            {
+                MatchRecord record = new MatchRecord
+                {
+                    Matchday = 0,
+                    HomeTeamId = GetTeamId(match.HomeTeam),
+                    AwayTeamId = GetTeamId(match.AwayTeam),
+                    HomeGoals = match.HomeGoals,
+                    AwayGoals = match.AwayGoals
+                };
+
+                actualTable.Apply(record);
+            }
+
+            return actualTable;
+        }
+
         private string NormaliseTeamName(string teamName)
         {
             teamName = teamName.Trim();
@@ -278,4 +360,6 @@ namespace Data
         public int AwayGoals;
         public string Season;
     }
+
+
 }
