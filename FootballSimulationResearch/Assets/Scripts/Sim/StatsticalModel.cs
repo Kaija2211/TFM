@@ -41,13 +41,17 @@ namespace Sim
 
         private readonly Dictionary<string, TeamStrength> teamStrengths = new();
 
+        private float averageHomeGoals;
+        private float averageAwayGoals;
         private float leagueAverageGoalsForPerTeamPerMatch;
-        private float homeAdvantageMultiplier = 1.1f;
 
         public void Train(List<OpenFootballMatch> trainingMatches)
         {
             teamStrengths.Clear();
             warnedMissingTeams.Clear();
+
+            int totalHomeGoals = 0;
+            int totalAwayGoals = 0;
 
 
             int totalGoals = 0;
@@ -60,9 +64,17 @@ namespace Sim
 
                 totalGoals += match.HomeGoals + match.AwayGoals;
                 totalTeamAppearances += 2;
+
+                totalHomeGoals += match.HomeGoals;
+                totalAwayGoals += match.AwayGoals;
             }
 
+            averageHomeGoals = (float)totalHomeGoals / trainingMatches.Count;
+            averageAwayGoals = (float)totalAwayGoals / trainingMatches.Count;
             leagueAverageGoalsForPerTeamPerMatch = (float)totalGoals / totalTeamAppearances;
+
+            Debug.Log($"Average home goals: {averageHomeGoals:F2}");
+            Debug.Log($"Average away goals: {averageAwayGoals:F2}");
 
             foreach (TeamStrength team in teamStrengths.Values)
             {
@@ -123,13 +135,12 @@ namespace Sim
             TeamStrength awayTeam = GetTeamStrengthOrAverage(fixture.AwayTeam);
 
             float expectedHomeGoals =
-                leagueAverageGoalsForPerTeamPerMatch *
-                homeTeam.AttackStrength *
-                awayTeam.DefenceStrength *
-                homeAdvantageMultiplier;
+    averageHomeGoals *
+    homeTeam.AttackStrength *
+    awayTeam.DefenceStrength;
 
             float expectedAwayGoals =
-                leagueAverageGoalsForPerTeamPerMatch *
+                averageAwayGoals *
                 awayTeam.AttackStrength *
                 homeTeam.DefenceStrength;
 
@@ -141,107 +152,107 @@ namespace Sim
                 ExpectedAwayGoals = expectedAwayGoals
             };
         }
-            private TeamStrength GetTeamStrengthOrAverage(string teamName)
-{
-    if (teamStrengths.ContainsKey(teamName))
-    {
-        return teamStrengths[teamName];
+        private TeamStrength GetTeamStrengthOrAverage(string teamName)
+        {
+            if (teamStrengths.ContainsKey(teamName))
+            {
+                return teamStrengths[teamName];
+            }
+
+            if (!warnedMissingTeams.Contains(teamName))
+            {
+                Debug.LogWarning($"No training data found for {teamName}. Using average team strength.");
+                warnedMissingTeams.Add(teamName);
+            }
+
+            return new TeamStrength
+            {
+                TeamName = teamName,
+                MatchesPlayed = 0,
+                GoalsForPerMatch = leagueAverageGoalsForPerTeamPerMatch,
+                GoalsAgainstPerMatch = leagueAverageGoalsForPerTeamPerMatch,
+                AttackStrength = 1f,
+                DefenceStrength = 1f
+            };
+        }
+
+        public void PrintExpectedGoalsSamples(List<OpenFootballMatch> evaluationMatches, int maxMatches = 10)
+        {
+            Debug.Log("Sample expected goals predictions:");
+
+            for (int i = 0; i < Mathf.Min(maxMatches, evaluationMatches.Count); i++)
+            {
+                ExpectedGoalsPrediction prediction = PredictExpectedGoals(evaluationMatches[i]);
+
+                Debug.Log(
+                    $"{prediction.HomeTeam} vs {prediction.AwayTeam} " +
+                    $"xG:{prediction.ExpectedHomeGoals:F2}-{prediction.ExpectedAwayGoals:F2}"
+                );
+            }
+        }
+
+        public SimulatedMatchResult SimulateMatch(OpenFootballMatch fixture)
+        {
+            ExpectedGoalsPrediction prediction = PredictExpectedGoals(fixture);
+
+            int simulatedHomeGoals = SamplePoisson(prediction.ExpectedHomeGoals);
+            int simulatedAwayGoals = SamplePoisson(prediction.ExpectedAwayGoals);
+
+            return new SimulatedMatchResult
+            {
+                HomeTeam = prediction.HomeTeam,
+                AwayTeam = prediction.AwayTeam,
+                HomeGoals = simulatedHomeGoals,
+                AwayGoals = simulatedAwayGoals,
+                ExpectedHomeGoals = prediction.ExpectedHomeGoals,
+                ExpectedAwayGoals = prediction.ExpectedAwayGoals
+            };
+        }
+
+        private int SamplePoisson(float lambda)
+        {
+            float l = Mathf.Exp(-lambda);
+            int k = 0;
+            float p = 1f;
+
+            do
+            {
+                k++;
+                p *= Random.value;
+            }
+            while (p > l);
+
+            return k - 1;
+        }
+
+        public void PrintSimulatedMatchSamples(List<OpenFootballMatch> evaluationMatches, int maxMatches = 10)
+        {
+            Debug.Log("Sample simulated match results:");
+
+            for (int i = 0; i < Mathf.Min(maxMatches, evaluationMatches.Count); i++)
+            {
+                SimulatedMatchResult result = SimulateMatch(evaluationMatches[i]);
+
+                Debug.Log(
+                    $"{result.HomeTeam} {result.HomeGoals}-{result.AwayGoals} {result.AwayTeam} " +
+                    $"xG:{result.ExpectedHomeGoals:F2}-{result.ExpectedAwayGoals:F2}"
+                );
+            }
+        }
+
+        public List<SimulatedMatchResult> SimulateSeason(List<OpenFootballMatch> fixtures)
+        {
+            List<SimulatedMatchResult> results = new();
+
+            foreach (OpenFootballMatch fixture in fixtures)
+            {
+                SimulatedMatchResult result = SimulateMatch(fixture);
+                results.Add(result);
+            }
+
+            Debug.Log($"Simulated {results.Count} matches.");
+
+            return results;
+        }
     }
-
-    if (!warnedMissingTeams.Contains(teamName))
-{
-    Debug.LogWarning($"No training data found for {teamName}. Using average team strength.");
-    warnedMissingTeams.Add(teamName);
 }
-
-    return new TeamStrength
-    {
-        TeamName = teamName,
-        MatchesPlayed = 0,
-        GoalsForPerMatch = leagueAverageGoalsForPerTeamPerMatch,
-        GoalsAgainstPerMatch = leagueAverageGoalsForPerTeamPerMatch,
-        AttackStrength = 1f,
-        DefenceStrength = 1f
-    };
-}
-
-public void PrintExpectedGoalsSamples(List<OpenFootballMatch> evaluationMatches, int maxMatches = 10)
-{
-    Debug.Log("Sample expected goals predictions:");
-
-    for (int i = 0; i < Mathf.Min(maxMatches, evaluationMatches.Count); i++)
-    {
-        ExpectedGoalsPrediction prediction = PredictExpectedGoals(evaluationMatches[i]);
-
-        Debug.Log(
-            $"{prediction.HomeTeam} vs {prediction.AwayTeam} " +
-            $"xG:{prediction.ExpectedHomeGoals:F2}-{prediction.ExpectedAwayGoals:F2}"
-        );
-    }
-}
-
-public SimulatedMatchResult SimulateMatch(OpenFootballMatch fixture)
-{
-    ExpectedGoalsPrediction prediction = PredictExpectedGoals(fixture);
-
-    int simulatedHomeGoals = SamplePoisson(prediction.ExpectedHomeGoals);
-    int simulatedAwayGoals = SamplePoisson(prediction.ExpectedAwayGoals);
-
-    return new SimulatedMatchResult
-    {
-        HomeTeam = prediction.HomeTeam,
-        AwayTeam = prediction.AwayTeam,
-        HomeGoals = simulatedHomeGoals,
-        AwayGoals = simulatedAwayGoals,
-        ExpectedHomeGoals = prediction.ExpectedHomeGoals,
-        ExpectedAwayGoals = prediction.ExpectedAwayGoals
-    };
-}
-
-private int SamplePoisson(float lambda)
-{
-    float l = Mathf.Exp(-lambda);
-    int k = 0;
-    float p = 1f;
-
-    do
-    {
-        k++;
-        p *= Random.value;
-    }
-    while (p > l);
-
-    return k - 1;
-}
-
-public void PrintSimulatedMatchSamples(List<OpenFootballMatch> evaluationMatches, int maxMatches = 10)
-{
-    Debug.Log("Sample simulated match results:");
-
-    for (int i = 0; i < Mathf.Min(maxMatches, evaluationMatches.Count); i++)
-    {
-        SimulatedMatchResult result = SimulateMatch(evaluationMatches[i]);
-
-        Debug.Log(
-            $"{result.HomeTeam} {result.HomeGoals}-{result.AwayGoals} {result.AwayTeam} " +
-            $"xG:{result.ExpectedHomeGoals:F2}-{result.ExpectedAwayGoals:F2}"
-        );
-    }
-}
-
-public List<SimulatedMatchResult> SimulateSeason(List<OpenFootballMatch> fixtures)
-{
-    List<SimulatedMatchResult> results = new();
-
-    foreach (OpenFootballMatch fixture in fixtures)
-    {
-        SimulatedMatchResult result = SimulateMatch(fixture);
-        results.Add(result);
-    }
-
-    Debug.Log($"Simulated {results.Count} matches.");
-
-    return results;
-}
-}
-    }
