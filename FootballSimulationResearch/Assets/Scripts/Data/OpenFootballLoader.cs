@@ -74,6 +74,54 @@ namespace Data
 
             CompareTablesWithPointsMAE(actualTable, simulatedTable);
 
+            RunRepeatedStatisticalEvaluation(
+    statisticalModel,
+    evaluationMatches,
+    actualTable,
+    100
+);
+
+        }
+
+        private float CalculatePointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
+        {
+            List<LeagueTable.Entry> actualEntries = actualTable.Sorted();
+            List<LeagueTable.Entry> simulatedEntries = simulatedTable.Sorted();
+
+            Dictionary<int, LeagueTable.Entry> simulatedByTeamId = new();
+
+            foreach (LeagueTable.Entry simulatedEntry in simulatedEntries)
+            {
+                simulatedByTeamId[simulatedEntry.TeamId] = simulatedEntry;
+            }
+
+            float totalAbsoluteError = 0f;
+            int comparedTeams = 0;
+
+            foreach (LeagueTable.Entry actualEntry in actualEntries)
+            {
+                if (!simulatedByTeamId.ContainsKey(actualEntry.TeamId))
+                {
+                    continue;
+                }
+
+                LeagueTable.Entry simulatedEntry = simulatedByTeamId[actualEntry.TeamId];
+
+                int absoluteError = Mathf.Abs(actualEntry.Points - simulatedEntry.Points);
+
+                totalAbsoluteError += absoluteError;
+                comparedTeams++;
+            }
+
+            if (comparedTeams == 0)
+            {
+                Debug.LogWarning("No teams could be compared when calculating Points MAE.");
+                return 0f;
+            }
+
+            return totalAbsoluteError / comparedTeams;
+        }
+
 
             //LeagueTable table = new LeagueTable();
 
@@ -83,7 +131,7 @@ namespace Data
             //}
 
             //PrintLeagueTable(table);
-        }
+        
 
 
         private LeagueTable PrintSimulatedLeagueTable(List<StatisticalModel.SimulatedMatchResult> simulatedResults)
@@ -130,6 +178,67 @@ namespace Data
             }
 
             return simulatedTable;
+        }
+
+        private LeagueTable BuildSimulatedLeagueTable(List<StatisticalModel.SimulatedMatchResult> simulatedResults)
+        {
+            LeagueTable simulatedTable = new LeagueTable();
+
+            foreach (StatisticalModel.SimulatedMatchResult result in simulatedResults)
+            {
+                MatchRecord record = new MatchRecord
+                {
+                    Matchday = 0,
+                    HomeTeamId = GetTeamId(result.HomeTeam),
+                    AwayTeamId = GetTeamId(result.AwayTeam),
+                    HomeGoals = result.HomeGoals,
+                    AwayGoals = result.AwayGoals
+                };
+
+                simulatedTable.Apply(record);
+            }
+
+            return simulatedTable;
+        }
+
+        private void RunRepeatedStatisticalEvaluation(
+            StatisticalModel statisticalModel,
+            List<OpenFootballMatch> evaluationMatches,
+            LeagueTable actualTable,
+            int runs)
+        {
+            float totalMae = 0f;
+            float bestMae = float.MaxValue;
+            float worstMae = float.MinValue;
+
+            for (int i = 0; i < runs; i++)
+            {
+                List<StatisticalModel.SimulatedMatchResult> simulatedResults =
+                    statisticalModel.SimulateSeason(evaluationMatches, false);
+
+                LeagueTable simulatedTable = BuildSimulatedLeagueTable(simulatedResults);
+
+                float mae = CalculatePointsMAE(actualTable, simulatedTable);
+
+                totalMae += mae;
+
+                if (mae < bestMae)
+                {
+                    bestMae = mae;
+                }
+
+                if (mae > worstMae)
+                {
+                    worstMae = mae;
+                }
+            }
+
+            float averageMae = totalMae / runs;
+
+            Debug.Log($"Statistical repeated evaluation over {runs} runs:");
+            Debug.Log($"Average Points MAE: {averageMae:F2}");
+            Debug.Log($"Best Points MAE: {bestMae:F2}");
+            Debug.Log($"Worst Points MAE: {worstMae:F2}");
         }
 
         private void CompareTablesWithPointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
@@ -353,13 +462,13 @@ namespace Data
     }
 
     public struct OpenFootballMatch
-    {
-        public string HomeTeam;
-        public string AwayTeam;
-        public int HomeGoals;
-        public int AwayGoals;
-        public string Season;
-    }
+{
+    public string HomeTeam;
+    public string AwayTeam;
+    public int HomeGoals;
+    public int AwayGoals;
+    public string Season;
+}
 
 
 }

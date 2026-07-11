@@ -241,7 +241,7 @@ namespace Sim
             }
         }
 
-        public List<SimulatedMatchResult> SimulateSeason(List<OpenFootballMatch> fixtures)
+        public List<SimulatedMatchResult> SimulateSeason(List<OpenFootballMatch> fixtures, bool logResult = true)
         {
             List<SimulatedMatchResult> results = new();
 
@@ -251,7 +251,10 @@ namespace Sim
                 results.Add(result);
             }
 
-            Debug.Log($"Simulated {results.Count} matches.");
+            if (logResult)
+            {
+                Debug.Log($"Simulated {results.Count} matches.");
+            }
 
             return results;
         }
