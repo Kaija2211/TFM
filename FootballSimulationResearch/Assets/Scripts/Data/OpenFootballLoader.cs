@@ -15,8 +15,6 @@ namespace Data
         private readonly Dictionary<int, string> teamNames = new();
         private int nextTeamId = 1;
 
-
-
         private void Start()
         {
             if (seasonFiles == null || seasonFiles.Length == 0)
@@ -47,11 +45,9 @@ namespace Data
                 Debug.Log($"Loaded {loadedFromFile} matches from {file.name}.");
             }
 
-
-
             Debug.Log($"Loaded {matches.Count} total matches from {seasonFiles.Length} season files.");
 
-            //List<MatchRecord> records = ConvertToMatchRecords();
+            // List<MatchRecord> records = ConvertToMatchRecords();
 
             List<OpenFootballMatch> trainingMatches = matches.FindAll(m => !m.Season.Contains("2025_26"));
             List<OpenFootballMatch> evaluationMatches = matches.FindAll(m => m.Season.Contains("2025_26"));
@@ -66,7 +62,7 @@ namespace Data
             statisticalModel.PrintSimulatedMatchSamples(evaluationMatches, 10);
 
             List<StatisticalModel.SimulatedMatchResult> simulatedResults =
-     statisticalModel.SimulateSeason(evaluationMatches);
+                statisticalModel.SimulateSeason(evaluationMatches);
 
             LeagueTable simulatedTable = PrintSimulatedLeagueTable(simulatedResults);
 
@@ -75,12 +71,11 @@ namespace Data
             CompareTablesWithPointsMAE(actualTable, simulatedTable);
 
             RunRepeatedStatisticalEvaluation(
-    statisticalModel,
-    evaluationMatches,
-    actualTable,
-    100
-);
-
+                statisticalModel,
+                evaluationMatches,
+                actualTable,
+                100
+            );
         }
 
         private float CalculatePointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
@@ -121,18 +116,6 @@ namespace Data
 
             return totalAbsoluteError / comparedTeams;
         }
-
-
-            //LeagueTable table = new LeagueTable();
-
-            //foreach (MatchRecord record in records)
-            //{
-            //    table.Apply(record);
-            //}
-
-            //PrintLeagueTable(table);
-        
-
 
         private LeagueTable PrintSimulatedLeagueTable(List<StatisticalModel.SimulatedMatchResult> simulatedResults)
         {
@@ -211,6 +194,9 @@ namespace Data
             float bestMae = float.MaxValue;
             float worstMae = float.MinValue;
 
+            System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
+            stopwatch.Start();
+
             for (int i = 0; i < runs; i++)
             {
                 List<StatisticalModel.SimulatedMatchResult> simulatedResults =
@@ -233,12 +219,18 @@ namespace Data
                 }
             }
 
+            stopwatch.Stop();
+
             float averageMae = totalMae / runs;
+            double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
+            double simulationsPerMinute = runs / elapsedSeconds * 60.0;
 
             Debug.Log($"Statistical repeated evaluation over {runs} runs:");
             Debug.Log($"Average Points MAE: {averageMae:F2}");
             Debug.Log($"Best Points MAE: {bestMae:F2}");
             Debug.Log($"Worst Points MAE: {worstMae:F2}");
+            Debug.Log($"Execution time: {elapsedSeconds:F4} seconds");
+            Debug.Log($"Simulations per minute: {simulationsPerMinute:F2}");
         }
 
         private void CompareTablesWithPointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
@@ -284,11 +276,16 @@ namespace Data
                 );
             }
 
+            if (comparedTeams == 0)
+            {
+                Debug.LogWarning("No teams could be compared when comparing actual and simulated points.");
+                return;
+            }
+
             float mae = totalAbsoluteError / comparedTeams;
 
             Debug.Log($"Points MAE: {mae:F2}");
         }
-
 
         private void LoadMatches(string fileText, string seasonName)
         {
@@ -299,10 +296,14 @@ namespace Data
                 string line = rawLine.Trim();
 
                 if (string.IsNullOrWhiteSpace(line))
+                {
                     continue;
+                }
 
                 if (line.StartsWith("#"))
+                {
                     continue;
+                }
 
                 OpenFootballMatch? parsedMatch = ParseLine(line, seasonName);
 
@@ -462,13 +463,11 @@ namespace Data
     }
 
     public struct OpenFootballMatch
-{
-    public string HomeTeam;
-    public string AwayTeam;
-    public int HomeGoals;
-    public int AwayGoals;
-    public string Season;
-}
-
-
+    {
+        public string HomeTeam;
+        public string AwayTeam;
+        public int HomeGoals;
+        public int AwayGoals;
+        public string Season;
+    }
 }
