@@ -39,6 +39,11 @@ namespace Sim
             public float ExpectedAwayGoals;
         }
 
+        public TeamStrength GetTeamStrength(string teamName)
+{
+    return GetTeamStrengthOrAverage(teamName);
+}
+
         private readonly Dictionary<string, TeamStrength> teamStrengths = new();
 
         private float averageHomeGoals;
@@ -175,6 +180,8 @@ namespace Sim
                 AttackStrength = 1f,
                 DefenceStrength = 1f
             };
+
+            
         }
 
         public void PrintExpectedGoalsSamples(List<OpenFootballMatch> evaluationMatches, int maxMatches = 10)

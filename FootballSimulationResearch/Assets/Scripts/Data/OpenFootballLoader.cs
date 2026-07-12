@@ -58,8 +58,10 @@ namespace Data
             StatisticalModel statisticalModel = new StatisticalModel();
             statisticalModel.Train(trainingMatches);
             statisticalModel.PrintTeamStrengths(10);
+            PrintGeneratedAgentSquad(statisticalModel, "Liverpool");
             statisticalModel.PrintExpectedGoalsSamples(evaluationMatches, 10);
             statisticalModel.PrintSimulatedMatchSamples(evaluationMatches, 10);
+            
 
             List<StatisticalModel.SimulatedMatchResult> simulatedResults =
                 statisticalModel.SimulateSeason(evaluationMatches);
@@ -76,6 +78,29 @@ namespace Data
                 actualTable,
                 100
             );
+        }
+
+        private void PrintGeneratedAgentSquad(
+    StatisticalModel statisticalModel,
+    string teamName)
+        {
+            StatisticalModel.TeamStrength teamStrength =
+                statisticalModel.GetTeamStrength(teamName);
+
+            AgentSquadGenerator squadGenerator = new AgentSquadGenerator();
+
+            AgentTeam squad = squadGenerator.GenerateSquad(
+                teamName,
+                teamStrength.AttackStrength,
+                teamStrength.DefenceStrength
+            );
+
+            Debug.Log($"Generated ABM squad for {teamName}:");
+
+            foreach (PlayerAgent player in squad.Players)
+            {
+                Debug.Log(player.ToString());
+            }
         }
 
         private float CalculatePointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
