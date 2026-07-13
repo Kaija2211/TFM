@@ -59,9 +59,14 @@ namespace Data
             statisticalModel.Train(trainingMatches);
             statisticalModel.PrintTeamStrengths(10);
             PrintGeneratedAgentSquad(statisticalModel, "Liverpool");
+            PrintSampleAgentBasedMatch(
+    statisticalModel,
+    "Liverpool",
+    "AFC Bournemouth"
+);
             statisticalModel.PrintExpectedGoalsSamples(evaluationMatches, 10);
             statisticalModel.PrintSimulatedMatchSamples(evaluationMatches, 10);
-            
+
 
             List<StatisticalModel.SimulatedMatchResult> simulatedResults =
                 statisticalModel.SimulateSeason(evaluationMatches);
@@ -78,7 +83,11 @@ namespace Data
                 actualTable,
                 100
             );
+
+
         }
+
+
 
         private void PrintGeneratedAgentSquad(
     StatisticalModel statisticalModel,
@@ -100,6 +109,49 @@ namespace Data
             foreach (PlayerAgent player in squad.Players)
             {
                 Debug.Log(player.ToString());
+            }
+        }
+
+        private void PrintSampleAgentBasedMatch(
+    StatisticalModel statisticalModel,
+    string homeTeamName,
+    string awayTeamName)
+        {
+            StatisticalModel.TeamStrength homeStrength =
+                statisticalModel.GetTeamStrength(homeTeamName);
+
+            StatisticalModel.TeamStrength awayStrength =
+                statisticalModel.GetTeamStrength(awayTeamName);
+
+            AgentSquadGenerator squadGenerator = new AgentSquadGenerator();
+
+            AgentTeam homeTeam = squadGenerator.GenerateSquad(
+                homeTeamName,
+                homeStrength.AttackStrength,
+                homeStrength.DefenceStrength
+            );
+
+            AgentTeam awayTeam = squadGenerator.GenerateSquad(
+                awayTeamName,
+                awayStrength.AttackStrength,
+                awayStrength.DefenceStrength
+            );
+
+            AgentMatchSimulator matchSimulator = new AgentMatchSimulator();
+
+            AgentMatchSimulator.AgentMatchResult result =
+                matchSimulator.SimulateMatch(homeTeam, awayTeam);
+
+            Debug.Log(
+                $"ABM sample match result: " +
+                $"{result.HomeTeamName} {result.HomeGoals}-{result.AwayGoals} {result.AwayTeamName}"
+            );
+
+            Debug.Log("ABM sample match events:");
+
+            foreach (AgentMatchSimulator.AgentMatchEvent matchEvent in result.Events)
+            {
+                Debug.Log($"{matchEvent.Minute}' {matchEvent.Description}");
             }
         }
 
