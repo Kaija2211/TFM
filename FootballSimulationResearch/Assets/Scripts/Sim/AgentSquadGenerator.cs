@@ -349,6 +349,7 @@ namespace Sim
             player.Heading = Random.Range(5f, 20f);
             player.Defending = Random.Range(15f, 35f);
             player.Tackling = Random.Range(10f, 30f);
+            player.Stamina = Random.Range(35f, 60f);
         }
 
         private void GenerateCentreBack(PlayerAgent player, float defenceMultiplier)
@@ -364,6 +365,7 @@ namespace Sim
             player.Finishing = Random.Range(5f, 25f);
             player.Dribbling = Random.Range(20f, 50f);
             player.Crossing = Random.Range(10f, 35f);
+            player.Stamina = Random.Range(55f, 78f);
         }
 
         private void GenerateFullBack(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
@@ -437,6 +439,7 @@ namespace Sim
             player.Tackling = Random.Range(15f, 45f);
             player.Heading = Random.Range(25f, 55f);
             player.Aerial = Random.Range(25f, 55f);
+            player.Stamina = Random.Range(58f, 82f);
         }
 
         private void GenerateWideMidfielder(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
@@ -466,6 +469,7 @@ namespace Sim
             player.Tackling = Random.Range(10f, 35f);
             player.Heading = Random.Range(20f, 55f);
             player.Aerial = Random.Range(20f, 55f);
+            player.Stamina = Random.Range(60f, 86f);
         }
 
         private void GenerateStriker(PlayerAgent player, float attackMultiplier)
@@ -483,6 +487,7 @@ namespace Sim
             player.Creativity = Random.Range(25f, 60f);
             player.Defending = Random.Range(5f, 25f);
             player.Tackling = Random.Range(5f, 25f);
+            player.Stamina = Random.Range(55f, 80f);
         }
 
         private void AddSecondaryPositions(PlayerAgent player)

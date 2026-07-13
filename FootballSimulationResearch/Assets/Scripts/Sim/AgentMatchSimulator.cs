@@ -126,8 +126,18 @@ namespace Sim
                 return;
             }
 
-            float chanceCreation = GetChanceCreationScore(creator, shooter, chanceType);
-            float defensiveResistance = GetDefensiveResistanceScore(defender, goalkeeper, chanceType);
+            float creatorFatigue = GetFatigueMultiplier(creator, minute);
+            float shooterFatigue = GetFatigueMultiplier(shooter, minute);
+            float defenderFatigue = GetFatigueMultiplier(defender, minute);
+            float goalkeeperFatigue = GetFatigueMultiplier(goalkeeper, minute);
+
+            float chanceCreation =
+    GetChanceCreationScore(creator, shooter, chanceType) *
+    ((creatorFatigue + shooterFatigue) / 2f);
+
+            float defensiveResistance =
+                GetDefensiveResistanceScore(defender, goalkeeper, chanceType) *
+                ((defenderFatigue + goalkeeperFatigue) / 2f);
 
             float chanceScore = chanceCreation - defensiveResistance;
 
@@ -696,6 +706,28 @@ namespace Sim
                 default:
                     return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots, but {goalkeeper.Name} saves.";
             }
+        }
+
+        private float GetFatigueMultiplier(PlayerAgent player, int minute)
+        {
+            if (player == null)
+            {
+                return 1f;
+            }
+
+            // No real fatigue early.
+            if (minute <= 45)
+            {
+                return 1f;
+            }
+
+            float staminaNormalised = Mathf.Clamp01(player.Stamina / 100f);
+            float matchProgressAfterHalfTime = Mathf.InverseLerp(45f, 90f, minute);
+
+            // Low stamina players lose more effectiveness late.
+            float fatigueLoss = (1f - staminaNormalised) * matchProgressAfterHalfTime * 0.28f;
+
+            return Mathf.Clamp(1f - fatigueLoss, 0.72f, 1f);
         }
     }
 }
