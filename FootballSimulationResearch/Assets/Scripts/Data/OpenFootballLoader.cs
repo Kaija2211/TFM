@@ -396,15 +396,23 @@ namespace Data
         }
 
         private void RunRepeatedAgentBasedEvaluation(
-            StatisticalModel statisticalModel,
-            List<OpenFootballMatch> evaluationMatches,
-            LeagueTable actualTable,
-            int runs)
+    StatisticalModel statisticalModel,
+    List<OpenFootballMatch> evaluationMatches,
+    LeagueTable actualTable,
+    int runs)
         {
+            List<float> maeValues = new();
+
             float totalMae = 0f;
             float bestMae = float.MaxValue;
             float worstMae = float.MinValue;
+
             Dictionary<int, int> titleWinsByTeamId = new();
+
+            Dictionary<int, float> totalPointsByTeamId = new();
+            Dictionary<int, float> totalPositionByTeamId = new();
+            Dictionary<int, int> appearancesByTeamId = new();
+
             System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
             stopwatch.Start();
 
@@ -417,6 +425,7 @@ namespace Data
 
                 float mae = CalculatePointsMAE(actualTable, agentBasedTable);
 
+                maeValues.Add(mae);
                 totalMae += mae;
 
                 if (mae < bestMae)
@@ -428,6 +437,7 @@ namespace Data
                 {
                     worstMae = mae;
                 }
+
                 List<LeagueTable.Entry> sortedTable = agentBasedTable.Sorted();
 
                 if (sortedTable.Count > 0)
@@ -442,20 +452,45 @@ namespace Data
                     titleWinsByTeamId[championTeamId]++;
                 }
 
+                for (int positionIndex = 0; positionIndex < sortedTable.Count; positionIndex++)
+                {
+                    LeagueTable.Entry entry = sortedTable[positionIndex];
+
+                    if (!totalPointsByTeamId.ContainsKey(entry.TeamId))
+                    {
+                        totalPointsByTeamId[entry.TeamId] = 0f;
+                        totalPositionByTeamId[entry.TeamId] = 0f;
+                        appearancesByTeamId[entry.TeamId] = 0;
+                    }
+
+                    totalPointsByTeamId[entry.TeamId] += entry.Points;
+                    totalPositionByTeamId[entry.TeamId] += positionIndex + 1;
+                    appearancesByTeamId[entry.TeamId]++;
+                }
             }
 
             stopwatch.Stop();
 
+            maeValues.Sort();
+
             float averageMae = totalMae / runs;
+            float medianMae = CalculateMedian(maeValues);
+            float maeStandardDeviation = CalculateStandardDeviation(maeValues, averageMae);
+
             double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
             double simulationsPerMinute = runs / elapsedSeconds * 60.0;
 
+            Debug.Log("========================================");
             Debug.Log($"Agent-Based repeated evaluation over {runs} runs:");
+            Debug.Log("----------------------------------------");
             Debug.Log($"Average Points MAE: {averageMae:F2}");
+            Debug.Log($"Median Points MAE: {medianMae:F2}");
+            Debug.Log($"MAE Standard Deviation: {maeStandardDeviation:F2}");
             Debug.Log($"Best Points MAE: {bestMae:F2}");
             Debug.Log($"Worst Points MAE: {worstMae:F2}");
             Debug.Log($"Execution time: {elapsedSeconds:F4} seconds");
             Debug.Log($"Simulations per minute: {simulationsPerMinute:F2}");
+            Debug.Log("========================================");
 
             Debug.Log("ABM league title winners over repeated simulations:");
 
@@ -469,9 +504,102 @@ namespace Data
                     ? teamNames[pair.Key]
                     : $"Team {pair.Key}";
 
-                Debug.Log($"{teamName}: {pair.Value} titles out of {runs}");
+                float percentage = (float)pair.Value / runs * 100f;
+
+                Debug.Log($"{teamName}: {pair.Value} titles out of {runs} ({percentage:F2}%)");
             }
+
+            PrintAverageAgentBasedTable(
+                actualTable,
+                totalPointsByTeamId,
+                totalPositionByTeamId,
+                appearancesByTeamId,
+                runs
+            );
         }
+
+        private float CalculateMedian(List<float> values)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return 0f;
+            }
+
+            int middleIndex = values.Count / 2;
+
+            if (values.Count % 2 == 1)
+            {
+                return values[middleIndex];
+            }
+
+            return (values[middleIndex - 1] + values[middleIndex]) / 2f;
+        }
+
+        private float CalculateStandardDeviation(List<float> values, float mean)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return 0f;
+            }
+
+            float totalSquaredDifference = 0f;
+
+            foreach (float value in values)
+            {
+                float difference = value - mean;
+                totalSquaredDifference += difference * difference;
+            }
+
+            float variance = totalSquaredDifference / values.Count;
+
+            return Mathf.Sqrt(variance);
+        }
+
+        private void PrintAverageAgentBasedTable(
+            LeagueTable actualTable,
+            Dictionary<int, float> totalPointsByTeamId,
+            Dictionary<int, float> totalPositionByTeamId,
+            Dictionary<int, int> appearancesByTeamId,
+            int runs)
+        {
+            List<AverageTeamResult> averageResults = new();
+
+            List<LeagueTable.Entry> actualEntries = actualTable.Sorted();
+
+            Dictionary<int, LeagueTable.Entry> actualByTeamId = new();
+            Dictionary<int, int> actualPositionByTeamId = new();
+
+            for (int i = 0; i < averageResults.Count; i++)
+{
+    AverageTeamResult result = averageResults[i];
+
+    string teamName = teamNames.ContainsKey(result.TeamId)
+        ? teamNames[result.TeamId]
+        : $"Team {result.TeamId}";
+
+    Debug.Log(
+        $"{i + 1}. {teamName} " +
+        $"AvgPts:{result.AveragePoints:F2} " +
+        $"AvgPos:{result.AveragePosition:F2} " +
+        $"ActualPos:{result.ActualPosition} " +
+        $"ActualPts:{result.ActualPoints} " +
+        $"Error:{result.PointsError:F2}"
+    );
+}
+
+Debug.Log("========================================");
+        }
+
+        private class AverageTeamResult
+        {
+            public int TeamId;
+            public float AveragePoints;
+            public float AveragePosition;
+            public int ActualPosition;
+            public int ActualPoints;
+            public float PointsError;
+        }
+        
 
         private float CalculatePointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
         {
@@ -811,11 +939,11 @@ namespace Data
     }
 
     public struct OpenFootballMatch
-    {
-        public string HomeTeam;
-        public string AwayTeam;
-        public int HomeGoals;
-        public int AwayGoals;
-        public string Season;
-    }
+{
+    public string HomeTeam;
+    public string AwayTeam;
+    public int HomeGoals;
+    public int AwayGoals;
+    public string Season;
+}
 }
