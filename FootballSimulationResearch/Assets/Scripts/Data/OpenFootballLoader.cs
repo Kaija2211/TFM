@@ -556,11 +556,11 @@ namespace Data
         }
 
         private void PrintAverageAgentBasedTable(
-            LeagueTable actualTable,
-            Dictionary<int, float> totalPointsByTeamId,
-            Dictionary<int, float> totalPositionByTeamId,
-            Dictionary<int, int> appearancesByTeamId,
-            int runs)
+     LeagueTable actualTable,
+     Dictionary<int, float> totalPointsByTeamId,
+     Dictionary<int, float> totalPositionByTeamId,
+     Dictionary<int, int> appearancesByTeamId,
+     int runs)
         {
             List<AverageTeamResult> averageResults = new();
 
@@ -569,25 +569,85 @@ namespace Data
             Dictionary<int, LeagueTable.Entry> actualByTeamId = new();
             Dictionary<int, int> actualPositionByTeamId = new();
 
+            for (int i = 0; i < actualEntries.Count; i++)
+            {
+                LeagueTable.Entry actualEntry = actualEntries[i];
+
+                actualByTeamId[actualEntry.TeamId] = actualEntry;
+                actualPositionByTeamId[actualEntry.TeamId] = i + 1;
+            }
+
+            foreach (KeyValuePair<int, float> pair in totalPointsByTeamId)
+            {
+                int teamId = pair.Key;
+
+                if (!appearancesByTeamId.ContainsKey(teamId) || appearancesByTeamId[teamId] == 0)
+                {
+                    continue;
+                }
+
+                float averagePoints = totalPointsByTeamId[teamId] / appearancesByTeamId[teamId];
+                float averagePosition = totalPositionByTeamId[teamId] / appearancesByTeamId[teamId];
+
+                int actualPoints = 0;
+                int actualPosition = 0;
+
+                if (actualByTeamId.ContainsKey(teamId))
+                {
+                    actualPoints = actualByTeamId[teamId].Points;
+                }
+
+                if (actualPositionByTeamId.ContainsKey(teamId))
+                {
+                    actualPosition = actualPositionByTeamId[teamId];
+                }
+
+                averageResults.Add(new AverageTeamResult
+                {
+                    TeamId = teamId,
+                    AveragePoints = averagePoints,
+                    AveragePosition = averagePosition,
+                    ActualPosition = actualPosition,
+                    ActualPoints = actualPoints,
+                    PointsError = Mathf.Abs(actualPoints - averagePoints)
+                });
+            }
+
+            averageResults.Sort((a, b) =>
+            {
+                int pointsCompare = b.AveragePoints.CompareTo(a.AveragePoints);
+
+                if (pointsCompare != 0)
+                {
+                    return pointsCompare;
+                }
+
+                return a.AveragePosition.CompareTo(b.AveragePosition);
+            });
+
+            Debug.Log("========================================");
+            Debug.Log($"ABM average simulated table over {runs} repeated runs:");
+            Debug.Log("----------------------------------------");
+
             for (int i = 0; i < averageResults.Count; i++)
-{
-    AverageTeamResult result = averageResults[i];
+            {
+                AverageTeamResult result = averageResults[i];
 
-    string teamName = teamNames.ContainsKey(result.TeamId)
-        ? teamNames[result.TeamId]
-        : $"Team {result.TeamId}";
+                string teamName = teamNames.ContainsKey(result.TeamId)
+                    ? teamNames[result.TeamId]
+                    : $"Team {result.TeamId}";
 
-    Debug.Log(
-        $"{i + 1}. {teamName} " +
-        $"AvgPts:{result.AveragePoints:F2} " +
-        $"AvgPos:{result.AveragePosition:F2} " +
-        $"ActualPos:{result.ActualPosition} " +
-        $"ActualPts:{result.ActualPoints} " +
-        $"Error:{result.PointsError:F2}"
-    );
-}
+                Debug.Log(
+                    $"{i + 1}. {teamName} " +
+                    $"AvgPts:{result.AveragePoints:F2} " +
+                    $"AvgPos:{result.AveragePosition:F2} " +
+                    $"ActualPos:{result.ActualPosition} " +
+                    $"ActualPts:{result.ActualPoints} " +
+                    $"Error:{result.PointsError:F2}"
+                );
+            }
 
-Debug.Log("========================================");
+            Debug.Log("========================================");
         }
 
         private class AverageTeamResult
@@ -599,7 +659,7 @@ Debug.Log("========================================");
             public int ActualPoints;
             public float PointsError;
         }
-        
+
 
         private float CalculatePointsMAE(LeagueTable actualTable, LeagueTable simulatedTable)
         {
@@ -939,11 +999,11 @@ Debug.Log("========================================");
     }
 
     public struct OpenFootballMatch
-{
-    public string HomeTeam;
-    public string AwayTeam;
-    public int HomeGoals;
-    public int AwayGoals;
-    public string Season;
-}
+    {
+        public string HomeTeam;
+        public string AwayTeam;
+        public int HomeGoals;
+        public int AwayGoals;
+        public string Season;
+    }
 }
