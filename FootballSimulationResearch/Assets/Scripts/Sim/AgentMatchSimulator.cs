@@ -22,6 +22,15 @@ namespace Sim
 
         public AgentMatchResult SimulateMatch(AgentTeam homeTeam, AgentTeam awayTeam)
         {
+            return SimulateMatch(homeTeam, awayTeam, 1.45f, 1.20f);
+        }
+
+        public AgentMatchResult SimulateMatch(
+            AgentTeam homeTeam,
+            AgentTeam awayTeam,
+            float expectedHomeGoals,
+            float expectedAwayGoals)
+        {
             AgentMatchResult result = new AgentMatchResult
             {
                 HomeTeamName = homeTeam.TeamName,
@@ -30,24 +39,56 @@ namespace Sim
                 AwayGoals = 0
             };
 
+            float totalExpectedGoals = Mathf.Max(0.1f, expectedHomeGoals + expectedAwayGoals);
+
+            float eventChancePerMinute = Mathf.Clamp(
+                0.18f + totalExpectedGoals * 0.035f,
+                0.18f,
+                0.32f
+            );
+
+            float rawHomeAttackChance = expectedHomeGoals / totalExpectedGoals;
+
+            float homeAttackChance = Mathf.Clamp(
+                Mathf.Lerp(0.52f, rawHomeAttackChance, 0.45f),
+                0.35f,
+                0.65f
+            );
+
             for (int minute = 1; minute <= 90; minute++)
             {
-                // Not every minute has a meaningful attacking event.
-                if (Random.value > 0.18f)
+                if (Random.value > eventChancePerMinute)
                 {
                     continue;
                 }
 
-                bool homeAttacks = Random.value < 0.52f;
+                bool homeAttacks = Random.value < homeAttackChance;
+
+                int goalDifference = result.HomeGoals - result.AwayGoals;
+
+                if (homeAttacks && goalDifference >= 3 && Random.value < 0.60f)
+                {
+                    continue;
+                }
+
+                if (!homeAttacks && goalDifference <= -3 && Random.value < 0.60f)
+                {
+                    continue;
+                }
 
                 AgentTeam attackingTeam = homeAttacks ? homeTeam : awayTeam;
                 AgentTeam defendingTeam = homeAttacks ? awayTeam : homeTeam;
+
+                float attackingExpectedGoals = homeAttacks
+                    ? expectedHomeGoals
+                    : expectedAwayGoals;
 
                 ResolveAttack(
                     minute,
                     attackingTeam,
                     defendingTeam,
                     homeAttacks,
+                    attackingExpectedGoals,
                     result
                 );
             }
@@ -60,6 +101,7 @@ namespace Sim
             AgentTeam attackingTeam,
             AgentTeam defendingTeam,
             bool homeAttacks,
+            float attackingExpectedGoals,
             AgentMatchResult result)
         {
             PlayerAgent creator = PickCreativePlayer(attackingTeam);
@@ -78,7 +120,11 @@ namespace Sim
             float chanceScore =
                 chanceCreation - defensiveResistance;
 
-            float shotChance = Mathf.Clamp(0.45f + chanceScore / 200f, 0.05f, 0.85f);
+            float shotChance = Mathf.Clamp(
+                0.42f + chanceScore / 240f,
+                0.08f,
+                0.78f
+            );
 
             if (Random.value > shotChance)
             {
@@ -94,10 +140,10 @@ namespace Sim
             }
 
             float goalChance = Mathf.Clamp(
-                0.20f + (shooter.Finishing - goalkeeper.Goalkeeping) / 250f,
-                0.03f,
-                0.65f
-            );
+    0.355f + (shooter.Finishing - goalkeeper.Goalkeeping) / 320f,
+    0.08f,
+    0.63f
+);
 
             if (Random.value < goalChance)
             {
@@ -132,7 +178,7 @@ namespace Sim
 
         private PlayerAgent PickCreativePlayer(AgentTeam team)
         {
-            List<PlayerAgent> candidates = team.Players.FindAll(p =>
+            List<PlayerAgent> candidates = team.StartingEleven.FindAll(p =>
                 p.Role == PlayerRole.Midfielder ||
                 p.Role == PlayerRole.Forward
             );
@@ -142,7 +188,7 @@ namespace Sim
 
         private PlayerAgent PickShooter(AgentTeam team)
         {
-            List<PlayerAgent> candidates = team.Players.FindAll(p =>
+            List<PlayerAgent> candidates = team.StartingEleven.FindAll(p =>
                 p.Role == PlayerRole.Forward ||
                 p.Role == PlayerRole.Midfielder
             );
@@ -152,7 +198,7 @@ namespace Sim
 
         private PlayerAgent PickDefender(AgentTeam team)
         {
-            List<PlayerAgent> candidates = team.Players.FindAll(p =>
+            List<PlayerAgent> candidates = team.StartingEleven.FindAll(p =>
                 p.Role == PlayerRole.Defender ||
                 p.Role == PlayerRole.Midfielder
             );
@@ -162,14 +208,14 @@ namespace Sim
 
         private PlayerAgent PickGoalkeeper(AgentTeam team)
         {
-            PlayerAgent goalkeeper = team.Players.Find(p => p.Role == PlayerRole.Goalkeeper);
+            PlayerAgent goalkeeper = team.StartingEleven.Find(p => p.Role == PlayerRole.Goalkeeper);
 
             if (goalkeeper != null)
             {
                 return goalkeeper;
             }
 
-            return team.Players[0];
+            return team.StartingEleven[0];
         }
 
         private PlayerAgent PickWeightedByAttribute(

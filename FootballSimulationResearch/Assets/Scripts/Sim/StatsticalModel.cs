@@ -19,6 +19,31 @@ namespace Sim
             public float DefenceStrength;
         }
 
+        private class AccumulatedTeamStats
+        {
+            public int ActualMatches;
+            public int ActualGoalsFor;
+            public int ActualGoalsAgainst;
+
+            public float WeightedMatches;
+            public float WeightedGoalsFor;
+            public float WeightedGoalsAgainst;
+        }
+
+        private float GetSeasonWeight(string seasonName)
+        {
+            if (seasonName.Contains("2017_18")) return 0.35f;
+            if (seasonName.Contains("2018_19")) return 0.45f;
+            if (seasonName.Contains("2019_20")) return 0.55f;
+            if (seasonName.Contains("2020_21")) return 0.65f;
+            if (seasonName.Contains("2021_22")) return 0.75f;
+            if (seasonName.Contains("2022_23")) return 0.85f;
+            if (seasonName.Contains("2023_24")) return 0.95f;
+            if (seasonName.Contains("2024_25")) return 1.00f;
+
+            return 1.00f;
+        }
+
         private readonly HashSet<string> warnedMissingTeams = new();
 
         public class ExpectedGoalsPrediction
@@ -40,9 +65,9 @@ namespace Sim
         }
 
         public TeamStrength GetTeamStrength(string teamName)
-{
-    return GetTeamStrengthOrAverage(teamName);
-}
+        {
+            return GetTeamStrengthOrAverage(teamName);
+        }
 
         private readonly Dictionary<string, TeamStrength> teamStrengths = new();
 
@@ -55,44 +80,90 @@ namespace Sim
             teamStrengths.Clear();
             warnedMissingTeams.Clear();
 
-            int totalHomeGoals = 0;
-            int totalAwayGoals = 0;
+            Dictionary<string, AccumulatedTeamStats> accumulatedStats = new();
 
+            float totalWeightedGoals = 0f;
+            float totalWeightedTeamAppearances = 0f;
 
-
-            int totalGoals = 0;
-            int totalTeamAppearances = 0;
+            float weightedHomeGoals = 0f;
+            float weightedAwayGoals = 0f;
+            float weightedMatches = 0f;
 
             foreach (OpenFootballMatch match in trainingMatches)
             {
-                AddTeamMatch(match.HomeTeam, match.HomeGoals, match.AwayGoals);
-                AddTeamMatch(match.AwayTeam, match.AwayGoals, match.HomeGoals);
+                float seasonWeight = GetSeasonWeight(match.Season);
 
-                totalGoals += match.HomeGoals + match.AwayGoals;
-                totalTeamAppearances += 2;
+                if (!accumulatedStats.ContainsKey(match.HomeTeam))
+                {
+                    accumulatedStats[match.HomeTeam] = new AccumulatedTeamStats();
+                }
 
-                totalHomeGoals += match.HomeGoals;
-                totalAwayGoals += match.AwayGoals;
+                if (!accumulatedStats.ContainsKey(match.AwayTeam))
+                {
+                    accumulatedStats[match.AwayTeam] = new AccumulatedTeamStats();
+                }
+
+                AccumulatedTeamStats homeStats = accumulatedStats[match.HomeTeam];
+                AccumulatedTeamStats awayStats = accumulatedStats[match.AwayTeam];
+
+                homeStats.ActualMatches++;
+                homeStats.ActualGoalsFor += match.HomeGoals;
+                homeStats.ActualGoalsAgainst += match.AwayGoals;
+
+                awayStats.ActualMatches++;
+                awayStats.ActualGoalsFor += match.AwayGoals;
+                awayStats.ActualGoalsAgainst += match.HomeGoals;
+
+                homeStats.WeightedMatches += seasonWeight;
+                homeStats.WeightedGoalsFor += match.HomeGoals * seasonWeight;
+                homeStats.WeightedGoalsAgainst += match.AwayGoals * seasonWeight;
+
+                awayStats.WeightedMatches += seasonWeight;
+                awayStats.WeightedGoalsFor += match.AwayGoals * seasonWeight;
+                awayStats.WeightedGoalsAgainst += match.HomeGoals * seasonWeight;
+
+                totalWeightedGoals += (match.HomeGoals + match.AwayGoals) * seasonWeight;
+                totalWeightedTeamAppearances += 2f * seasonWeight;
+
+                weightedHomeGoals += match.HomeGoals * seasonWeight;
+                weightedAwayGoals += match.AwayGoals * seasonWeight;
+                weightedMatches += seasonWeight;
             }
 
-            averageHomeGoals = (float)totalHomeGoals / trainingMatches.Count;
-            averageAwayGoals = (float)totalAwayGoals / trainingMatches.Count;
-            leagueAverageGoalsForPerTeamPerMatch = (float)totalGoals / totalTeamAppearances;
+            leagueAverageGoalsForPerTeamPerMatch =
+                totalWeightedGoals / totalWeightedTeamAppearances;
 
+            averageHomeGoals = weightedHomeGoals / weightedMatches;
+            averageAwayGoals = weightedAwayGoals / weightedMatches;
+
+            foreach (KeyValuePair<string, AccumulatedTeamStats> pair in accumulatedStats)
+            {
+                string teamName = pair.Key;
+                AccumulatedTeamStats stats = pair.Value;
+
+                float goalsForPerMatch = stats.WeightedGoalsFor / stats.WeightedMatches;
+                float goalsAgainstPerMatch = stats.WeightedGoalsAgainst / stats.WeightedMatches;
+
+                TeamStrength strength = new TeamStrength
+                {
+                    TeamName = teamName,
+                    MatchesPlayed = stats.ActualMatches,
+                    GoalsFor = stats.ActualGoalsFor,
+                    GoalsAgainst = stats.ActualGoalsAgainst,
+                    GoalsForPerMatch = goalsForPerMatch,
+                    GoalsAgainstPerMatch = goalsAgainstPerMatch,
+                    AttackStrength = goalsForPerMatch / leagueAverageGoalsForPerTeamPerMatch,
+                    DefenceStrength = goalsAgainstPerMatch / leagueAverageGoalsForPerTeamPerMatch
+                };
+
+                teamStrengths[teamName] = strength;
+            }
+
+            Debug.Log("Statistical model trained using recency-weighted match data.");
             Debug.Log($"Average home goals: {averageHomeGoals:F2}");
             Debug.Log($"Average away goals: {averageAwayGoals:F2}");
-
-            foreach (TeamStrength team in teamStrengths.Values)
-            {
-                team.GoalsForPerMatch = (float)team.GoalsFor / team.MatchesPlayed;
-                team.GoalsAgainstPerMatch = (float)team.GoalsAgainst / team.MatchesPlayed;
-
-                team.AttackStrength = team.GoalsForPerMatch / leagueAverageGoalsForPerTeamPerMatch;
-                team.DefenceStrength = team.GoalsAgainstPerMatch / leagueAverageGoalsForPerTeamPerMatch;
-            }
-
             Debug.Log($"Statistical model trained on {trainingMatches.Count} matches.");
-            Debug.Log($"League average goals per team per match: {leagueAverageGoalsForPerTeamPerMatch:F2}");
+            Debug.Log($"Weighted league average goals per team per match: {leagueAverageGoalsForPerTeamPerMatch:F2}");
         }
 
         public void PrintTeamStrengths(int maxTeams = 10)
@@ -181,7 +252,7 @@ namespace Sim
                 DefenceStrength = 1f
             };
 
-            
+
         }
 
         public void PrintExpectedGoalsSamples(List<OpenFootballMatch> evaluationMatches, int maxMatches = 10)

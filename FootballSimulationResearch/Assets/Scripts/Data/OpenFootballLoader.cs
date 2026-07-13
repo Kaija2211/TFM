@@ -23,6 +23,71 @@ namespace Data
                 return;
             }
 
+            LoadAllSeasonFiles();
+
+            List<OpenFootballMatch> trainingMatches = matches.FindAll(m => !m.Season.Contains("2025_26"));
+            List<OpenFootballMatch> evaluationMatches = matches.FindAll(m => m.Season.Contains("2025_26"));
+
+            Debug.Log($"Training matches: {trainingMatches.Count}");
+            Debug.Log($"Evaluation matches: {evaluationMatches.Count}");
+
+            StatisticalModel statisticalModel = new StatisticalModel();
+            statisticalModel.Train(trainingMatches);
+            statisticalModel.PrintTeamStrengths(10);
+
+            PrintGeneratedAgentSquad(statisticalModel, "Liverpool");
+
+            statisticalModel.PrintExpectedGoalsSamples(evaluationMatches, 10);
+            statisticalModel.PrintSimulatedMatchSamples(evaluationMatches, 10);
+
+            List<StatisticalModel.SimulatedMatchResult> simulatedResults =
+                statisticalModel.SimulateSeason(evaluationMatches);
+
+            LeagueTable simulatedTable = PrintSimulatedLeagueTable(simulatedResults);
+            LeagueTable actualTable = BuildActualEvaluationTable(evaluationMatches);
+
+            CompareTablesWithPointsMAE(actualTable, simulatedTable);
+
+            RunRepeatedStatisticalEvaluation(
+                statisticalModel,
+                evaluationMatches,
+                actualTable,
+                100
+            );
+
+
+
+            PrintSampleAgentBasedMatch(
+
+
+                statisticalModel,
+                "Liverpool",
+                "AFC Bournemouth"
+
+
+            );
+
+
+            LeagueTable agentBasedTable = SimulateAgentBasedEvaluationSeason(
+                statisticalModel,
+                evaluationMatches
+            );
+
+            float agentBasedMae = CalculatePointsMAE(actualTable, agentBasedTable);
+            Debug.Log($"Agent-Based Model Points MAE: {agentBasedMae:F2}");
+
+            PrintGoalsPerMatchComparison(evaluationMatches, agentBasedTable);
+
+            RunRepeatedAgentBasedEvaluation(
+                statisticalModel,
+                evaluationMatches,
+                actualTable,
+                100
+            );
+        }
+
+        private void LoadAllSeasonFiles()
+        {
             matches.Clear();
             teamIds.Clear();
             teamNames.Clear();
@@ -46,76 +111,45 @@ namespace Data
             }
 
             Debug.Log($"Loaded {matches.Count} total matches from {seasonFiles.Length} season files.");
-
-            // List<MatchRecord> records = ConvertToMatchRecords();
-
-            List<OpenFootballMatch> trainingMatches = matches.FindAll(m => !m.Season.Contains("2025_26"));
-            List<OpenFootballMatch> evaluationMatches = matches.FindAll(m => m.Season.Contains("2025_26"));
-
-            Debug.Log($"Training matches: {trainingMatches.Count}");
-            Debug.Log($"Evaluation matches: {evaluationMatches.Count}");
-
-            StatisticalModel statisticalModel = new StatisticalModel();
-            statisticalModel.Train(trainingMatches);
-            statisticalModel.PrintTeamStrengths(10);
-            PrintGeneratedAgentSquad(statisticalModel, "Liverpool");
-            PrintSampleAgentBasedMatch(
-    statisticalModel,
-    "Liverpool",
-    "AFC Bournemouth"
-);
-            statisticalModel.PrintExpectedGoalsSamples(evaluationMatches, 10);
-            statisticalModel.PrintSimulatedMatchSamples(evaluationMatches, 10);
-
-
-            List<StatisticalModel.SimulatedMatchResult> simulatedResults =
-                statisticalModel.SimulateSeason(evaluationMatches);
-
-            LeagueTable simulatedTable = PrintSimulatedLeagueTable(simulatedResults);
-
-            LeagueTable actualTable = BuildActualEvaluationTable(evaluationMatches);
-
-            CompareTablesWithPointsMAE(actualTable, simulatedTable);
-
-            RunRepeatedStatisticalEvaluation(
-                statisticalModel,
-                evaluationMatches,
-                actualTable,
-                100
-            );
-
-
         }
-
-
 
         private void PrintGeneratedAgentSquad(
     StatisticalModel statisticalModel,
     string teamName)
         {
-            StatisticalModel.TeamStrength teamStrength =
+            StatisticalModel.TeamStrength strength =
                 statisticalModel.GetTeamStrength(teamName);
 
-            AgentSquadGenerator squadGenerator = new AgentSquadGenerator();
+            AgentSquadGenerator generator = new AgentSquadGenerator();
 
-            AgentTeam squad = squadGenerator.GenerateSquad(
+            AgentTeam squad = generator.GenerateSquad(
                 teamName,
-                teamStrength.AttackStrength,
-                teamStrength.DefenceStrength
+                strength.AttackStrength,
+                strength.DefenceStrength
             );
 
             Debug.Log($"Generated ABM squad for {teamName}:");
+            Debug.Log($"Formation: {squad.Formation}");
 
-            foreach (PlayerAgent player in squad.Players)
+            Debug.Log("Starting XI:");
+
+            foreach (PlayerAgent player in squad.StartingEleven)
+            {
+                Debug.Log(player.ToString());
+            }
+
+            Debug.Log("Bench:");
+
+            foreach (PlayerAgent player in squad.Bench)
             {
                 Debug.Log(player.ToString());
             }
         }
 
         private void PrintSampleAgentBasedMatch(
-    StatisticalModel statisticalModel,
-    string homeTeamName,
-    string awayTeamName)
+            StatisticalModel statisticalModel,
+            string homeTeamName,
+            string awayTeamName)
         {
             StatisticalModel.TeamStrength homeStrength =
                 statisticalModel.GetTeamStrength(homeTeamName);
@@ -137,11 +171,27 @@ namespace Data
                 awayStrength.DefenceStrength
             );
 
+            OpenFootballMatch sampleFixture = new OpenFootballMatch
+            {
+                HomeTeam = homeTeamName,
+                AwayTeam = awayTeamName,
+                HomeGoals = 0,
+                AwayGoals = 0,
+                Season = "sample"
+            };
+
+            StatisticalModel.ExpectedGoalsPrediction prediction =
+                statisticalModel.PredictExpectedGoals(sampleFixture);
+
             AgentMatchSimulator matchSimulator = new AgentMatchSimulator();
 
             AgentMatchSimulator.AgentMatchResult result =
-                matchSimulator.SimulateMatch(homeTeam, awayTeam);
-
+    matchSimulator.SimulateMatch(
+        homeTeam,
+        awayTeam,
+        prediction.ExpectedHomeGoals,
+        prediction.ExpectedAwayGoals
+    );
             Debug.Log(
                 $"ABM sample match result: " +
                 $"{result.HomeTeamName} {result.HomeGoals}-{result.AwayGoals} {result.AwayTeamName}"
@@ -152,6 +202,274 @@ namespace Data
             foreach (AgentMatchSimulator.AgentMatchEvent matchEvent in result.Events)
             {
                 Debug.Log($"{matchEvent.Minute}' {matchEvent.Description}");
+            }
+        }
+
+        private LeagueTable SimulateAgentBasedEvaluationSeason(
+            StatisticalModel statisticalModel,
+            List<OpenFootballMatch> evaluationMatches)
+        {
+            Dictionary<string, AgentTeam> squadsByTeamName = new();
+
+            AgentSquadGenerator squadGenerator = new AgentSquadGenerator();
+            AgentMatchSimulator matchSimulator = new AgentMatchSimulator();
+
+            LeagueTable abmTable = new LeagueTable();
+
+            foreach (OpenFootballMatch fixture in evaluationMatches)
+            {
+                AgentTeam homeTeam = GetOrCreateAgentTeam(
+                    fixture.HomeTeam,
+                    statisticalModel,
+                    squadGenerator,
+                    squadsByTeamName
+                );
+
+                AgentTeam awayTeam = GetOrCreateAgentTeam(
+                    fixture.AwayTeam,
+                    statisticalModel,
+                    squadGenerator,
+                    squadsByTeamName
+                );
+
+                StatisticalModel.ExpectedGoalsPrediction prediction =
+    statisticalModel.PredictExpectedGoals(fixture);
+
+                AgentMatchSimulator.AgentMatchResult result =
+                    matchSimulator.SimulateMatch(
+                        homeTeam,
+                        awayTeam,
+                        prediction.ExpectedHomeGoals,
+                        prediction.ExpectedAwayGoals
+                    );
+
+                MatchRecord record = new MatchRecord
+                {
+                    Matchday = 0,
+                    HomeTeamId = GetTeamId(result.HomeTeamName),
+                    AwayTeamId = GetTeamId(result.AwayTeamName),
+                    HomeGoals = result.HomeGoals,
+                    AwayGoals = result.AwayGoals
+                };
+
+                abmTable.Apply(record);
+            }
+
+            Debug.Log($"Simulated {evaluationMatches.Count} ABM matches.");
+            Debug.Log($"Generated {squadsByTeamName.Count} ABM squads.");
+
+            PrintAgentBasedLeagueTable(abmTable);
+
+            return abmTable;
+        }
+
+        private LeagueTable SimulateAgentBasedEvaluationSeasonQuiet(
+            StatisticalModel statisticalModel,
+            List<OpenFootballMatch> evaluationMatches)
+        {
+            Dictionary<string, AgentTeam> squadsByTeamName = new();
+
+            AgentSquadGenerator squadGenerator = new AgentSquadGenerator();
+            AgentMatchSimulator matchSimulator = new AgentMatchSimulator();
+
+            LeagueTable abmTable = new LeagueTable();
+
+            foreach (OpenFootballMatch fixture in evaluationMatches)
+            {
+                AgentTeam homeTeam = GetOrCreateAgentTeam(
+                    fixture.HomeTeam,
+                    statisticalModel,
+                    squadGenerator,
+                    squadsByTeamName
+                );
+
+                AgentTeam awayTeam = GetOrCreateAgentTeam(
+                    fixture.AwayTeam,
+                    statisticalModel,
+                    squadGenerator,
+                    squadsByTeamName
+                );
+
+                StatisticalModel.ExpectedGoalsPrediction prediction =
+    statisticalModel.PredictExpectedGoals(fixture);
+
+                AgentMatchSimulator.AgentMatchResult result =
+                    matchSimulator.SimulateMatch(
+                        homeTeam,
+                        awayTeam,
+                        prediction.ExpectedHomeGoals,
+                        prediction.ExpectedAwayGoals
+                    );
+
+                MatchRecord record = new MatchRecord
+                {
+                    Matchday = 0,
+                    HomeTeamId = GetTeamId(result.HomeTeamName),
+                    AwayTeamId = GetTeamId(result.AwayTeamName),
+                    HomeGoals = result.HomeGoals,
+                    AwayGoals = result.AwayGoals
+                };
+
+                abmTable.Apply(record);
+            }
+
+            return abmTable;
+        }
+
+        private AgentTeam GetOrCreateAgentTeam(
+            string teamName,
+            StatisticalModel statisticalModel,
+            AgentSquadGenerator squadGenerator,
+            Dictionary<string, AgentTeam> squadsByTeamName)
+        {
+            if (squadsByTeamName.TryGetValue(teamName, out AgentTeam existingTeam))
+            {
+                return existingTeam;
+            }
+
+            StatisticalModel.TeamStrength teamStrength =
+                statisticalModel.GetTeamStrength(teamName);
+
+            AgentTeam newTeam = squadGenerator.GenerateSquad(
+                teamName,
+                teamStrength.AttackStrength,
+                teamStrength.DefenceStrength
+            );
+
+            squadsByTeamName[teamName] = newTeam;
+
+            return newTeam;
+        }
+
+        private void PrintAgentBasedLeagueTable(LeagueTable table)
+        {
+            List<LeagueTable.Entry> sortedTable = table.Sorted();
+
+            Debug.Log("Agent-Based Model simulated evaluation table:");
+
+            for (int i = 0; i < sortedTable.Count; i++)
+            {
+                LeagueTable.Entry entry = sortedTable[i];
+
+                string teamName = teamNames.ContainsKey(entry.TeamId)
+                    ? teamNames[entry.TeamId]
+                    : $"Team {entry.TeamId}";
+
+                Debug.Log(
+                    $"{i + 1}. {teamName} " +
+                    $"Pts:{entry.Points} " +
+                    $"P:{entry.Played} " +
+                    $"W:{entry.Wins} " +
+                    $"D:{entry.Draws} " +
+                    $"L:{entry.Losses} " +
+                    $"GF:{entry.GoalsFor} " +
+                    $"GA:{entry.GoalsAgainst} " +
+                    $"GD:{entry.GoalsFor - entry.GoalsAgainst}"
+                );
+            }
+        }
+
+        private void PrintGoalsPerMatchComparison(
+            List<OpenFootballMatch> evaluationMatches,
+            LeagueTable abmTable)
+        {
+            int actualGoals = 0;
+
+            foreach (OpenFootballMatch match in evaluationMatches)
+            {
+                actualGoals += match.HomeGoals + match.AwayGoals;
+            }
+
+            int abmGoals = 0;
+
+            foreach (LeagueTable.Entry entry in abmTable.Sorted())
+            {
+                abmGoals += entry.GoalsFor;
+            }
+
+            float actualGoalsPerMatch = (float)actualGoals / evaluationMatches.Count;
+            float abmGoalsPerMatch = (float)abmGoals / evaluationMatches.Count;
+
+            Debug.Log("Goals per match comparison:");
+            Debug.Log($"Actual goals per match: {actualGoalsPerMatch:F2}");
+            Debug.Log($"ABM goals per match: {abmGoalsPerMatch:F2}");
+        }
+
+        private void RunRepeatedAgentBasedEvaluation(
+            StatisticalModel statisticalModel,
+            List<OpenFootballMatch> evaluationMatches,
+            LeagueTable actualTable,
+            int runs)
+        {
+            float totalMae = 0f;
+            float bestMae = float.MaxValue;
+            float worstMae = float.MinValue;
+            Dictionary<int, int> titleWinsByTeamId = new();
+            System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
+            stopwatch.Start();
+
+            for (int i = 0; i < runs; i++)
+            {
+                LeagueTable agentBasedTable = SimulateAgentBasedEvaluationSeasonQuiet(
+                    statisticalModel,
+                    evaluationMatches
+                );
+
+                float mae = CalculatePointsMAE(actualTable, agentBasedTable);
+
+                totalMae += mae;
+
+                if (mae < bestMae)
+                {
+                    bestMae = mae;
+                }
+
+                if (mae > worstMae)
+                {
+                    worstMae = mae;
+                }
+                List<LeagueTable.Entry> sortedTable = agentBasedTable.Sorted();
+
+                if (sortedTable.Count > 0)
+                {
+                    int championTeamId = sortedTable[0].TeamId;
+
+                    if (!titleWinsByTeamId.ContainsKey(championTeamId))
+                    {
+                        titleWinsByTeamId[championTeamId] = 0;
+                    }
+
+                    titleWinsByTeamId[championTeamId]++;
+                }
+
+            }
+
+            stopwatch.Stop();
+
+            float averageMae = totalMae / runs;
+            double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
+            double simulationsPerMinute = runs / elapsedSeconds * 60.0;
+
+            Debug.Log($"Agent-Based repeated evaluation over {runs} runs:");
+            Debug.Log($"Average Points MAE: {averageMae:F2}");
+            Debug.Log($"Best Points MAE: {bestMae:F2}");
+            Debug.Log($"Worst Points MAE: {worstMae:F2}");
+            Debug.Log($"Execution time: {elapsedSeconds:F4} seconds");
+            Debug.Log($"Simulations per minute: {simulationsPerMinute:F2}");
+
+            Debug.Log("ABM league title winners over repeated simulations:");
+
+            List<KeyValuePair<int, int>> titleWins = new(titleWinsByTeamId);
+
+            titleWins.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+            foreach (KeyValuePair<int, int> pair in titleWins)
+            {
+                string teamName = teamNames.ContainsKey(pair.Key)
+                    ? teamNames[pair.Key]
+                    : $"Team {pair.Key}";
+
+                Debug.Log($"{teamName}: {pair.Value} titles out of {runs}");
             }
         }
 
@@ -440,53 +758,6 @@ namespace Data
             }
 
             return null;
-        }
-
-        private List<MatchRecord> ConvertToMatchRecords()
-        {
-            List<MatchRecord> records = new();
-
-            foreach (OpenFootballMatch match in matches)
-            {
-                records.Add(new MatchRecord
-                {
-                    Matchday = 0,
-                    HomeTeamId = GetTeamId(match.HomeTeam),
-                    AwayTeamId = GetTeamId(match.AwayTeam),
-                    HomeGoals = match.HomeGoals,
-                    AwayGoals = match.AwayGoals
-                });
-            }
-
-            return records;
-        }
-
-        private void PrintLeagueTable(LeagueTable table)
-        {
-            List<LeagueTable.Entry> sortedTable = table.Sorted();
-
-            Debug.Log("Combined league table from loaded seasons:");
-
-            for (int i = 0; i < sortedTable.Count; i++)
-            {
-                LeagueTable.Entry entry = sortedTable[i];
-
-                string teamName = teamNames.ContainsKey(entry.TeamId)
-                    ? teamNames[entry.TeamId]
-                    : $"Team {entry.TeamId}";
-
-                Debug.Log(
-                    $"{i + 1}. {teamName} " +
-                    $"Pts:{entry.Points} " +
-                    $"P:{entry.Played} " +
-                    $"W:{entry.Wins} " +
-                    $"D:{entry.Draws} " +
-                    $"L:{entry.Losses} " +
-                    $"GF:{entry.GoalsFor} " +
-                    $"GA:{entry.GoalsAgainst} " +
-                    $"GD:{entry.GoalsFor - entry.GoalsAgainst}"
-                );
-            }
         }
 
         private LeagueTable BuildActualEvaluationTable(List<OpenFootballMatch> evaluationMatches)
