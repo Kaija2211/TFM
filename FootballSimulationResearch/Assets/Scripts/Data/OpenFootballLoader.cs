@@ -569,6 +569,20 @@ namespace Data
 
             titleWins.Sort((a, b) => b.Value.CompareTo(a.Value));
 
+            StringBuilder summary = new StringBuilder();
+
+            summary.AppendLine($"Agent-Based repeated evaluation over {runs} runs");
+            summary.AppendLine("----------------------------------------");
+            summary.AppendLine($"Average Points MAE: {averageMae:F2}");
+            summary.AppendLine($"Median Points MAE: {medianMae:F2}");
+            summary.AppendLine($"MAE Standard Deviation: {maeStandardDeviation:F2}");
+            summary.AppendLine($"Best Points MAE: {bestMae:F2}");
+            summary.AppendLine($"Worst Points MAE: {worstMae:F2}");
+            summary.AppendLine($"Execution time: {elapsedSeconds:F4} seconds");
+            summary.AppendLine($"Simulations per minute: {simulationsPerMinute:F2}");
+            summary.AppendLine();
+            summary.AppendLine("ABM league title winners over repeated simulations:");
+
             foreach (KeyValuePair<int, int> pair in titleWins)
             {
                 string teamName = teamNames.ContainsKey(pair.Key)
@@ -577,8 +591,16 @@ namespace Data
 
                 float percentage = (float)pair.Value / runs * 100f;
 
-                Debug.Log($"{teamName}: {pair.Value} titles out of {runs} ({percentage:F2}%)");
+                string titleLine = $"{teamName}: {pair.Value} titles out of {runs} ({percentage:F2}%)";
+
+                Debug.Log(titleLine);
+                summary.AppendLine(titleLine);
             }
+
+            ExportTextEvidence(
+                $"abm_repeated_summary_{runs}_runs.txt",
+                summary.ToString()
+            );
 
             PrintAverageAgentBasedTable(
                 actualTable,
@@ -588,7 +610,7 @@ namespace Data
                 runs
             );
 
-            StringBuilder summary = new StringBuilder();
+         
 
             summary.AppendLine($"Statistical repeated evaluation over {runs} runs");
             summary.AppendLine("----------------------------------------");
