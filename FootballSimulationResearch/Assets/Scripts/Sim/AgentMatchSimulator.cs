@@ -65,6 +65,8 @@ namespace Sim
                 0.65f
             );
 
+
+
             for (int minute = 1; minute <= 90; minute++)
             {
                 if (Random.value > eventChancePerMinute)
@@ -72,10 +74,40 @@ namespace Sim
                     continue;
                 }
 
-                bool homeAttacks = Random.value < homeAttackChance;
+                ScoreStateModifier homeMentality = GetScoreStateModifier(
+     result.HomeGoals,
+     result.AwayGoals,
+     minute
+ );
+
+                ScoreStateModifier awayMentality = GetScoreStateModifier(
+                    result.AwayGoals,
+                    result.HomeGoals,
+                    minute
+                );
+
+                float adjustedHomeAttackWeight =
+                    homeAttackChance * homeMentality.AttackShareMultiplier;
+
+                float adjustedAwayAttackWeight =
+                    (1f - homeAttackChance) * awayMentality.AttackShareMultiplier;
+
+                float adjustedHomeAttackChance =
+                    adjustedHomeAttackWeight /
+                    Mathf.Max(0.01f, adjustedHomeAttackWeight + adjustedAwayAttackWeight);
+
+                adjustedHomeAttackChance = Mathf.Clamp(
+                    adjustedHomeAttackChance,
+                    0.30f,
+                    0.70f
+                );
+
+                bool homeAttacks = Random.value < adjustedHomeAttackChance;
 
                 int goalDifference = result.HomeGoals - result.AwayGoals;
 
+                // If a team is already well ahead, reduce low-value extra attacks.
+                // This keeps extreme scorelines under control.
                 if (homeAttacks && goalDifference >= 3 && Random.value < 0.60f)
                 {
                     continue;
@@ -89,16 +121,28 @@ namespace Sim
                 AgentTeam attackingTeam = homeAttacks ? homeTeam : awayTeam;
                 AgentTeam defendingTeam = homeAttacks ? awayTeam : homeTeam;
 
+                ScoreStateModifier attackingMentality = homeAttacks
+                    ? homeMentality
+                    : awayMentality;
+
+                ScoreStateModifier defendingMentality = homeAttacks
+                    ? awayMentality
+                    : homeMentality;
+
                 float attackingExpectedGoals = homeAttacks
                     ? expectedHomeGoals
                     : expectedAwayGoals;
+
+                float adjustedAttackingExpectedGoals =
+                    attackingExpectedGoals * attackingMentality.AttackQualityMultiplier;
 
                 ResolveAttack(
                     minute,
                     attackingTeam,
                     defendingTeam,
                     homeAttacks,
-                    attackingExpectedGoals,
+                    adjustedAttackingExpectedGoals,
+                    defendingMentality.DefensiveMultiplier,
                     result
                 );
             }
@@ -107,12 +151,13 @@ namespace Sim
         }
 
         private void ResolveAttack(
-            int minute,
-            AgentTeam attackingTeam,
-            AgentTeam defendingTeam,
-            bool homeAttacks,
-            float attackingExpectedGoals,
-            AgentMatchResult result)
+    int minute,
+    AgentTeam attackingTeam,
+    AgentTeam defendingTeam,
+    bool homeAttacks,
+    float attackingExpectedGoals,
+    float defendingMentalityMultiplier,
+    AgentMatchResult result)
         {
             ChanceType chanceType = PickChanceType(attackingExpectedGoals);
 
@@ -136,8 +181,9 @@ namespace Sim
     ((creatorFatigue + shooterFatigue) / 2f);
 
             float defensiveResistance =
-                GetDefensiveResistanceScore(defender, goalkeeper, chanceType) *
-                ((defenderFatigue + goalkeeperFatigue) / 2f);
+    GetDefensiveResistanceScore(defender, goalkeeper, chanceType) *
+    ((defenderFatigue + goalkeeperFatigue) / 2f) *
+    defendingMentalityMultiplier;
 
             float chanceScore = chanceCreation - defensiveResistance;
 
@@ -163,8 +209,14 @@ namespace Sim
                 return;
             }
 
-            float goalQuality = GetGoalQualityScore(creator, shooter, chanceType);
-            float saveQuality = GetSaveQualityScore(goalkeeper, defender, chanceType);
+            float goalQuality =
+    GetGoalQualityScore(creator, shooter, chanceType) *
+    ((creatorFatigue + shooterFatigue) / 2f);
+
+            float saveQuality =
+                GetSaveQualityScore(goalkeeper, defender, chanceType) *
+                ((goalkeeperFatigue + defenderFatigue) / 2f) *
+                defendingMentalityMultiplier;
 
             float goalChance = Mathf.Clamp(
                 0.302f + (goalQuality - saveQuality) / 320f,
@@ -706,6 +758,73 @@ namespace Sim
                 default:
                     return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots, but {goalkeeper.Name} saves.";
             }
+        }
+
+        private class ScoreStateModifier
+        {
+            public float AttackShareMultiplier = 1f;
+            public float AttackQualityMultiplier = 1f;
+            public float DefensiveMultiplier = 1f;
+        }
+
+        private ScoreStateModifier GetScoreStateModifier(
+            int ownGoals,
+            int opponentGoals,
+            int minute)
+        {
+            ScoreStateModifier modifier = new ScoreStateModifier();
+
+            int goalDifference = ownGoals - opponentGoals;
+
+            // Keep the first half mostly driven by the pre-match model.
+            if (minute < 55)
+            {
+                return modifier;
+            }
+
+            // Losing teams become more urgent, especially late.
+            if (goalDifference < 0)
+            {
+                if (minute >= 75)
+                {
+                    modifier.AttackShareMultiplier = 1.12f;
+                    modifier.AttackQualityMultiplier = 1.08f;
+                    modifier.DefensiveMultiplier = 0.94f;
+                }
+                else
+                {
+                    modifier.AttackShareMultiplier = 1.07f;
+                    modifier.AttackQualityMultiplier = 1.04f;
+                    modifier.DefensiveMultiplier = 0.97f;
+                }
+            }
+
+            // Winning teams protect leads, especially late.
+            if (goalDifference > 0)
+            {
+                if (minute >= 75)
+                {
+                    modifier.AttackShareMultiplier = 0.92f;
+                    modifier.AttackQualityMultiplier = 0.96f;
+                    modifier.DefensiveMultiplier = 1.08f;
+                }
+                else
+                {
+                    modifier.AttackShareMultiplier = 0.96f;
+                    modifier.AttackQualityMultiplier = 0.98f;
+                    modifier.DefensiveMultiplier = 1.04f;
+                }
+            }
+
+            // Drawn games become a little more open very late.
+            if (goalDifference == 0 && minute >= 80)
+            {
+                modifier.AttackShareMultiplier = 1.04f;
+                modifier.AttackQualityMultiplier = 1.03f;
+                modifier.DefensiveMultiplier = 0.98f;
+            }
+
+            return modifier;
         }
 
         private float GetFatigueMultiplier(PlayerAgent player, int minute)
