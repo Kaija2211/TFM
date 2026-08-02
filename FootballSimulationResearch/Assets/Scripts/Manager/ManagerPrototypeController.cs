@@ -17,6 +17,7 @@ namespace Manager
     {
         [Header("Season Data")]
         [SerializeField] private TextAsset seasonFile;
+        [SerializeField] private TextAsset[] trainingSeasonFiles;
         [SerializeField] private string managedTeamName = "Liverpool";
         [SerializeField] private float matchReplayDurationSeconds = 45f;
         [SerializeField] private int maxVisibleEventLines = 12;
@@ -40,14 +41,16 @@ namespace Manager
         [SerializeField] private Button defensiveButton;
         [SerializeField] private Button fullTimeContinueButton;
 
-        private const float BaselineExpectedHomeGoals = 1.45f;
-        private const float BaselineExpectedAwayGoals = 1.20f;
-
         private readonly TeamRegistry teamRegistry = new();
         private readonly LeagueTable playableTable = new();
         private readonly Dictionary<string, AgentTeam> squadsByTeamName = new();
         private readonly AgentSquadGenerator squadGenerator = new();
         private readonly AgentMatchSimulator matchSimulator = new();
+
+        // Own StatisticalModel instance, trained on trainingSeasonFiles only. Completely
+        // separate from ResearchEvaluationRunner's own StatisticalModel instance, so
+        // nothing here can affect the research evaluation flow or its metrics.
+        private readonly StatisticalModel statisticalModel = new();
 
         private List<OpenFootballMatch> managedTeamFixtures = new();
         private int currentFixtureIndex;
@@ -80,7 +83,38 @@ namespace Manager
                 Debug.LogWarning($"ManagerPrototypeController: no fixtures found for '{managedTeamName}' in {seasonFile.name}.");
             }
 
+            TrainStatisticalModel();
+
             ShowSeasonHub();
+        }
+
+        private void TrainStatisticalModel()
+        {
+            if (trainingSeasonFiles == null || trainingSeasonFiles.Length == 0)
+            {
+                Debug.LogError("ManagerPrototypeController: no training season files assigned — expected goals predictions will be degenerate until this is fixed.");
+                return;
+            }
+
+            List<OpenFootballMatch> trainingMatches = new();
+
+            foreach (TextAsset file in trainingSeasonFiles)
+            {
+                if (file == null)
+                {
+                    continue;
+                }
+
+                trainingMatches.AddRange(OpenFootballTextParser.ParseSeasonFile(file.text, file.name));
+            }
+
+            if (trainingMatches.Count == 0)
+            {
+                Debug.LogError("ManagerPrototypeController: training season files produced no matches — expected goals predictions will be degenerate until this is fixed.");
+                return;
+            }
+
+            statisticalModel.Train(trainingMatches);
         }
 
         // --- Tactic selection (Balanced default: no modifier applied) ---
@@ -193,8 +227,10 @@ namespace Manager
             AgentTeam homeTeam = GetOrCreateAgentTeam(currentFixture.HomeTeam);
             AgentTeam awayTeam = GetOrCreateAgentTeam(currentFixture.AwayTeam);
 
-            float expectedHomeGoals = BaselineExpectedHomeGoals;
-            float expectedAwayGoals = BaselineExpectedAwayGoals;
+            StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(currentFixture);
+
+            float expectedHomeGoals = prediction.ExpectedHomeGoals;
+            float expectedAwayGoals = prediction.ExpectedAwayGoals;
 
             if (currentFixtureManagedIsHome)
             {

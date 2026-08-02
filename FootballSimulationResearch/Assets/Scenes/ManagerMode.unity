@@ -337,6 +337,15 @@ MonoBehaviour:
   m_Name:
   m_EditorClassIdentifier:
   seasonFile: {fileID: 4900000, guid: f33034399b4949a4899977c6d559019d, type: 3}
+  trainingSeasonFiles:
+  - {fileID: 4900000, guid: 9ea94dab3171ff04ba5a065338aa9d1d, type: 3}
+  - {fileID: 4900000, guid: 845c38d5f639dc844bfe541e89ae1652, type: 3}
+  - {fileID: 4900000, guid: 33323af5a7002664bac48528bcffed85, type: 3}
+  - {fileID: 4900000, guid: ad2b348ed47d324429922c608431913d, type: 3}
+  - {fileID: 4900000, guid: 6b3069d9eaeed6c4eb535a9e7bef814d, type: 3}
+  - {fileID: 4900000, guid: d26942b34294eb94ea1925364c7cb954, type: 3}
+  - {fileID: 4900000, guid: 6fa0aaa0bccfba94793c2b055b1c319f, type: 3}
+  - {fileID: 4900000, guid: c7fa61dbd3743f04a88d28707d909f57, type: 3}
   managedTeamName: Liverpool
   matchReplayDurationSeconds: 45
   seasonHubPanel: {fileID: 4000}
