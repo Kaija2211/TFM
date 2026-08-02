@@ -19,6 +19,8 @@ namespace Sim
         {
             public int Minute;
             public string Description;
+            public bool IsGoal;
+            public bool HomeTeamScored;
         }
 
         public class AgentMatchResult
@@ -243,7 +245,9 @@ namespace Sim
                         creator,
                         shooter,
                         chanceType
-                    )
+                    ),
+                    IsGoal = true,
+                    HomeTeamScored = homeAttacks
                 });
             }
             else
