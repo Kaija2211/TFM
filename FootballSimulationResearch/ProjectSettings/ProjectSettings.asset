@@ -673,7 +673,8 @@ PlayerSettings:
   webGLCloseOnQuit: 0
   webWasm2023: 1
   webEnableSubmoduleStrippingCompatibility: 0
-  scriptingDefineSymbols: {}
+  scriptingDefineSymbols:
+    Standalone: SENTIS_ANALYTICS_ENABLED;APP_UI_EDITOR_ONLY
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend: {}
@@ -787,11 +788,11 @@ PlayerSettings:
   activeInputHandler: 0
   windowsGamepadBackendHint: 0
   enableDirectStorage: 0
-  cloudProjectId: d3980401-8bb2-4dd9-a531-bf20d50c6693
+  cloudProjectId: 4e0055ba-f7c3-46d7-a6c7-97cc44f145e0
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
   projectName: FootballSimulationResearch
-  organizationId: kaija2211
+  organizationId: unity_630b08151a99d301dbab
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
   hmiLoadingImage: {fileID: 0}
