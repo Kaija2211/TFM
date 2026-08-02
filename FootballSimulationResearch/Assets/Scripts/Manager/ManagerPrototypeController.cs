@@ -36,6 +36,7 @@ namespace Manager
         [SerializeField] private TMP_Text clockText;
         [SerializeField] private TMP_Text scoreText;
         [SerializeField] private TMP_Text eventFeedText;
+        [SerializeField] private TMP_Text matchStatsText;
         [SerializeField] private Button attackingButton;
         [SerializeField] private Button balancedButton;
         [SerializeField] private Button defensiveButton;
@@ -58,6 +59,7 @@ namespace Manager
 
         private OpenFootballMatch currentFixture;
         private bool currentFixtureManagedIsHome;
+        private ManagerTactic tacticUsedForCurrentMatch;
 
         private void Start()
         {
@@ -223,6 +225,7 @@ namespace Manager
 
             currentFixture = managedTeamFixtures[currentFixtureIndex];
             currentFixtureManagedIsHome = currentFixture.HomeTeam == managedTeamName;
+            tacticUsedForCurrentMatch = selectedTactic;
 
             AgentTeam homeTeam = GetOrCreateAgentTeam(currentFixture.HomeTeam);
             AgentTeam awayTeam = GetOrCreateAgentTeam(currentFixture.AwayTeam);
@@ -275,6 +278,7 @@ namespace Manager
             Queue<string> recentEventLines = new();
 
             if (eventFeedText != null) eventFeedText.text = "";
+            if (matchStatsText != null) matchStatsText.text = "";
             if (scoreText != null) scoreText.text = $"{currentFixture.HomeTeam} 0 - 0 {currentFixture.AwayTeam}";
             if (clockText != null) clockText.text = "0'";
 
@@ -317,6 +321,27 @@ namespace Manager
                         eventFeedText.text = string.Join("\n", recentEventLines);
                     }
                 }
+            }
+
+            if (matchStatsText != null)
+            {
+                int totalShots = 0;
+
+                foreach (AgentMatchSimulator.AgentMatchEvent matchEvent in result.Events)
+                {
+                    if (matchEvent.IsShot)
+                    {
+                        totalShots++;
+                    }
+                }
+
+                matchStatsText.text =
+                    "Full-Time Stats\n" +
+                    $"{currentFixture.HomeTeam} {result.HomeGoals} - {result.AwayGoals} {currentFixture.AwayTeam}\n" +
+                    $"Tactic Used: {tacticUsedForCurrentMatch}\n" +
+                    $"Total Events: {result.Events.Count}\n" +
+                    $"Shots: {totalShots}\n" +
+                    $"Goals — {currentFixture.HomeTeam}: {result.HomeGoals}   {currentFixture.AwayTeam}: {result.AwayGoals}";
             }
 
             if (fullTimeContinueButton != null)
