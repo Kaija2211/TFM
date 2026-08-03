@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
@@ -47,6 +48,20 @@ namespace Manager
         [SerializeField] private Button inspectNextButton;
         [SerializeField] private Button inspectBackButton;
 
+        // Runtime-generated clickable list (see SquadListView) reused for squad browsing
+        // and both substitution pickers, so none of them need Prev/Next cycling to reach
+        // a specific player - only one of these three purposes is ever active at a time.
+        [Header("Player List (squad browse / sub picker)")]
+        [SerializeField] private GameObject playerListPanel;
+        [SerializeField] private TMP_Text playerListTitleText;
+        [SerializeField] private SquadListView squadListView;
+        [SerializeField] private Button playerListBackButton;
+
+        [Header("Substitutions")]
+        [SerializeField] private Button makeSubsButton; // Season Hub, pre-match team sheet
+        [SerializeField] private TMP_Text subsStatusText;
+        [SerializeField] private Button makeSubButton; // Matchday panel, in-match
+
         // Tactic is chosen between matches on the Hub, not mid-match - no manager is
         // rethinking their approach to the next opponent while the current game is live.
         [SerializeField] private Button attackingButton;
@@ -78,7 +93,6 @@ namespace Manager
         private List<OpenFootballMatch> managedTeamFixtures = new();
         private int currentFixtureIndex;
         private ManagerTactic selectedTactic = ManagerTactic.Balanced;
-        private bool showingSquad;
 
         // Populated from the season file itself, so the list is always exactly the
         // clubs actually playing this season - no separately maintained team list.
@@ -93,15 +107,35 @@ namespace Manager
         private ManagerTactic tacticUsedForCurrentMatch;
         private bool skipToResultsRequested;
 
+        // Set inside SimulateFixture and reused if an in-match substitution requires
+        // resimulating the remainder of the match with the same underlying prediction.
+        private float lastExpectedHomeGoals;
+        private float lastExpectedAwayGoals;
+
         // Starting XI followed by Bench, built fresh each time the inspect screen opens.
         private List<PlayerAgent> inspectSquadPlayers = new();
         private int inspectPlayerIndex;
+
+        // --- Substitutions (pre-match team sheet + in-match interjection share one
+        // picker flow and one 5-per-match cap, matching real football's sub limit) ---
+        private const int MaxSubsPerMatch = 5;
+
+        private PlayerAgent pendingSubOffPlayer;
+        private bool subFlowIsInMatch;
+        private bool pendingSubApplied;
+        private int subsUsedThisMatch;
+
+        // Raised by the in-match "Make Sub" button; the replay coroutine only acts on it
+        // at a minute boundary, and resumes via subSelectionConfirmed once a pick is made
+        // (or cancelled) so the coroutine's own WaitUntil can proceed.
+        private bool inMatchSubRequested;
+        private bool subSelectionConfirmed;
 
         private void Start()
         {
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnPlayNextMatchClicked);
             if (simulateSeasonButton != null) simulateSeasonButton.onClick.AddListener(OnSimulateSeasonClicked);
-            if (viewSquadButton != null) viewSquadButton.onClick.AddListener(OnToggleSquadViewClicked);
+            if (viewSquadButton != null) viewSquadButton.onClick.AddListener(OnViewSquadClicked);
             if (inspectPlayerButton != null) inspectPlayerButton.onClick.AddListener(OnInspectPlayerClicked);
             if (inspectPreviousButton != null) inspectPreviousButton.onClick.AddListener(OnInspectPreviousClicked);
             if (inspectNextButton != null) inspectNextButton.onClick.AddListener(OnInspectNextClicked);
@@ -114,6 +148,9 @@ namespace Manager
             if (previousTeamButton != null) previousTeamButton.onClick.AddListener(OnPreviousTeamClicked);
             if (nextTeamButton != null) nextTeamButton.onClick.AddListener(OnNextTeamClicked);
             if (confirmTeamButton != null) confirmTeamButton.onClick.AddListener(OnConfirmTeamClicked);
+            if (playerListBackButton != null) playerListBackButton.onClick.AddListener(OnPlayerListBackClicked);
+            if (makeSubsButton != null) makeSubsButton.onClick.AddListener(OnMakeSubsClicked);
+            if (makeSubButton != null) makeSubButton.onClick.AddListener(OnMakeSubDuringMatchClicked);
 
             if (seasonFile == null)
             {
@@ -296,39 +333,145 @@ namespace Manager
 
             if (leagueTableText != null)
             {
-                leagueTableText.text = showingSquad ? BuildSquadSummary() : BuildSeasonTableSummary();
+                leagueTableText.text = BuildSeasonTableSummary();
+            }
+
+            bool subsAvailable = subsUsedThisMatch < MaxSubsPerMatch;
+
+            if (makeSubsButton != null)
+            {
+                makeSubsButton.interactable = subsAvailable;
+            }
+
+            if (subsStatusText != null)
+            {
+                subsStatusText.text = $"Subs: {subsUsedThisMatch}/{MaxSubsPerMatch} used";
             }
         }
 
-        public void OnToggleSquadViewClicked()
-        {
-            showingSquad = !showingSquad;
-            RefreshHubUI();
-        }
+        // --- Squad browsing / player list panel (click a row, jump straight there -
+        // no Prev/Next cycling needed to reach a specific player) ---
 
-        // Compact by design: name, position, overall - not the full 17-attribute dump.
-        // Someone checking their squad wants "who's good," not a stat sheet to parse.
-        private string BuildSquadSummary()
+        public void OnViewSquadClicked()
         {
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
 
-            StringBuilder summary = new StringBuilder();
-            summary.AppendLine($"{managedTeamName} Squad ({team.Formation}):");
-            summary.AppendLine("Starting XI:");
+            List<PlayerAgent> allPlayers = new List<PlayerAgent>(team.StartingEleven);
+            allPlayers.AddRange(team.Bench);
 
-            foreach (PlayerAgent player in team.StartingEleven)
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+
+            ShowPlayerListPanel($"{managedTeamName} Squad", allPlayers, OnSquadBrowseRowClicked);
+        }
+
+        private void OnSquadBrowseRowClicked(PlayerAgent player)
+        {
+            ClosePlayerListPanel();
+            OpenPlayerInspect(player);
+        }
+
+        private void ShowPlayerListPanel(string title, List<PlayerAgent> players, Action<PlayerAgent> onRowClicked)
+        {
+            if (playerListPanel != null) playerListPanel.SetActive(true);
+            if (playerListTitleText != null) playerListTitleText.text = title;
+
+            if (squadListView != null)
             {
-                summary.AppendLine(DescribePlayer(player));
+                squadListView.Populate(players, DescribePlayer, onRowClicked);
+            }
+        }
+
+        private void ClosePlayerListPanel()
+        {
+            if (playerListPanel != null) playerListPanel.SetActive(false);
+            if (squadListView != null) squadListView.Clear();
+        }
+
+        public void OnPlayerListBackClicked()
+        {
+            ClosePlayerListPanel();
+
+            if (subFlowIsInMatch)
+            {
+                // Cancelling an in-match sub attempt: resume the replay exactly as it
+                // was, no swap applied (pendingSubApplied stays false).
+                subFlowIsInMatch = false;
+                pendingSubApplied = false;
+                if (matchdayPanel != null) matchdayPanel.SetActive(true);
+                subSelectionConfirmed = true;
+            }
+            else
+            {
+                ShowSeasonHub();
+            }
+        }
+
+        // --- Substitutions: pre-match (Season Hub) and in-match share this same
+        // off-then-on picker flow and the same 5-per-match cap. Both ultimately mutate
+        // the same persistent AgentTeam instance for managedTeamName, so an in-match sub
+        // also carries forward into future matches unless changed again. ---
+
+        public void OnMakeSubsClicked()
+        {
+            if (subsUsedThisMatch >= MaxSubsPerMatch)
+            {
+                return;
             }
 
-            summary.AppendLine("Bench:");
+            subFlowIsInMatch = false;
 
-            foreach (PlayerAgent player in team.Bench)
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+
+            ShowPlayerListPanel("Substitute OFF (pick a starter)", new List<PlayerAgent>(team.StartingEleven), OnSubOffPicked);
+        }
+
+        public void OnMakeSubDuringMatchClicked()
+        {
+            if (subsUsedThisMatch >= MaxSubsPerMatch || inMatchSubRequested)
             {
-                summary.AppendLine(DescribePlayer(player));
+                return;
             }
 
-            return summary.ToString();
+            // Only raises the flag - the replay coroutine opens the picker itself at the
+            // next minute boundary, where it already has the match's team references.
+            inMatchSubRequested = true;
+        }
+
+        private void OnSubOffPicked(PlayerAgent playerOff)
+        {
+            pendingSubOffPlayer = playerOff;
+
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            ShowPlayerListPanel("Substitute ON (pick from bench)", new List<PlayerAgent>(team.Bench), OnSubOnPicked);
+        }
+
+        private void OnSubOnPicked(PlayerAgent playerOn)
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            pendingSubApplied = team.SubstitutePlayer(pendingSubOffPlayer, playerOn);
+
+            if (pendingSubApplied)
+            {
+                subsUsedThisMatch++;
+            }
+
+            ClosePlayerListPanel();
+
+            if (subFlowIsInMatch)
+            {
+                subFlowIsInMatch = false;
+
+                if (matchdayPanel != null) matchdayPanel.SetActive(true);
+                if (makeSubButton != null) makeSubButton.interactable = subsUsedThisMatch < MaxSubsPerMatch;
+
+                subSelectionConfirmed = true;
+            }
+            else
+            {
+                ShowSeasonHub();
+            }
         }
 
         private string DescribePlayer(PlayerAgent player)
@@ -351,9 +494,16 @@ namespace Manager
             return Mathf.RoundToInt(Mathf.Clamp(displayed, 1f, 99f));
         }
 
-        // --- Player Inspect (Prev/Next through the squad, same pattern as Team Select) ---
+        // --- Player Inspect (Prev/Next once inside; entry point can also jump straight
+        // to a specific player, e.g. from the squad browse list, instead of always
+        // starting at index 0) ---
 
         public void OnInspectPlayerClicked()
+        {
+            OpenPlayerInspect(null);
+        }
+
+        private void OpenPlayerInspect(PlayerAgent preselected)
         {
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
 
@@ -365,7 +515,8 @@ namespace Manager
                 return;
             }
 
-            inspectPlayerIndex = 0;
+            int preselectedIndex = preselected != null ? inspectSquadPlayers.IndexOf(preselected) : -1;
+            inspectPlayerIndex = preselectedIndex >= 0 ? preselectedIndex : 0;
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (playerInspectPanel != null) playerInspectPanel.SetActive(true);
@@ -573,6 +724,9 @@ namespace Manager
                 ManagerTacticModifier.Apply(selectedTactic, ref expectedAwayGoals, ref expectedHomeGoals);
             }
 
+            lastExpectedHomeGoals = expectedHomeGoals;
+            lastExpectedAwayGoals = expectedAwayGoals;
+
             return matchSimulator.SimulateMatch(homeTeam, awayTeam, expectedHomeGoals, expectedAwayGoals);
         }
 
@@ -593,6 +747,11 @@ namespace Manager
             Queue<string> recentEventLines = new();
 
             skipToResultsRequested = false;
+            inMatchSubRequested = false;
+            subFlowIsInMatch = false;
+            pendingSubApplied = false;
+
+            if (makeSubButton != null) makeSubButton.interactable = subsUsedThisMatch < MaxSubsPerMatch;
 
             if (eventFeedText != null) eventFeedText.text = "";
             if (matchStatsText != null) matchStatsText.text = "";
@@ -600,6 +759,10 @@ namespace Manager
             if (clockText != null) clockText.text = "0'";
 
             float secondsPerMinute = matchReplayDurationSeconds / 90f;
+
+            AgentTeam homeTeamAgent = GetOrCreateAgentTeam(currentFixture.HomeTeam);
+            AgentTeam awayTeamAgent = GetOrCreateAgentTeam(currentFixture.AwayTeam);
+            AgentTeam managedAgentTeam = currentFixture.HomeTeam == managedTeamName ? homeTeamAgent : awayTeamAgent;
 
             int homeGoals = 0;
             int awayGoals = 0;
@@ -641,6 +804,40 @@ namespace Manager
                         eventFeedText.text = string.Join("\n", recentEventLines);
                     }
                 }
+
+                // Skipping to results ignores any pending sub request rather than
+                // popping a picker mid-fast-forward - the request is simply dropped.
+                if (inMatchSubRequested && !skipToResultsRequested)
+                {
+                    subSelectionConfirmed = false;
+                    pendingSubApplied = false;
+                    subFlowIsInMatch = true;
+
+                    if (matchdayPanel != null) matchdayPanel.SetActive(false);
+
+                    ShowPlayerListPanel("Substitute OFF (pick a starter)", new List<PlayerAgent>(managedAgentTeam.StartingEleven), OnSubOffPicked);
+
+                    yield return new WaitUntil(() => subSelectionConfirmed);
+
+                    inMatchSubRequested = false;
+
+                    if (pendingSubApplied)
+                    {
+                        AgentMatchSimulator.AgentMatchResult tail = matchSimulator.SimulateFromMinute(
+                            homeTeamAgent,
+                            awayTeamAgent,
+                            lastExpectedHomeGoals,
+                            lastExpectedAwayGoals,
+                            minute + 1,
+                            homeGoals,
+                            awayGoals);
+
+                        result.Events.RemoveAll(e => e.Minute > minute);
+                        result.Events.AddRange(tail.Events);
+                        result.HomeGoals = tail.HomeGoals;
+                        result.AwayGoals = tail.AwayGoals;
+                    }
+                }
             }
 
             if (matchStatsText != null)
@@ -675,6 +872,7 @@ namespace Manager
             ApplyFixtureResult(currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
+            subsUsedThisMatch = 0;
 
             ShowSeasonHub();
         }

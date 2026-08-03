@@ -33,5 +33,27 @@ namespace Sim
             Bench.Add(player);
             Players.Add(player);
         }
+
+        // Swaps one starter for one bench player. Both must already belong to this
+        // squad (StartingEleven/Bench respectively) - returns false without changing
+        // anything if either isn't found, so callers can no-op on a stale selection.
+        public bool SubstitutePlayer(PlayerAgent playerOff, PlayerAgent playerOn)
+        {
+            if (!StartingEleven.Contains(playerOff) || !Bench.Contains(playerOn))
+            {
+                return false;
+            }
+
+            StartingEleven.Remove(playerOff);
+            Bench.Remove(playerOn);
+
+            playerOff.IsStartingEleven = false;
+            playerOn.IsStartingEleven = true;
+
+            Bench.Add(playerOff);
+            StartingEleven.Add(playerOn);
+
+            return true;
+        }
     }
 }
