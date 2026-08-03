@@ -29,6 +29,7 @@ namespace Manager
         [SerializeField] private TMP_Text tacticText;
         [SerializeField] private TMP_Text leagueTableText;
         [SerializeField] private Button playNextMatchButton;
+        [SerializeField] private Button simulateSeasonButton;
 
         [Header("Matchday UI")]
         [SerializeField] private GameObject matchdayPanel;
@@ -37,6 +38,7 @@ namespace Manager
         [SerializeField] private TMP_Text scoreText;
         [SerializeField] private TMP_Text eventFeedText;
         [SerializeField] private TMP_Text matchStatsText;
+        [SerializeField] private Button skipToResultsButton;
         [SerializeField] private Button attackingButton;
         [SerializeField] private Button balancedButton;
         [SerializeField] private Button defensiveButton;
@@ -60,10 +62,13 @@ namespace Manager
         private OpenFootballMatch currentFixture;
         private bool currentFixtureManagedIsHome;
         private ManagerTactic tacticUsedForCurrentMatch;
+        private bool skipToResultsRequested;
 
         private void Start()
         {
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnPlayNextMatchClicked);
+            if (simulateSeasonButton != null) simulateSeasonButton.onClick.AddListener(OnSimulateSeasonClicked);
+            if (skipToResultsButton != null) skipToResultsButton.onClick.AddListener(OnSkipToResultsClicked);
             if (fullTimeContinueButton != null) fullTimeContinueButton.onClick.AddListener(OnFullTimeContinueClicked);
             if (attackingButton != null) attackingButton.onClick.AddListener(SelectAttackingTactic);
             if (balancedButton != null) balancedButton.onClick.AddListener(SelectBalancedTactic);
@@ -171,6 +176,11 @@ namespace Manager
                 playNextMatchButton.interactable = hasNextFixture;
             }
 
+            if (simulateSeasonButton != null)
+            {
+                simulateSeasonButton.interactable = hasNextFixture;
+            }
+
             if (leagueTableText != null)
             {
                 leagueTableText.text = BuildSeasonTableSummary();
@@ -227,29 +237,7 @@ namespace Manager
             currentFixtureManagedIsHome = currentFixture.HomeTeam == managedTeamName;
             tacticUsedForCurrentMatch = selectedTactic;
 
-            AgentTeam homeTeam = GetOrCreateAgentTeam(currentFixture.HomeTeam);
-            AgentTeam awayTeam = GetOrCreateAgentTeam(currentFixture.AwayTeam);
-
-            StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(currentFixture);
-
-            float expectedHomeGoals = prediction.ExpectedHomeGoals;
-            float expectedAwayGoals = prediction.ExpectedAwayGoals;
-
-            if (currentFixtureManagedIsHome)
-            {
-                ManagerTacticModifier.Apply(selectedTactic, ref expectedHomeGoals, ref expectedAwayGoals);
-            }
-            else
-            {
-                ManagerTacticModifier.Apply(selectedTactic, ref expectedAwayGoals, ref expectedHomeGoals);
-            }
-
-            AgentMatchSimulator.AgentMatchResult result = matchSimulator.SimulateMatch(
-                homeTeam,
-                awayTeam,
-                expectedHomeGoals,
-                expectedAwayGoals
-            );
+            AgentMatchSimulator.AgentMatchResult result = SimulateFixture(currentFixture, currentFixtureManagedIsHome);
 
             lastSimulatedResult = result;
 
@@ -269,6 +257,65 @@ namespace Manager
             StartCoroutine(ReplayMatchCoroutine(result));
         }
 
+        // Instantly plays out every remaining fixture with no matchday replay, applying
+        // each result straight to the season table. Uses whichever tactic is currently
+        // selected for every remaining match, since there's no per-match UI step here.
+        public void OnSimulateSeasonClicked()
+        {
+            while (currentFixtureIndex < managedTeamFixtures.Count)
+            {
+                OpenFootballMatch fixture = managedTeamFixtures[currentFixtureIndex];
+                bool managedIsHome = fixture.HomeTeam == managedTeamName;
+
+                AgentMatchSimulator.AgentMatchResult result = SimulateFixture(fixture, managedIsHome);
+
+                MatchRecord record = new MatchRecord
+                {
+                    Matchday = 0,
+                    HomeTeamId = teamRegistry.GetTeamId(fixture.HomeTeam),
+                    AwayTeamId = teamRegistry.GetTeamId(fixture.AwayTeam),
+                    HomeGoals = result.HomeGoals,
+                    AwayGoals = result.AwayGoals
+                };
+
+                playableTable.Apply(record);
+
+                currentFixtureIndex++;
+            }
+
+            RefreshHubUI();
+        }
+
+        private AgentMatchSimulator.AgentMatchResult SimulateFixture(OpenFootballMatch fixture, bool managedIsHome)
+        {
+            AgentTeam homeTeam = GetOrCreateAgentTeam(fixture.HomeTeam);
+            AgentTeam awayTeam = GetOrCreateAgentTeam(fixture.AwayTeam);
+
+            StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(fixture);
+
+            float expectedHomeGoals = prediction.ExpectedHomeGoals;
+            float expectedAwayGoals = prediction.ExpectedAwayGoals;
+
+            if (managedIsHome)
+            {
+                ManagerTacticModifier.Apply(selectedTactic, ref expectedHomeGoals, ref expectedAwayGoals);
+            }
+            else
+            {
+                ManagerTacticModifier.Apply(selectedTactic, ref expectedAwayGoals, ref expectedHomeGoals);
+            }
+
+            return matchSimulator.SimulateMatch(homeTeam, awayTeam, expectedHomeGoals, expectedAwayGoals);
+        }
+
+        // Lets the running replay coroutine finish out its remaining minutes without
+        // waiting between them, so it lands on the same full-time state almost
+        // instantly instead of skipping/discarding any of the match.
+        public void OnSkipToResultsClicked()
+        {
+            skipToResultsRequested = true;
+        }
+
         // Simulates the full match instantly, then replays the pre-computed events
         // against an accelerated clock so it reads as if live. Tactic buttons stay
         // interactable during replay, but only affect the *next* match (scaffolded
@@ -276,6 +323,8 @@ namespace Manager
         private IEnumerator ReplayMatchCoroutine(AgentMatchSimulator.AgentMatchResult result)
         {
             Queue<string> recentEventLines = new();
+
+            skipToResultsRequested = false;
 
             if (eventFeedText != null) eventFeedText.text = "";
             if (matchStatsText != null) matchStatsText.text = "";
@@ -290,7 +339,10 @@ namespace Manager
 
             for (int minute = 1; minute <= 90; minute++)
             {
-                yield return new WaitForSeconds(secondsPerMinute);
+                if (!skipToResultsRequested)
+                {
+                    yield return new WaitForSeconds(secondsPerMinute);
+                }
 
                 if (clockText != null) clockText.text = $"{minute}'";
 
