@@ -67,6 +67,114 @@ namespace Sim
             return 0.60f;
         }
 
+        // Position-weighted overall, in the spirit of EA-style ratings: a centre-back's
+        // rating leans almost entirely on Defending/Tackling/Aerial/Heading, so his poor
+        // Finishing/Crossing never drag it down, while a flat-everywhere midfielder scores
+        // slightly below his own simple average, since even out-of-position skills like
+        // Goalkeeping/Reflexes still carry a small trace weight for every outfield role.
+        public float GetOverallRating()
+        {
+            switch (PrimaryPosition)
+            {
+                case PlayerPosition.GK:
+                    return WeightedAverage(
+                        (Goalkeeping, 34), (Reflexes, 30), (Positioning, 12), (Composure, 9),
+                        (Passing, 6), (Strength, 4), (Defending, 3), (WeakFoot, 2)
+                    );
+
+                case PlayerPosition.CB:
+                    return WeightedAverage(
+                        (Defending, 24), (Tackling, 18), (Aerial, 14), (Heading, 12),
+                        (Strength, 10), (Positioning, 10), (Passing, 5), (Pace, 3),
+                        (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 2)
+                    );
+
+                case PlayerPosition.RB:
+                case PlayerPosition.LB:
+                    return WeightedAverage(
+                        (Defending, 16), (Tackling, 13), (Pace, 14), (Crossing, 14),
+                        (Stamina, 10), (Passing, 10), (Dribbling, 9), (Strength, 5),
+                        (Heading, 3), (Finishing, 2), (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 2)
+                    );
+
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB:
+                    return WeightedAverage(
+                        (Pace, 16), (Crossing, 16), (Stamina, 13), (Dribbling, 11),
+                        (Defending, 10), (Tackling, 9), (Passing, 9), (Finishing, 3),
+                        (Strength, 3), (Aerial, 2), (Positioning, 2), (Heading, 2),
+                        (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 2)
+                    );
+
+                case PlayerPosition.DM:
+                    return WeightedAverage(
+                        (Defending, 17), (Tackling, 15), (Passing, 16), (Positioning, 12),
+                        (Strength, 8), (Stamina, 8), (Creativity, 8), (Dribbling, 5),
+                        (Heading, 3), (Aerial, 3), (Composure, 1), (Goalkeeping, 1),
+                        (Reflexes, 1), (WeakFoot, 2)
+                    );
+
+                case PlayerPosition.CM:
+                    return WeightedAverage(
+                        (Passing, 18), (Creativity, 13), (Positioning, 10), (Composure, 10),
+                        (Stamina, 10), (Defending, 10), (Dribbling, 9), (Tackling, 6),
+                        (Finishing, 6), (Strength, 3), (Pace, 1), (Goalkeeping, 1),
+                        (Reflexes, 1), (WeakFoot, 2)
+                    );
+
+                case PlayerPosition.AM:
+                    return WeightedAverage(
+                        (Creativity, 20), (Passing, 16), (Dribbling, 16), (Finishing, 14),
+                        (Composure, 13), (Positioning, 6), (Defending, 3), (Tackling, 2),
+                        (Pace, 3), (Stamina, 2), (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 3)
+                    );
+
+                case PlayerPosition.RM:
+                case PlayerPosition.LM:
+                    return WeightedAverage(
+                        (Crossing, 16), (Dribbling, 14), (Pace, 13), (Passing, 13),
+                        (Stamina, 11), (Defending, 12), (Tackling, 8), (Finishing, 9),
+                        (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 2)
+                    );
+
+                case PlayerPosition.RW:
+                case PlayerPosition.LW:
+                    return WeightedAverage(
+                        (Dribbling, 20), (Pace, 18), (Crossing, 13), (Creativity, 13),
+                        (Finishing, 13), (Passing, 7), (Composure, 4), (Defending, 2),
+                        (Tackling, 2), (Stamina, 3), (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 3)
+                    );
+
+                case PlayerPosition.ST:
+                    return WeightedAverage(
+                        (Finishing, 26), (Positioning, 16), (Composure, 14), (Heading, 9),
+                        (Aerial, 8), (Pace, 9), (Dribbling, 9), (Passing, 3),
+                        (Strength, 2), (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 2)
+                    );
+
+                default:
+                    return WeightedAverage(
+                        (Passing, 15), (Dribbling, 15), (Defending, 15), (Pace, 15),
+                        (Stamina, 10), (Positioning, 10), (Composure, 10), (Finishing, 5),
+                        (Goalkeeping, 1), (Reflexes, 1), (WeakFoot, 3)
+                    );
+            }
+        }
+
+        private static float WeightedAverage(params (float value, float weight)[] terms)
+        {
+            float weightedTotal = 0f;
+            float totalWeight = 0f;
+
+            foreach ((float value, float weight) in terms)
+            {
+                weightedTotal += value * weight;
+                totalWeight += weight;
+            }
+
+            return weightedTotal / totalWeight;
+        }
+
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();

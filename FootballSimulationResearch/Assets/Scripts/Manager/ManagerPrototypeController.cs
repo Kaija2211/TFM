@@ -22,6 +22,13 @@ namespace Manager
         [SerializeField] private float matchReplayDurationSeconds = 45f;
         [SerializeField] private int maxVisibleEventLines = 12;
 
+        [Header("Team Select UI")]
+        [SerializeField] private GameObject teamSelectPanel;
+        [SerializeField] private TMP_Text teamSelectNameText;
+        [SerializeField] private Button previousTeamButton;
+        [SerializeField] private Button nextTeamButton;
+        [SerializeField] private Button confirmTeamButton;
+
         [Header("Season Hub UI")]
         [SerializeField] private GameObject seasonHubPanel;
         [SerializeField] private TMP_Text headerText;
@@ -30,6 +37,15 @@ namespace Manager
         [SerializeField] private TMP_Text leagueTableText;
         [SerializeField] private Button playNextMatchButton;
         [SerializeField] private Button simulateSeasonButton;
+        [SerializeField] private Button viewSquadButton;
+        [SerializeField] private Button inspectPlayerButton;
+
+        [Header("Player Inspect UI")]
+        [SerializeField] private GameObject playerInspectPanel;
+        [SerializeField] private TMP_Text playerInspectText;
+        [SerializeField] private Button inspectPreviousButton;
+        [SerializeField] private Button inspectNextButton;
+        [SerializeField] private Button inspectBackButton;
 
         // Tactic is chosen between matches on the Hub, not mid-match - no manager is
         // rethinking their approach to the next opponent while the current game is live.
@@ -62,6 +78,12 @@ namespace Manager
         private List<OpenFootballMatch> managedTeamFixtures = new();
         private int currentFixtureIndex;
         private ManagerTactic selectedTactic = ManagerTactic.Balanced;
+        private bool showingSquad;
+
+        // Populated from the season file itself, so the list is always exactly the
+        // clubs actually playing this season - no separately maintained team list.
+        private List<string> availableTeamNames = new();
+        private int selectedTeamIndex;
 
         // Tracks which matchdays have already had their non-managed-team fixtures
         // simulated, so a round's other 9 matches are only ever resolved once.
@@ -71,15 +93,27 @@ namespace Manager
         private ManagerTactic tacticUsedForCurrentMatch;
         private bool skipToResultsRequested;
 
+        // Starting XI followed by Bench, built fresh each time the inspect screen opens.
+        private List<PlayerAgent> inspectSquadPlayers = new();
+        private int inspectPlayerIndex;
+
         private void Start()
         {
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnPlayNextMatchClicked);
             if (simulateSeasonButton != null) simulateSeasonButton.onClick.AddListener(OnSimulateSeasonClicked);
+            if (viewSquadButton != null) viewSquadButton.onClick.AddListener(OnToggleSquadViewClicked);
+            if (inspectPlayerButton != null) inspectPlayerButton.onClick.AddListener(OnInspectPlayerClicked);
+            if (inspectPreviousButton != null) inspectPreviousButton.onClick.AddListener(OnInspectPreviousClicked);
+            if (inspectNextButton != null) inspectNextButton.onClick.AddListener(OnInspectNextClicked);
+            if (inspectBackButton != null) inspectBackButton.onClick.AddListener(OnInspectBackClicked);
             if (skipToResultsButton != null) skipToResultsButton.onClick.AddListener(OnSkipToResultsClicked);
             if (fullTimeContinueButton != null) fullTimeContinueButton.onClick.AddListener(OnFullTimeContinueClicked);
             if (attackingButton != null) attackingButton.onClick.AddListener(SelectAttackingTactic);
             if (balancedButton != null) balancedButton.onClick.AddListener(SelectBalancedTactic);
             if (defensiveButton != null) defensiveButton.onClick.AddListener(SelectDefensiveTactic);
+            if (previousTeamButton != null) previousTeamButton.onClick.AddListener(OnPreviousTeamClicked);
+            if (nextTeamButton != null) nextTeamButton.onClick.AddListener(OnNextTeamClicked);
+            if (confirmTeamButton != null) confirmTeamButton.onClick.AddListener(OnConfirmTeamClicked);
 
             if (seasonFile == null)
             {
@@ -88,6 +122,78 @@ namespace Manager
             }
 
             allSeasonFixtures = OpenFootballTextParser.ParseSeasonFile(seasonFile.text, seasonFile.name);
+            availableTeamNames = BuildAvailableTeamNames();
+
+            int defaultIndex = availableTeamNames.IndexOf(managedTeamName);
+            selectedTeamIndex = defaultIndex >= 0 ? defaultIndex : 0;
+
+            TrainStatisticalModel();
+
+            ShowTeamSelect();
+        }
+
+        // --- Team Select ---
+
+        private List<string> BuildAvailableTeamNames()
+        {
+            SortedSet<string> names = new();
+
+            foreach (OpenFootballMatch match in allSeasonFixtures)
+            {
+                names.Add(match.HomeTeam);
+                names.Add(match.AwayTeam);
+            }
+
+            return new List<string>(names);
+        }
+
+        private void ShowTeamSelect()
+        {
+            if (teamSelectPanel != null) teamSelectPanel.SetActive(true);
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (matchdayPanel != null) matchdayPanel.SetActive(false);
+
+            RefreshTeamSelectUI();
+        }
+
+        private void RefreshTeamSelectUI()
+        {
+            if (teamSelectNameText == null || availableTeamNames.Count == 0)
+            {
+                return;
+            }
+
+            teamSelectNameText.text = $"Choose your club:\n{availableTeamNames[selectedTeamIndex]}";
+        }
+
+        public void OnPreviousTeamClicked()
+        {
+            if (availableTeamNames.Count == 0)
+            {
+                return;
+            }
+
+            selectedTeamIndex = (selectedTeamIndex - 1 + availableTeamNames.Count) % availableTeamNames.Count;
+            RefreshTeamSelectUI();
+        }
+
+        public void OnNextTeamClicked()
+        {
+            if (availableTeamNames.Count == 0)
+            {
+                return;
+            }
+
+            selectedTeamIndex = (selectedTeamIndex + 1) % availableTeamNames.Count;
+            RefreshTeamSelectUI();
+        }
+
+        public void OnConfirmTeamClicked()
+        {
+            if (availableTeamNames.Count > 0)
+            {
+                managedTeamName = availableTeamNames[selectedTeamIndex];
+            }
 
             managedTeamFixtures = allSeasonFixtures.FindAll(m =>
                 m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
@@ -97,7 +203,7 @@ namespace Manager
                 Debug.LogWarning($"ManagerPrototypeController: no fixtures found for '{managedTeamName}' in {seasonFile.name}.");
             }
 
-            TrainStatisticalModel();
+            if (teamSelectPanel != null) teamSelectPanel.SetActive(false);
 
             ShowSeasonHub();
         }
@@ -190,8 +296,126 @@ namespace Manager
 
             if (leagueTableText != null)
             {
-                leagueTableText.text = BuildSeasonTableSummary();
+                leagueTableText.text = showingSquad ? BuildSquadSummary() : BuildSeasonTableSummary();
             }
+        }
+
+        public void OnToggleSquadViewClicked()
+        {
+            showingSquad = !showingSquad;
+            RefreshHubUI();
+        }
+
+        // Compact by design: name, position, overall - not the full 17-attribute dump.
+        // Someone checking their squad wants "who's good," not a stat sheet to parse.
+        private string BuildSquadSummary()
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            StringBuilder summary = new StringBuilder();
+            summary.AppendLine($"{managedTeamName} Squad ({team.Formation}):");
+            summary.AppendLine("Starting XI:");
+
+            foreach (PlayerAgent player in team.StartingEleven)
+            {
+                summary.AppendLine(DescribePlayer(player));
+            }
+
+            summary.AppendLine("Bench:");
+
+            foreach (PlayerAgent player in team.Bench)
+            {
+                summary.AppendLine(DescribePlayer(player));
+            }
+
+            return summary.ToString();
+        }
+
+        private string DescribePlayer(PlayerAgent player)
+        {
+            return $"{player.PrimaryPosition,-3} {player.Name,-20} OVR {GetDisplayRating(player.GetOverallRating())}";
+        }
+
+        // Cosmetic only: stretches the true weighted rating away from the midpoint so
+        // strong squads read as clearly elite and weak squads read as clearly weak,
+        // closer to how FIFA-style ratings feel. The underlying attributes, the true
+        // GetOverallRating() value, and match simulation are all completely unaffected
+        // by this - only the number printed here changes.
+        private static int GetDisplayRating(float trueRating)
+        {
+            const float midpoint = 50f;
+            const float stretch = 1.15f;
+
+            float displayed = midpoint + (trueRating - midpoint) * stretch;
+
+            return Mathf.RoundToInt(Mathf.Clamp(displayed, 1f, 99f));
+        }
+
+        // --- Player Inspect (Prev/Next through the squad, same pattern as Team Select) ---
+
+        public void OnInspectPlayerClicked()
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            inspectSquadPlayers = new List<PlayerAgent>(team.StartingEleven);
+            inspectSquadPlayers.AddRange(team.Bench);
+
+            if (inspectSquadPlayers.Count == 0)
+            {
+                return;
+            }
+
+            inspectPlayerIndex = 0;
+
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (playerInspectPanel != null) playerInspectPanel.SetActive(true);
+
+            RefreshPlayerInspectUI();
+        }
+
+        public void OnInspectPreviousClicked()
+        {
+            if (inspectSquadPlayers.Count == 0)
+            {
+                return;
+            }
+
+            inspectPlayerIndex = (inspectPlayerIndex - 1 + inspectSquadPlayers.Count) % inspectSquadPlayers.Count;
+            RefreshPlayerInspectUI();
+        }
+
+        public void OnInspectNextClicked()
+        {
+            if (inspectSquadPlayers.Count == 0)
+            {
+                return;
+            }
+
+            inspectPlayerIndex = (inspectPlayerIndex + 1) % inspectSquadPlayers.Count;
+            RefreshPlayerInspectUI();
+        }
+
+        public void OnInspectBackClicked()
+        {
+            if (playerInspectPanel != null) playerInspectPanel.SetActive(false);
+
+            ShowSeasonHub();
+        }
+
+        private void RefreshPlayerInspectUI()
+        {
+            if (playerInspectText == null || inspectSquadPlayers.Count == 0)
+            {
+                return;
+            }
+
+            PlayerAgent player = inspectSquadPlayers[inspectPlayerIndex];
+            string squadStatus = player.IsStartingEleven ? "Starting XI" : "Bench";
+
+            playerInspectText.text =
+                $"Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})\n" +
+                $"OVR {GetDisplayRating(player.GetOverallRating())}\n\n" +
+                player.ToString();
         }
 
         private string DescribeFixture(OpenFootballMatch fixture)
@@ -464,11 +688,9 @@ namespace Manager
                 return existingTeam;
             }
 
-            // v1 uses flat, undifferentiated squad strength for every club — every
-            // match plays out with the same baseline quality regardless of opponent.
-            // A believable next step is deriving attack/defence strength per team the
-            // same way ResearchEvaluationRunner does, without sharing its instance.
-            AgentTeam newTeam = squadGenerator.GenerateSquad(teamName, 1f, 1f);
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+
+            AgentTeam newTeam = squadGenerator.GenerateSquad(teamName, strength.AttackStrength, strength.DefenceStrength);
 
             squadsByTeamName[teamName] = newTeam;
 
