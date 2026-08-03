@@ -63,5 +63,6 @@ namespace Data
         public int HomeGoals;
         public int AwayGoals;
         public string Season;
+        public int Matchday;
     }
 }

@@ -6,11 +6,17 @@ namespace Data
 {
     public static class OpenFootballTextParser
     {
+        private static readonly Regex MatchdayHeaderPattern = new(@"^▪\s*Matchday\s+(\d+)");
+
         public static List<OpenFootballMatch> ParseSeasonFile(string fileText, string seasonName)
         {
             List<OpenFootballMatch> matches = new();
 
             string[] lines = fileText.Split('\n');
+
+            // 0 means "no matchday header seen yet" - matches parsed before any header
+            // fall back to this and are flagged, rather than crashing or being dropped.
+            int currentMatchday = 0;
 
             foreach (string rawLine in lines)
             {
@@ -26,11 +32,27 @@ namespace Data
                     continue;
                 }
 
+                Match matchdayHeader = MatchdayHeaderPattern.Match(line);
+
+                if (matchdayHeader.Success)
+                {
+                    currentMatchday = int.Parse(matchdayHeader.Groups[1].Value);
+                    continue;
+                }
+
                 OpenFootballMatch? parsedMatch = ParseLine(line, seasonName);
 
                 if (parsedMatch.HasValue)
                 {
-                    matches.Add(parsedMatch.Value);
+                    OpenFootballMatch match = parsedMatch.Value;
+                    match.Matchday = currentMatchday;
+
+                    if (currentMatchday == 0)
+                    {
+                        Debug.LogWarning($"Match parsed with no matchday header seen yet, defaulting Matchday to 0: {line}");
+                    }
+
+                    matches.Add(match);
                 }
                 else if (Regex.IsMatch(line, @"\d+-\d+"))
                 {

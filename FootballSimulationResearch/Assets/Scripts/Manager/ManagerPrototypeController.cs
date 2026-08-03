@@ -31,6 +31,12 @@ namespace Manager
         [SerializeField] private Button playNextMatchButton;
         [SerializeField] private Button simulateSeasonButton;
 
+        // Tactic is chosen between matches on the Hub, not mid-match - no manager is
+        // rethinking their approach to the next opponent while the current game is live.
+        [SerializeField] private Button attackingButton;
+        [SerializeField] private Button balancedButton;
+        [SerializeField] private Button defensiveButton;
+
         [Header("Matchday UI")]
         [SerializeField] private GameObject matchdayPanel;
         [SerializeField] private TMP_Text fixtureTitleText;
@@ -39,9 +45,6 @@ namespace Manager
         [SerializeField] private TMP_Text eventFeedText;
         [SerializeField] private TMP_Text matchStatsText;
         [SerializeField] private Button skipToResultsButton;
-        [SerializeField] private Button attackingButton;
-        [SerializeField] private Button balancedButton;
-        [SerializeField] private Button defensiveButton;
         [SerializeField] private Button fullTimeContinueButton;
 
         private readonly TeamRegistry teamRegistry = new();
@@ -55,12 +58,16 @@ namespace Manager
         // nothing here can affect the research evaluation flow or its metrics.
         private readonly StatisticalModel statisticalModel = new();
 
+        private List<OpenFootballMatch> allSeasonFixtures = new();
         private List<OpenFootballMatch> managedTeamFixtures = new();
         private int currentFixtureIndex;
         private ManagerTactic selectedTactic = ManagerTactic.Balanced;
 
+        // Tracks which matchdays have already had their non-managed-team fixtures
+        // simulated, so a round's other 9 matches are only ever resolved once.
+        private readonly HashSet<int> simulatedMatchdays = new();
+
         private OpenFootballMatch currentFixture;
-        private bool currentFixtureManagedIsHome;
         private ManagerTactic tacticUsedForCurrentMatch;
         private bool skipToResultsRequested;
 
@@ -80,9 +87,9 @@ namespace Manager
                 return;
             }
 
-            List<OpenFootballMatch> seasonMatches = OpenFootballTextParser.ParseSeasonFile(seasonFile.text, seasonFile.name);
+            allSeasonFixtures = OpenFootballTextParser.ParseSeasonFile(seasonFile.text, seasonFile.name);
 
-            managedTeamFixtures = seasonMatches.FindAll(m =>
+            managedTeamFixtures = allSeasonFixtures.FindAll(m =>
                 m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
 
             if (managedTeamFixtures.Count == 0)
@@ -194,19 +201,20 @@ namespace Manager
             return managedIsHome ? $"vs {opponent} (H)" : $"vs {opponent} (A)";
         }
 
-        // Only ever contains results for matches the managed club has actually played,
-        // since Manager Mode doesn't simulate fixtures between other clubs.
+        // A full division table: playing your own fixture also resolves every other
+        // match in that matchday (see SimulateOtherFixturesInMatchday), so every club
+        // stays in sync by games played rather than only showing teams you've faced.
         private string BuildSeasonTableSummary()
         {
             List<LeagueTable.Entry> sortedTable = playableTable.Sorted();
 
             if (sortedTable.Count == 0)
             {
-                return "Your Season So Far: no matches played yet.";
+                return "Premier League Table: no matches played yet.";
             }
 
             StringBuilder summary = new StringBuilder();
-            summary.AppendLine("Your Season So Far:");
+            summary.AppendLine("Premier League Table:");
 
             for (int i = 0; i < sortedTable.Count; i++)
             {
@@ -234,12 +242,13 @@ namespace Manager
             }
 
             currentFixture = managedTeamFixtures[currentFixtureIndex];
-            currentFixtureManagedIsHome = currentFixture.HomeTeam == managedTeamName;
             tacticUsedForCurrentMatch = selectedTactic;
 
-            AgentMatchSimulator.AgentMatchResult result = SimulateFixture(currentFixture, currentFixtureManagedIsHome);
+            AgentMatchSimulator.AgentMatchResult result = SimulateFixture(currentFixture);
 
             lastSimulatedResult = result;
+
+            SimulateOtherFixturesInMatchday(currentFixture.Matchday);
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (matchdayPanel != null) matchdayPanel.SetActive(true);
@@ -265,20 +274,9 @@ namespace Manager
             while (currentFixtureIndex < managedTeamFixtures.Count)
             {
                 OpenFootballMatch fixture = managedTeamFixtures[currentFixtureIndex];
-                bool managedIsHome = fixture.HomeTeam == managedTeamName;
 
-                AgentMatchSimulator.AgentMatchResult result = SimulateFixture(fixture, managedIsHome);
-
-                MatchRecord record = new MatchRecord
-                {
-                    Matchday = 0,
-                    HomeTeamId = teamRegistry.GetTeamId(fixture.HomeTeam),
-                    AwayTeamId = teamRegistry.GetTeamId(fixture.AwayTeam),
-                    HomeGoals = result.HomeGoals,
-                    AwayGoals = result.AwayGoals
-                };
-
-                playableTable.Apply(record);
+                ApplyFixtureResult(fixture, SimulateFixture(fixture));
+                SimulateOtherFixturesInMatchday(fixture.Matchday);
 
                 currentFixtureIndex++;
             }
@@ -286,7 +284,53 @@ namespace Manager
             RefreshHubUI();
         }
 
-        private AgentMatchSimulator.AgentMatchResult SimulateFixture(OpenFootballMatch fixture, bool managedIsHome)
+        // Simulates and applies every other fixture sharing the given matchday (i.e.
+        // every match the managed club isn't part of), so the table reflects a full
+        // division rather than just the managed club's own results. Guarded so each
+        // matchday's other fixtures are only ever resolved once, however you reach it.
+        private void SimulateOtherFixturesInMatchday(int matchday)
+        {
+            if (simulatedMatchdays.Contains(matchday))
+            {
+                return;
+            }
+
+            simulatedMatchdays.Add(matchday);
+
+            foreach (OpenFootballMatch fixture in allSeasonFixtures)
+            {
+                if (fixture.Matchday != matchday)
+                {
+                    continue;
+                }
+
+                if (fixture.HomeTeam == managedTeamName || fixture.AwayTeam == managedTeamName)
+                {
+                    continue;
+                }
+
+                ApplyFixtureResult(fixture, SimulateFixture(fixture));
+            }
+        }
+
+        private void ApplyFixtureResult(OpenFootballMatch fixture, AgentMatchSimulator.AgentMatchResult result)
+        {
+            MatchRecord record = new MatchRecord
+            {
+                Matchday = fixture.Matchday,
+                HomeTeamId = teamRegistry.GetTeamId(fixture.HomeTeam),
+                AwayTeamId = teamRegistry.GetTeamId(fixture.AwayTeam),
+                HomeGoals = result.HomeGoals,
+                AwayGoals = result.AwayGoals
+            };
+
+            playableTable.Apply(record);
+        }
+
+        // Applies the tactic modifier only when the managed club is actually playing
+        // in this fixture - other clubs' matches against each other use the plain
+        // predicted expected goals with no modifier.
+        private AgentMatchSimulator.AgentMatchResult SimulateFixture(OpenFootballMatch fixture)
         {
             AgentTeam homeTeam = GetOrCreateAgentTeam(fixture.HomeTeam);
             AgentTeam awayTeam = GetOrCreateAgentTeam(fixture.AwayTeam);
@@ -296,11 +340,11 @@ namespace Manager
             float expectedHomeGoals = prediction.ExpectedHomeGoals;
             float expectedAwayGoals = prediction.ExpectedAwayGoals;
 
-            if (managedIsHome)
+            if (fixture.HomeTeam == managedTeamName)
             {
                 ManagerTacticModifier.Apply(selectedTactic, ref expectedHomeGoals, ref expectedAwayGoals);
             }
-            else
+            else if (fixture.AwayTeam == managedTeamName)
             {
                 ManagerTacticModifier.Apply(selectedTactic, ref expectedAwayGoals, ref expectedHomeGoals);
             }
@@ -404,16 +448,7 @@ namespace Manager
 
         public void OnFullTimeContinueClicked()
         {
-            MatchRecord record = new MatchRecord
-            {
-                Matchday = 0,
-                HomeTeamId = teamRegistry.GetTeamId(currentFixture.HomeTeam),
-                AwayTeamId = teamRegistry.GetTeamId(currentFixture.AwayTeam),
-                HomeGoals = lastSimulatedResult.HomeGoals,
-                AwayGoals = lastSimulatedResult.AwayGoals
-            };
-
-            playableTable.Apply(record);
+            ApplyFixtureResult(currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
 
