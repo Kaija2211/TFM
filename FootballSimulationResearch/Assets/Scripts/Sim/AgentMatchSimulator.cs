@@ -22,6 +22,12 @@ namespace Sim
             public bool IsGoal;
             public bool HomeTeamScored;
             public bool IsShot;
+
+            // Which side took the shot - set on every shot event (goal or saved), unlike
+            // HomeTeamScored which is only meaningful on goals. Added so Manager Mode can
+            // show a per-team shot split; purely additive, doesn't affect HomeGoals/
+            // AwayGoals or any control flow in ResolveAttack.
+            public bool HomeTeamAttacking;
         }
 
         public class AgentMatchResult
@@ -368,7 +374,8 @@ namespace Sim
                     ),
                     IsGoal = true,
                     HomeTeamScored = homeAttacks,
-                    IsShot = true
+                    IsShot = true,
+                    HomeTeamAttacking = homeAttacks
                 });
             }
             else
@@ -382,7 +389,8 @@ namespace Sim
                         goalkeeper,
                         chanceType
                     ),
-                    IsShot = true
+                    IsShot = true,
+                    HomeTeamAttacking = homeAttacks
                 });
             }
         }
