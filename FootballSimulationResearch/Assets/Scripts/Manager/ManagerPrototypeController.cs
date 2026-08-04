@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -34,17 +33,19 @@ namespace Manager
         [SerializeField] private Button teamSelectBackButton;
         [SerializeField] private Button confirmTeamButton; // relabeled "Start Career"
 
+        // headerText/nextFixtureText/tacticText/leagueTableText from the original restyle
+        // pass are retired - the Hub's visual layout now matches the newer mockup (crest,
+        // club name/byline, two-column body, styled table) built entirely in code by
+        // BuildHubChrome/RefreshHubUI. The five buttons below are unchanged Editor
+        // references, just repositioned by code now instead of by hand.
         [Header("Season Hub UI")]
         [SerializeField] private GameObject seasonHubPanel;
-        [SerializeField] private TMP_Text headerText;
-        [SerializeField] private TMP_Text nextFixtureText;
-        [SerializeField] private TMP_Text tacticText;
-        [SerializeField] private TMP_Text leagueTableText;
         [SerializeField] private Button playNextMatchButton;
         [SerializeField] private Button simulateSeasonButton;
         [SerializeField] private Button viewSquadButton;
         [SerializeField] private Button transfersButton; // disabled placeholder - no transfer system exists yet
         [SerializeField] private Button exitToTitleButton;
+        [SerializeField] private LeagueTableView leagueTableView;
 
         // Tactic buttons, Make Subs, and the subs counter are NOT declared here - they're
         // the same attackingButton/balancedButton/defensiveButton/makeSubsButton/
@@ -135,6 +136,10 @@ namespace Manager
         private TextMeshProUGUI matchdayPrepTitleLabel;
         private TextMeshProUGUI matchdayPrepSubtitleLabel;
 
+        private bool hubChromeBuilt;
+        private TextMeshProUGUI hubClubNameLabel;
+        private TextMeshProUGUI hubBylineLabel;
+
         // Set inside SimulateFixture and reused if an in-match substitution requires
         // resimulating the remainder of the match with the same underlying prediction.
         private float lastExpectedHomeGoals;
@@ -211,16 +216,16 @@ namespace Manager
         // elements that are already correctly positioned, just their colors/fonts.
         private void ApplyManagerUITheme()
         {
-            ManagerUITheme.ApplyPanelBackground(seasonHubPanel);
+            // seasonHubPanel's background, and playNextMatchButton/simulateSeasonButton/
+            // viewSquadButton's styling, are handled by BuildHubChrome instead (which also
+            // repositions them) - styling them here too would just be redundant, since
+            // BuildHubChrome runs later and wins.
             ManagerUITheme.ApplyPanelBackground(matchdayPanel);
             ManagerUITheme.ApplyPanelBackground(teamSelectPanel);
             ManagerUITheme.ApplyPanelBackground(playerInspectPanel);
             ManagerUITheme.ApplyPanelBackground(playerListPanel);
             ManagerUITheme.ApplyPanelBackground(matchdayPrepPanel);
 
-            StyleHubActionButton(playNextMatchButton);
-            StyleHubActionButton(simulateSeasonButton);
-            StyleHubActionButton(viewSquadButton);
             StyleHubActionButton(makeSubsButton);
             StyleHubActionButton(skipToResultsButton);
             StyleHubActionButton(makeSubButton);
@@ -239,10 +244,6 @@ namespace Manager
                 if (continueLabel != null) continueLabel.color = ManagerUITheme.OnAccent;
             }
 
-            if (headerText != null) headerText.color = ManagerUITheme.TextPrimary;
-            if (nextFixtureText != null) nextFixtureText.color = ManagerUITheme.TextMuted;
-            if (tacticText != null) tacticText.color = ManagerUITheme.TextMuted;
-            if (leagueTableText != null) leagueTableText.color = ManagerUITheme.TextBody;
             if (subsStatusText != null)
             {
                 subsStatusText.color = ManagerUITheme.TextMuted;
@@ -264,16 +265,8 @@ namespace Manager
             if (eventFeedText != null) eventFeedText.color = ManagerUITheme.TextBody;
             if (matchStatsText != null) matchStatsText.color = ManagerUITheme.TextBody;
 
-            if (transfersButton != null)
-            {
-                ManagerUITheme.SetDisabledPlaceholder(transfersButton, "TRANSFERS");
-            }
-
-            if (exitToTitleButton != null && exitToTitleButton.TryGetComponent(out Image exitImage))
-            {
-                exitImage.color = ManagerUITheme.PanelDark;
-                ManagerUITheme.NormalizeButtonLabel(exitToTitleButton, "SAVE & EXIT TO TITLE", ManagerUITheme.TextMuted, 14);
-            }
+            // transfersButton and exitToTitleButton are also handled by BuildHubChrome,
+            // same reasoning as above.
 
             if (confirmTeamButton != null && confirmTeamButton.TryGetComponent(out Image confirmImage))
             {
@@ -645,11 +638,6 @@ namespace Manager
         {
             selectedTactic = tactic;
 
-            if (tacticText != null)
-            {
-                tacticText.text = $"Tactic: {selectedTactic}";
-            }
-
             HighlightSelectedTacticButton(attackingButton, tactic == ManagerTactic.Attacking);
             HighlightSelectedTacticButton(balancedButton, tactic == ManagerTactic.Balanced);
             HighlightSelectedTacticButton(defensiveButton, tactic == ManagerTactic.Defensive);
@@ -675,32 +663,156 @@ namespace Manager
 
         private void ShowSeasonHub()
         {
+            if (!hubChromeBuilt)
+            {
+                BuildHubChrome();
+                hubChromeBuilt = true;
+            }
+
             if (seasonHubPanel != null) seasonHubPanel.SetActive(true);
             if (matchdayPanel != null) matchdayPanel.SetActive(false);
 
             RefreshHubUI();
         }
 
-        private void RefreshHubUI()
+        // Header (crest, club name/byline, Simulate Season top-right) and the two-column
+        // body (menu left, league table right), built once. The five reused buttons keep
+        // their existing Editor wiring/onClick listeners - only their RectTransforms get
+        // set here, via ManagerUITheme.SetPointAnchor, instead of being hand-dragged.
+        private void BuildHubChrome()
         {
-            if (headerText != null)
+            if (seasonHubPanel == null)
             {
-                headerText.text = $"Manager {managerName} — {managedTeamName}";
+                return;
             }
 
-            if (tacticText != null)
+            ManagerUITheme.ApplyPanelBackground(seasonHubPanel);
+
+            // Left accent bar - this mockup uses a thin vertical edge bar instead of the
+            // top/bottom bands used on Team Select/Matchday Prep/Squad/Player Detail.
+            GameObject leftBar = new GameObject("LeftAccentBar", typeof(RectTransform), typeof(Image));
+            leftBar.transform.SetParent(seasonHubPanel.transform, false);
+            leftBar.transform.SetAsFirstSibling();
+            RectTransform leftBarRect = leftBar.GetComponent<RectTransform>();
+            leftBarRect.anchorMin = new Vector2(0f, 0f);
+            leftBarRect.anchorMax = new Vector2(0f, 1f);
+            leftBarRect.pivot = new Vector2(0f, 0.5f);
+            leftBarRect.sizeDelta = new Vector2(6f, 0f);
+            leftBarRect.anchoredPosition = Vector2.zero;
+            leftBar.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            // Crest badge - a colored initials badge, not the mockup's exact pentagon
+            // shape (that needs real crest artwork or a custom mesh, neither of which
+            // exist here).
+            GameObject crest = new GameObject("CrestBadge", typeof(RectTransform), typeof(Image));
+            crest.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(crest.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -24f), new Vector2(52f, 52f));
+            crest.GetComponent<Image>().color = ManagerUITheme.Accent;
+            ManagerUITheme.BuildLabel(crest.transform, GetClubInitials(managedTeamName), 16, ManagerUITheme.OnAccent, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            GameObject nameObj = new GameObject("ClubName", typeof(RectTransform));
+            nameObj.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(nameObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(98f, -24f), new Vector2(500f, 32f));
+            hubClubNameLabel = ManagerUITheme.BuildLabel(nameObj.transform, "", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject bylineObj = new GameObject("Byline", typeof(RectTransform));
+            bylineObj.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(bylineObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(98f, -58f), new Vector2(500f, 20f));
+            hubBylineLabel = ManagerUITheme.BuildLabel(bylineObj.transform, "", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+
+            if (simulateSeasonButton != null)
             {
-                tacticText.text = $"Tactic: {selectedTactic}";
+                ManagerUITheme.SetPointAnchor(simulateSeasonButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-30f, -24f), new Vector2(200f, 36f));
+                if (simulateSeasonButton.TryGetComponent(out Image simulateSeasonImage))
+                {
+                    simulateSeasonImage.color = ManagerUITheme.CardNeutral;
+                }
+                ManagerUITheme.NormalizeButtonLabel(simulateSeasonButton, "SIMULATE SEASON", ManagerUITheme.TextBody, 13);
+            }
+
+            // Left column (menu): Next Matchday / Squad / Transfers / Settings / Save & Exit.
+            if (playNextMatchButton != null)
+            {
+                ManagerUITheme.SetPointAnchor(playNextMatchButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -130f), new Vector2(430f, 55f));
+                if (playNextMatchButton.TryGetComponent(out Image playNextImage))
+                {
+                    playNextImage.color = ManagerUITheme.Accent;
+                }
+                ManagerUITheme.NormalizeButtonLabel(playNextMatchButton, "NEXT MATCHDAY", ManagerUITheme.OnAccent, 16);
+            }
+
+            if (viewSquadButton != null)
+            {
+                ManagerUITheme.SetPointAnchor(viewSquadButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -197f), new Vector2(430f, 50f));
+                StyleHubActionButton(viewSquadButton);
+                ManagerUITheme.NormalizeButtonLabel(viewSquadButton, "SQUAD", ManagerUITheme.TextBody, 15);
+            }
+
+            if (transfersButton != null)
+            {
+                ManagerUITheme.SetPointAnchor(transfersButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -259f), new Vector2(430f, 50f));
+                ManagerUITheme.SetDisabledPlaceholder(transfersButton, "TRANSFERS");
+            }
+
+            GameObject settingsObj = new GameObject("SettingsButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            settingsObj.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(settingsObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -321f), new Vector2(430f, 50f));
+            Button settingsButton = settingsObj.GetComponent<Button>();
+            settingsButton.targetGraphic = settingsObj.GetComponent<Image>();
+            ManagerUITheme.BuildLabel(settingsObj.transform, "SETTINGS", 15, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
+            ManagerUITheme.SetDisabledPlaceholder(settingsButton, "SETTINGS");
+
+            if (exitToTitleButton != null)
+            {
+                ManagerUITheme.SetPointAnchor(exitToTitleButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -980f), new Vector2(430f, 44f));
+                if (exitToTitleButton.TryGetComponent(out Image exitImage))
+                {
+                    exitImage.color = ManagerUITheme.PanelDark;
+                }
+                ManagerUITheme.NormalizeButtonLabel(exitToTitleButton, "SAVE & EXIT TO TITLE", ManagerUITheme.TextMuted, 14);
+            }
+
+            // Right column: league table caption. The Scroll View itself is an Editor
+            // object (leagueTableView) - positioned to occupy the rest of this column.
+            GameObject tableCaption = new GameObject("TableCaption", typeof(RectTransform));
+            tableCaption.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(tableCaption.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(500f, -130f), new Vector2(430f, 22f));
+            ManagerUITheme.BuildLabel(tableCaption.transform, "PREMIER LEAGUE — TABLE", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+        }
+
+        // First letter of each of the first two words (e.g. "Manchester City" -> "MC"),
+        // or the first two letters of a single-word name. An approximation, not a real
+        // club abbreviation - there's no crest artwork/data source to draw a real one from.
+        private static string GetClubInitials(string clubName)
+        {
+            if (string.IsNullOrWhiteSpace(clubName))
+            {
+                return "?";
+            }
+
+            string[] words = clubName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (words.Length >= 2)
+            {
+                return $"{words[0][0]}{words[1][0]}".ToUpperInvariant();
+            }
+
+            return clubName.Length >= 2 ? clubName.Substring(0, 2).ToUpperInvariant() : clubName.ToUpperInvariant();
+        }
+
+        private void RefreshHubUI()
+        {
+            if (hubClubNameLabel != null)
+            {
+                hubClubNameLabel.text = managedTeamName.ToUpperInvariant();
+            }
+
+            if (hubBylineLabel != null)
+            {
+                hubBylineLabel.text = $"Manager {managerName}   ·   Matchday {currentFixtureIndex + 1}";
             }
 
             bool hasNextFixture = currentFixtureIndex < managedTeamFixtures.Count;
-
-            if (nextFixtureText != null)
-            {
-                nextFixtureText.text = hasNextFixture
-                    ? $"Next Fixture: {DescribeFixture(managedTeamFixtures[currentFixtureIndex])}"
-                    : "Season complete.";
-            }
 
             if (playNextMatchButton != null)
             {
@@ -712,9 +824,10 @@ namespace Manager
                 simulateSeasonButton.interactable = hasNextFixture;
             }
 
-            if (leagueTableText != null)
+            if (leagueTableView != null)
             {
-                leagueTableText.text = BuildSeasonTableSummary();
+                int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
+                leagueTableView.Populate(playableTable.Sorted(), teamRegistry.GetTeamName, managedTeamId);
             }
         }
 
@@ -1177,44 +1290,6 @@ namespace Manager
             return new string('★', stars) + new string('☆', 5 - stars);
         }
 
-        private string DescribeFixture(OpenFootballMatch fixture)
-        {
-            bool managedIsHome = fixture.HomeTeam == managedTeamName;
-            string opponent = managedIsHome ? fixture.AwayTeam : fixture.HomeTeam;
-            return managedIsHome ? $"vs {opponent} (H)" : $"vs {opponent} (A)";
-        }
-
-        // A full division table: playing your own fixture also resolves every other
-        // match in that matchday (see SimulateOtherFixturesInMatchday), so every club
-        // stays in sync by games played rather than only showing teams you've faced.
-        private string BuildSeasonTableSummary()
-        {
-            List<LeagueTable.Entry> sortedTable = playableTable.Sorted();
-
-            if (sortedTable.Count == 0)
-            {
-                return "Premier League Table: no matches played yet.";
-            }
-
-            StringBuilder summary = new StringBuilder();
-            summary.AppendLine("Premier League Table:");
-
-            for (int i = 0; i < sortedTable.Count; i++)
-            {
-                LeagueTable.Entry entry = sortedTable[i];
-                string teamName = teamRegistry.GetTeamName(entry.TeamId);
-
-                summary.AppendLine(
-                    $"{i + 1}. {teamName} " +
-                    $"Pts:{entry.Points} P:{entry.Played} " +
-                    $"W:{entry.Wins} D:{entry.Draws} L:{entry.Losses} " +
-                    $"GF:{entry.GoalsFor} GA:{entry.GoalsAgainst}"
-                );
-            }
-
-            return summary.ToString();
-        }
-
         // --- Matchday Prep (opponent scouting, Tactic, pre-match Subs - shown before
         // every match instead of simulating straight from the Hub) ---
 
@@ -1297,7 +1372,7 @@ namespace Manager
 
             if (matchdayPrepSubtitleLabel != null)
             {
-                matchdayPrepSubtitleLabel.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {opponentTeam.Formation}";
+                matchdayPrepSubtitleLabel.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {FormatFormation(opponentTeam.Formation)}";
             }
 
             if (opponentSquadListView != null)
@@ -1323,6 +1398,22 @@ namespace Manager
             HighlightSelectedTacticButton(defensiveButton, selectedTactic == ManagerTactic.Defensive);
 
             RefreshSubsStatusUI();
+        }
+
+        // Formation enum names are PascalCase identifiers (FourThreeThree) - this converts
+        // them to the standard football notation ("4-3-3") shown in the UI.
+        private static string FormatFormation(Formation formation)
+        {
+            return formation switch
+            {
+                Formation.FourThreeThree => "4-3-3",
+                Formation.FourTwoThreeOne => "4-2-3-1",
+                Formation.FourFourTwo => "4-4-2",
+                Formation.ThreeFiveTwo => "3-5-2",
+                Formation.ThreeFourThree => "3-4-3",
+                Formation.ThreeFourTwoOne => "3-4-2-1",
+                _ => formation.ToString()
+            };
         }
 
         public void OnMatchdayPrepBackClicked()

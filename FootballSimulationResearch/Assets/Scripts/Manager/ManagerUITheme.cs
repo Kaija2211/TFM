@@ -115,6 +115,25 @@ namespace Manager
             return band;
         }
 
+        // Repositions an already-existing RectTransform using a point anchor (anchorMin
+        // == anchorMax == pivot == anchor). Lets already-placed Editor elements (buttons
+        // that already exist and work) be positioned precisely from code instead of by
+        // hand-dragging - the same failure mode that caused the Matchday Prep tactic
+        // buttons to end up hidden behind the opponent squad list.
+        public static void SetPointAnchor(RectTransform rect, Vector2 anchor, Vector2 anchoredPosition, Vector2 sizeDelta)
+        {
+            if (rect == null)
+            {
+                return;
+            }
+
+            rect.anchorMin = anchor;
+            rect.anchorMax = anchor;
+            rect.pivot = anchor;
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = sizeDelta;
+        }
+
         public static void ApplyPanelBackground(GameObject panel)
         {
             if (panel == null)
