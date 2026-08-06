@@ -28,6 +28,15 @@ namespace Sim
             return e;
         }
 
+        // Registers a team at 0 played/0 points if it doesn't already have an entry,
+        // without affecting anything already recorded. Lets a consumer (Manager Mode)
+        // show the full league before any results exist, matching how a real table
+        // looks on matchday 1 - purely additive, Apply/Sorted/Get are unchanged.
+        public void EnsureTeam(int teamId)
+        {
+            Get(teamId);
+        }
+
         public void Apply(Sim.MatchRecord m)
         {
             var home = Get(m.HomeTeamId);

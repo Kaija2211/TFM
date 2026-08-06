@@ -28,6 +28,11 @@ namespace Sim
             // show a per-team shot split; purely additive, doesn't affect HomeGoals/
             // AwayGoals or any control flow in ResolveAttack.
             public bool HomeTeamAttacking;
+
+            // The scoring player's name, set only on goal events (from `shooter` at the
+            // exact point IsGoal is set - the actual scorer, not parsed from Description).
+            // Purely additive, same as HomeTeamAttacking above.
+            public string ScorerName;
         }
 
         public class AgentMatchResult
@@ -375,7 +380,8 @@ namespace Sim
                     IsGoal = true,
                     HomeTeamScored = homeAttacks,
                     IsShot = true,
-                    HomeTeamAttacking = homeAttacks
+                    HomeTeamAttacking = homeAttacks,
+                    ScorerName = shooter.Name
                 });
             }
             else

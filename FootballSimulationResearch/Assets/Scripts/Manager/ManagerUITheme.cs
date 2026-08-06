@@ -198,6 +198,7 @@ namespace Manager
             rect.offsetMax = Vector2.zero;
 
             TextMeshProUGUI label = labelObject.AddComponent<TextMeshProUGUI>();
+            ApplyThemeFont(label);
             label.text = text;
             label.fontSize = fontSize;
             label.color = color;
@@ -269,11 +270,26 @@ namespace Manager
                 return;
             }
 
+            ApplyThemeFont(label);
             label.text = text;
             label.color = color;
             label.fontSize = fontSize;
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Truncate;
+        }
+
+        // Buttons placed by hand in the Editor (before this reskin took over positioning)
+        // had a font baked into their TextMeshProUGUI at creation time - changing the
+        // project's default TMP font afterward doesn't retroactively update components
+        // that already have an explicit font reference. Every label this file touches
+        // goes through here so it's forced onto the current theme font regardless of
+        // whatever it started with.
+        private static void ApplyThemeFont(TextMeshProUGUI label)
+        {
+            if (TMP_Settings.defaultFontAsset != null)
+            {
+                label.font = TMP_Settings.defaultFontAsset;
+            }
         }
     }
 }
