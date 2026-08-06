@@ -343,6 +343,7 @@ When working on this repo, follow these constraints:
 8. **Prefer small, testable tickets over broad refactors.**
 9. **If implementation would affect research numbers, stop and ask.**
 10. **Preserve academic honesty over making the prototype look more impressive.**
+11. **Multithreading/parallelism is out of scope.** Do not suggest or implement it (e.g. `Task.Run`, `Thread`, `Parallel.For`) as a performance fix for Research Mode or Manager Mode — this is a deliberate scope-control decision, and it keeps the recorded SM-vs-ABM execution time / sims-per-minute comparison on a consistent single-threaded basis.
 
 Useful rule:
 
