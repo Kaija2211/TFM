@@ -1,74 +1,57 @@
-# Manager Mode / Research Sim — Session Handoff (2026-08-03)
+# Manager Mode UI Overhaul — Session Handoff (2026-08-05)
 
 ## 1. Branch / project state
 - Branch: `unity6-ai-prototype` (main branch holds the stable pre-Unity-6.5 research baseline, untouched).
-- Working tree: **clean**, all changes committed and pushed via GitHub Desktop through commit `532b35f` ("feat: expand manager mode with club selection and squad views").
-- Note: this repo's memory files (`C:\Users\thoma\.claude\projects\...\memory\`) have also been updated to reflect everything below — a fresh chat should already have most of this context loaded automatically.
+- Working tree: **clean**, committed through `7dbac0b` ("feat: add matchday prep screen and rebuild hub layout"). Double-check it's actually pushed (GitHub Desktop) before assuming the PC has it after pulling.
+- This is a **machine switch**, not a fresh project: previous session was on a laptop; work continues today on a different ("main") PC for the first time. Claude Code session history and auto-memory do **not** sync across machines — only what's committed to git (this file included) carries over. Point a fresh session at this file first thing.
 
-## 2. Major features completed
+## 2. What happened this session (full UI reskin + restructure, in order)
 
-**Research Mode (refactor + bugfix):**
-- Split the 1126-line `OpenFootballLoader` god class into `TeamRegistry`, `OpenFootballTextParser`, `SimulationStatistics`, `EvidenceExporter`, `AverageTeamResult`, `ResearchEvaluationRunner`. `OpenFootballLoader` is now a thin loader that hands off to `ResearchEvaluationRunner`.
-- Fixed a real evidence-export bug: the ABM repeated-evaluation export was mislabeling its own numbers as the "statistical" summary. Each model now exports its own genuine numbers independently.
-- Parser now tracks real `▪ Matchday N` header lines from the OpenFootball text format (additive `Matchday` field on `OpenFootballMatch`).
+**Reskin pass 1** (from Claude Design mockups, "Matchday Manager" dark/green aesthetic):
+- New `ManagerUITheme.cs` — shared palette/type constants + runtime UI-building helpers (`BuildLabel`, `BuildBar`, `BuildButton`, `BuildAccentBand`, `SetDisabledPlaceholder`, `NormalizeButtonLabel`, `SetPointAnchor`). Everything below builds on this.
+- Code-generated Title screen (New Career / Load Career [disabled] / Settings [disabled] / Exit).
+- Team Select rebuilt as a code-generated 5-column grid of the real 20 EPL clubs (not Prev/Next), with a Manager Name field (in-memory only, no save system).
+- Squad screen: Starting XI/Bench section headers + per-row rating bars (SquadListView.cs extended).
+- Player Detail rebuilt as grouped attribute columns with bars (no fabricated Age/Apps/Goals/Assists - that data doesn't exist).
+- Matchday: per-team shot split added via one new **additive** field (`HomeTeamAttacking`) on `AgentMatchSimulator.AgentMatchEvent`, set in `ResolveAttack`. Verified via `git diff` to be purely additive - `SimulateMatch` itself (which Research Mode also calls) is untouched. Possession dropped (no data source, wasn't invented).
 
-**Manager Mode (built from scratch this session — fully working, not just planned):**
-- Full playable loop: Choose Your Club → Season Hub → Matchday → Continue → back to Hub.
-- Choose Your Club: Prev/Next through all 20 real clubs + Confirm (previously hardcoded to Liverpool).
-- Season Hub: next fixture, chosen tactic, full 20-team division table, Play Next Match / Simulate Season / View Squad / Inspect Player.
-- Matchday screen: instant-simulate-then-replay accelerated clock, live scoreline, event feed, Skip to Results, Full-Time Stats (score/tactic/events/shots/goals), Continue.
-- Tactics (Attacking/Balanced/Defensive) moved to the Season Hub, chosen between matches — affects only the managed club's expected goals, never Research Mode.
-- Simulate Season: instantly resolves all remaining fixtures.
-- Full division table synced via real Matchday markers — playing your fixture also resolves the other 9 fixtures in that round, so standings are always genuinely complete (verified against real rearranged/postponed fixtures in two different season files).
-- Squads now generated from real per-club team strength (previously flat `1f, 1f` for every team).
-- Position-weighted "Overall" rating (`PlayerAgent.GetOverallRating()`) — EA-style, weighted per position.
-- Cosmetic-only display-rating stretch (Manager Mode only) so elite squads visibly read as elite, without touching the true rating or any shared sim code.
-- View Squad (compact list) and Player Inspect (Prev/Next full attribute breakdown) screens.
+**Reskin pass 2 — Matchday Prep restructure:**
+- New pre-match screen (`ShowMatchdayPrep`/`BuildMatchdayPrepChrome` in `ManagerPrototypeController.cs`): opponent name/formation, a read-only opponent squad list (second `SquadListView` instance), Tactic selection, and pre-match Subs — all **moved off the Hub** onto this screen.
+- "Inspect Player" removed from the Hub entirely (redundant - clicking a squad row already jumps to Player Inspect).
+- "Play Next Match" relabeled "Next Matchday", now opens this screen instead of simulating instantly; a new "Simulate Match" button here does what the old button used to do.
+- Tactic buttons/Make Subs/subs counter were **reparented** (dragged in the Editor) from the Hub onto this new panel, not rebuilt - same working C# references, just repositioned.
 
-## 3. Files created / modified
+**Reskin pass 3 — Hub visual rebuild** (to match the newer Hub mockup):
+- New `LeagueTableView.cs` (parallel to `SquadListView.cs`) - scrollable, styled league table grid (#, Club, Pts, P, W, D, L, GF, GA), managed club's row highlighted.
+- `BuildHubChrome()`: crest badge (colored initials badge - **not** a real crest shape, no artwork/mesh pipeline exists for that), club name + manager/matchday byline, Simulate Season moved to top-right, two-column body (menu left, table right). "Next Fixture"/"Tactic" lines dropped from the Hub entirely (redundant with Matchday Prep, confirmed with user).
+- Key architectural decision made and validated this session: **reposition existing buttons via code** (`ManagerUITheme.SetPointAnchor`) instead of hand-dragging them in the Editor. Every manual-reposition this session caused a bug (buttons ending up hidden behind other UI); every code-positioned element didn't. Apply this same principle to any future screen work.
+- `headerText`/`nextFixtureText`/`tacticText`/`leagueTableText` fields and their supporting methods (`BuildSeasonTableSummary`, `DescribeFixture`) were removed entirely - retired, not deprecated.
 
-**New:**
-- `Assets/Scripts/Data/TeamRegistry.cs`, `OpenFootballTextParser.cs`, `SimulationStatistics.cs`, `AverageTeamResult.cs`, `EvidenceExporter.cs`, `ResearchEvaluationRunner.cs`
-- `Assets/Scripts/Manager/ManagerTactic.cs`, `ManagerTacticModifier.cs`, `ManagerPrototypeController.cs`
-- `Assets/Scenes/ManagerMode.unity`
-- `Assets/TextMesh Pro/` (TMP Essential Resources, imported with original GUIDs preserved)
+## 3. Current known-working behaviour
+Verified this session via direct scene-file inspection (not just screenshots) after each fix: Title screen, Team Select grid (real clubs, Manager Name), Hub (crest/name/byline/two-column layout/styled table), Matchday Prep (opponent scouting/formation/tactics/subs), live Matchday replay with in-match subs, Squad screen, Player Detail. Formation now displays as "4-3-3" style (was showing the raw C# enum name "FourThreeThree" - fixed via a `FormatFormation` helper).
 
-**Modified:**
-- `Assets/Scripts/Data/OpenFootballLoader.cs` (shrunk to thin orchestrator)
-- `Assets/Scripts/Sim/AgentMatchSimulator.cs` (additive `IsGoal`/`HomeTeamScored`/`IsShot` event fields)
-- `Assets/Scripts/Sim/PlayerAgent.cs` (additive `GetOverallRating()` — `ToString()` untouched)
+## 4. Outstanding — one Editor item left
+`Transfers` and `Exit to Title` buttons on the Hub were never actually created (confirmed via scene file: both still `{fileID: 0}`, unwired). `BuildHubChrome` will reposition/style them automatically the moment they exist - just:
+1. `UI → Button - TextMeshPro` on `SeasonHubPanel`, rename `TransfersButton`. Position doesn't matter, code moves it.
+2. Same again, rename `ExitToTitleButton`.
+3. Drag both into their slots on `ManagerPrototypeController`.
 
-## 4. Current known-working behaviour
-Verified across multiple user screenshots this session: club selection, full table sync across matchdays, squad view, player inspect, tactic effect on match outcome, full-time stats screen — all confirmed working. Research Mode confirmed still exports correctly-separated, genuine numbers post-fix.
+That's the last item before the whole Hub rebuild is fully wired.
 
-## 5. Current unresolved issues
-- **The blind-comparison study tool is the big one.** Per the Major Project Proposal's actual methodology, the qualitative "user testing" portion needs to be a blinded, counterbalanced, Likert-rated comparison of SM-vs-ABM text output (or a forced-choice outcome-plausibility design, extensively discussed) — recruited from FM communities, ~15-20 participants, no PII. This has been **designed in detail in conversation but has zero code written.** Manager Mode as built is a general showcase, not this instrument.
-- Subs feature — parked, design agreed (reuse Prev/Next: pick who's off from XI, who's on from Bench, confirm), not built.
-- FIFA-card-style stat visual — "eventually," not started.
-- WebGL/web deployment of the study tool for wider recruitment — discussed, not decided (pending your own discussion with your COO/Art). If pursued: file-based export won't work in-browser; would need a copyable results-code + Google Form instead.
-- Multithreading — deliberately rescoped/dropped due to disclosed personal circumstances (tutors aware). Not an open gap to re-flag.
-
-## 6. Exact next task
-**Not locked in.** Two live candidates, in order of dissertation risk:
-1. Build the blind-comparison study tool — most dissertation-critical, has real external lead time (participant recruitment), fully designed already.
-2. Continue Manager Mode polish — subs feature next in line (already designed), or the FIFA-card visual redesign.
-
-Recommend starting the new chat by confirming which to prioritize — (1) has recruitment lead-time pressure that (2) doesn't.
-
-## 7. Constraints (binding, do not relax without asking)
-- Do not modify Research Mode behaviour/results without explicit confirmation.
+## 5. Constraints (binding, do not relax without asking)
+- Do not modify Research Mode behaviour/results without explicit confirmation. `AgentMatchSimulator.SimulateMatch` must stay byte-for-byte unchanged - any shared-sim-code touch (see `HomeTeamAttacking` above) must be purely additive and verified via `git diff` before moving on.
 - Keep Manager Mode and Research Mode architecturally separate.
-- Do not add new features without confirmation — one explicit ask at a time.
+- Do not add new features without confirmation - one explicit ask at a time.
+- User pushes via GitHub Desktop themselves - give commit messages, don't run `git push`.
+- Prefer direct scene-file edits (`.unity` is plain YAML) over asking for manual Editor repositioning where practical - but only after confirming the scene has actually been *saved* first (Unity holds unsaved state in memory; editing the file while it's open with unsaved changes gets silently overwritten on next Ctrl+S). Ask the user to save, then close/reopen the scene tab after any direct file edit so Unity picks it up.
 
-## 8. Evidence numbers (verified, real exported files, post-bugfix)
-- **Statistical Model** (100 runs): avg Points MAE 11.59, best 8.05, worst 16.05, ~0.048s exec, ~123,921 sims/min.
-- **ABM** (100 runs): avg Points MAE 11.89, median 11.68, stdev 1.55, best 8.15, worst 15.10, ~4.196s exec, ~1,430 sims/min. Title winners: Man City 64%, Liverpool 30%, Arsenal 4%, Brentford 1%, Chelsea 1%.
-- Reading: paradigms are statistically near-tied on accuracy; differ ~87x in execution speed — the core trade-off finding.
+## 6. Bigger-picture context (not urgent, just context)
+User is thinking post-14th (submission deadline) about two possible directions: eventually generalizing the agent-based sim into a reusable "engine" for multiple future football games, vs. shipping something small first. Current lean: ship a simple, elegant **Statistical-Model-only** mobile game first (inspired by "38-0-0"'s minimalism) as an actual completed portfolio piece, before attempting anything bigger. Nothing to act on yet - just useful framing if it comes up again.
 
-## 9. Suggested first prompt for the next chat
+## 7. Suggested first prompt for the next session
 
-> Continuing the FootballResearchProject on branch `unity6-ai-prototype` (see your memory files for full context — Manager Mode is fully built and working, not just planned). Working tree is clean, everything's committed and pushed through `532b35f`.
+> Continuing the FootballResearchProject on branch `unity6-ai-prototype`, now on a different machine for the first time - see `HANDOFF.md` for full context (three UI reskin passes completed: Title/Team Select/Squad/Player Detail/Matchday, then a Matchday Prep restructure, then a Hub visual rebuild). Working tree was clean through commit `7dbac0b` on the previous machine.
 >
-> I need to decide what's next: (a) build the blind SM-vs-ABM comparison study tool — the actual dissertation-required methodology instrument, fully designed in a prior conversation but zero code written, with real recruitment lead-time pressure, or (b) continue Manager Mode polish — the subs feature is next in line and already designed (reuse the Prev/Next pattern: pick who's off from the XI, who's on from the bench, confirm swap).
+> One Editor item is still outstanding: `Transfers` and `Exit to Title` buttons on the Hub were never created (see section 4). Everything else should be fully wired and working.
 >
-> What do you recommend, and do you have any thoughts of your own before we proceed? Same hard constraints as always: don't touch Research Mode without asking, keep Manager Mode separate, no new features without confirming with me first.
+> Same hard constraints as always: don't touch Research Mode without asking, keep Manager Mode separate, no new features without confirming with me first, give commit messages but don't push.
