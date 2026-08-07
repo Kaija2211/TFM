@@ -29,6 +29,7 @@ namespace Manager
         private Image background;
         private Canvas rootCanvas;
         private RectTransform dragGhost;
+        private bool isDragging;
 
         public void Configure(
             PlayerAgent player,
@@ -49,6 +50,17 @@ namespace Manager
 
         public void OnPointerClick(PointerEventData eventData)
         {
+            // Unity's own click-vs-drag suppression (eventData.eligibleForClick, cleared
+            // the moment a drag starts) didn't hold up here - a real drag onto a pin still
+            // fired this afterward, opening Player Inspect mid-gesture and short-circuiting
+            // the drag's normal end-of-gesture cleanup (confirmed live: the ghost froze in
+            // place on the Inspect screen it navigated to). isDragging is a second,
+            // explicit guard against that regardless of why Unity's own tracking missed it.
+            if (isDragging)
+            {
+                return;
+            }
+
             onClicked?.Invoke(Player);
         }
 
@@ -58,6 +70,8 @@ namespace Manager
             {
                 return;
             }
+
+            isDragging = true;
 
             if (background != null)
             {
@@ -102,16 +116,7 @@ namespace Manager
                 return;
             }
 
-            if (background != null)
-            {
-                background.color = ManagerUITheme.CardNeutralAlt;
-            }
-
-            if (dragGhost != null)
-            {
-                Destroy(dragGhost.gameObject);
-                dragGhost = null;
-            }
+            EndDragVisual();
         }
 
         public void OnDrop(PointerEventData eventData)
@@ -126,7 +131,38 @@ namespace Manager
                 return;
             }
 
+            // Must clean up the dragged card's ghost/highlight HERE, before invoking the
+            // sub callback - not left to rely on OnEndDrag firing afterward. The sub
+            // callback triggers a full board rebuild that destroys every bench card,
+            // including the one currently being dragged; Destroy() makes a UnityEngine
+            // Object compare == null immediately (even though actual destruction is
+            // deferred to end of frame), so Unity's EventSystem sees pointerDrag as null
+            // by the time it goes to call OnEndDrag and silently skips it - orphaning the
+            // ghost on screen forever. Confirmed live: dragging worked, but the floating
+            // name box never went away after a successful drop.
+            draggedCard.EndDragVisual();
+
             onBenchPlayerDroppedOnPin?.Invoke(draggedCard.Player, Player);
+        }
+
+        // Destroys the drag ghost and restores the card's normal background - called from
+        // OnEndDrag for a drag that didn't land on a valid target, and explicitly from
+        // OnDrop (on the target) for one that did, since OnEndDrag can't be relied on to
+        // fire in that case (see OnDrop's comment above).
+        private void EndDragVisual()
+        {
+            isDragging = false;
+
+            if (background != null)
+            {
+                background.color = ManagerUITheme.CardNeutralAlt;
+            }
+
+            if (dragGhost != null)
+            {
+                Destroy(dragGhost.gameObject);
+                dragGhost = null;
+            }
         }
 
         private void UpdateGhostPosition(PointerEventData eventData)

@@ -489,10 +489,14 @@ namespace Manager
         }
 
         // See BuildTitleScreenContent's call site - recovers a label that came out of
-        // creation with zero generated characters despite non-empty text (observed once
-        // per session, only ever on the very first TMP label built). Destroying and
-        // recreating the component is the only thing that's been found to recover it, and
-        // that only works once at least one real frame has passed.
+        // creation with zero generated characters despite non-empty text. Originally seen
+        // only on the very first TMP label built each session (the Title wordmark); later
+        // also seen on a label rebuilt via rapid destroy/recreate churn (Player Inspect's
+        // OvrValue - see RecoverBlankLabelsNextFrame below), so it isn't actually limited
+        // to "first ever" - something about TMP's mesh generation is more generally
+        // flaky than that. Destroying and recreating the component is the only thing
+        // that's been found to recover it, and that only works once at least one real
+        // frame has passed.
         private IEnumerator RecoverBlankLabelNextFrame(TextMeshProUGUI label)
         {
             yield return null;
@@ -533,6 +537,58 @@ namespace Manager
             fresh.characterSpacing = characterSpacing;
             fresh.raycastTarget = false;
             fresh.ForceMeshUpdate();
+        }
+
+        // General-purpose version of the recovery above: sweeps every TextMeshProUGUI
+        // under a root and recovers any that came out blank, rather than checking one
+        // specific label. Used by screens (like Player Inspect) that destroy and rebuild
+        // their whole label set on every refresh, where any of them could be the one that
+        // happens to hit the same TMP mesh-generation failure.
+        private IEnumerator RecoverBlankLabelsNextFrame(Transform root)
+        {
+            yield return null;
+
+            if (root == null)
+            {
+                yield break;
+            }
+
+            foreach (TextMeshProUGUI label in root.GetComponentsInChildren<TextMeshProUGUI>(true))
+            {
+                if (label == null || string.IsNullOrEmpty(label.text))
+                {
+                    continue;
+                }
+
+                label.ForceMeshUpdate();
+
+                if (label.textInfo.characterCount > 0)
+                {
+                    continue;
+                }
+
+                GameObject labelObject = label.gameObject;
+                string text = label.text;
+                float fontSize = label.fontSize;
+                Color color = label.color;
+                TextAlignmentOptions alignment = label.alignment;
+                FontStyles fontStyle = label.fontStyle;
+                float characterSpacing = label.characterSpacing;
+                TMP_FontAsset font = label.font;
+
+                DestroyImmediate(label);
+
+                TextMeshProUGUI fresh = labelObject.AddComponent<TextMeshProUGUI>();
+                fresh.font = font;
+                fresh.text = text;
+                fresh.fontSize = fontSize;
+                fresh.color = color;
+                fresh.alignment = alignment;
+                fresh.fontStyle = fontStyle;
+                fresh.characterSpacing = characterSpacing;
+                fresh.raycastTarget = false;
+                fresh.ForceMeshUpdate();
+            }
         }
 
         public void OnTitleNewCareerClicked()
@@ -1062,8 +1118,41 @@ namespace Manager
         {
             if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
             CloseTacticsBoardFormationDropdown();
+            CleanupStrayDragGhosts();
 
             ShowSeasonHub();
+        }
+
+        // Belt-and-suspenders on top of TacticsBoardPlayerCard's own drag-cleanup fixes -
+        // a drag ghost is parented directly to the root Canvas (so it can float above
+        // everything while dragging), which means it survives a screen change even if
+        // something upstream left it undestroyed. Cheap no-op when nothing's stray;
+        // called on every way of leaving the Tactics Board so one can never linger onto
+        // whatever screen comes next (confirmed live: a click firing mid-drag navigated
+        // to Player Inspect with the ghost still floating on top of it).
+        private void CleanupStrayDragGhosts()
+        {
+            if (tacticsBoardPanel == null)
+            {
+                return;
+            }
+
+            Transform canvasTransform = tacticsBoardPanel.transform.parent;
+
+            if (canvasTransform == null)
+            {
+                return;
+            }
+
+            for (int i = canvasTransform.childCount - 1; i >= 0; i--)
+            {
+                Transform child = canvasTransform.GetChild(i);
+
+                if (child.name == "DragGhost")
+                {
+                    Destroy(child.gameObject);
+                }
+            }
         }
 
         private void BuildTacticsBoardChrome()
@@ -1186,7 +1275,7 @@ namespace Manager
         // pin rebuild.
         private void BuildPitchMarkings(RectTransform pitch)
         {
-            Color lineColor = new Color(1f, 1f, 1f, 0.18f);
+            Color lineColor = new Color(1f, 1f, 1f, 0.10f);
 
             GameObject halfwayLine = new GameObject("HalfwayLine", typeof(RectTransform), typeof(Image));
             halfwayLine.transform.SetParent(pitch, false);
@@ -1638,6 +1727,8 @@ namespace Manager
 
         private void OpenPlayerInspect(PlayerAgent preselected)
         {
+            CleanupStrayDragGhosts();
+
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
 
             inspectSquadPlayers = new List<PlayerAgent>(team.StartingEleven);
@@ -1884,6 +1975,17 @@ namespace Manager
             {
                 ("Pace", player.Pace), ("Strength", player.Strength), ("Stamina", player.Stamina), ("Aerial", player.Aerial)
             });
+
+            // Player Inspect fully destroys and rebuilds every label on every refresh
+            // (see spawnedInspectElements above) - that rapid churn turns out to trigger
+            // the same TMP mesh-generation failure the Title wordmark hit once (see
+            // RecoverBlankLabelNextFrame): a label with correct text/color/position but
+            // characterCount stuck at 0 forever, invisible despite everything else about
+            // it checking out. Confirmed live on OvrValue (the big number next to
+            // "OVERALL (GK)") - blank on screen, structurally perfect otherwise. This is
+            // a general sweep rather than a fix targeted at that one label, since nothing
+            // about the failure is specific to it.
+            StartCoroutine(RecoverBlankLabelsNextFrame(playerInspectContentContainer));
         }
 
         private void AddPositionBadge(Transform parent, string label, float x, bool primary)
@@ -2193,9 +2295,14 @@ namespace Manager
             // Goal-scorer lists, flanking the score under the team names - full-time only,
             // built from the real ScorerName on each goal event (see AgentMatchSimulator),
             // not fabricated or parsed out of the free-text event description.
+            // Width (220) is deliberately less than double the offset (120) so the two
+            // boxes' inner edges can't cross at center - at the old 260 width they
+            // overlapped by 20px there regardless of text, invisible with short scorer
+            // names/few goals but a real collision once a name or scorer count pushed
+            // right up against that boundary (confirmed live).
             GameObject homeScorersObj = new GameObject("HomeScorers", typeof(RectTransform));
             homeScorersObj.transform.SetParent(matchdayPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(homeScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(-120f, -100f), new Vector2(260f, 44f));
+            ManagerUITheme.SetPointAnchor(homeScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(-120f, -108f), new Vector2(220f, 44f));
             matchHomeScorersLabel = ManagerUITheme.BuildLabel(homeScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopRight, FontStyles.Normal, noWrap: false);
             // A one-sided scoreline (hat-tricks etc.) can need more lines than this box's
             // fixed 44px height allows - autosizing shrinks the font to fit rather than
@@ -2206,7 +2313,7 @@ namespace Manager
 
             GameObject awayScorersObj = new GameObject("AwayScorers", typeof(RectTransform));
             awayScorersObj.transform.SetParent(matchdayPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(awayScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(120f, -100f), new Vector2(260f, 44f));
+            ManagerUITheme.SetPointAnchor(awayScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(120f, -108f), new Vector2(220f, 44f));
             matchAwayScorersLabel = ManagerUITheme.BuildLabel(awayScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
             matchAwayScorersLabel.enableAutoSizing = true;
             matchAwayScorersLabel.fontSizeMin = 7;
