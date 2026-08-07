@@ -47,10 +47,10 @@ namespace Manager
         [SerializeField] private Button exitToTitleButton;
         [SerializeField] private LeagueTableView leagueTableView;
 
-        // Tactic buttons, Make Subs, and the subs counter are NOT declared here - they're
-        // the same attackingButton/balancedButton/defensiveButton/makeSubsButton/
-        // subsStatusText fields further down, reparented in the Editor from the Hub onto
-        // this screen. Same C# references, they just live under a different panel now.
+        // Tactic buttons are NOT declared here - they're the same
+        // attackingButton/balancedButton/defensiveButton fields further down,
+        // reparented in the Editor from the Hub onto this screen. Same C# references,
+        // they just live under a different panel now.
         [Header("Matchday Prep UI")]
         [SerializeField] private GameObject matchdayPrepPanel;
         [SerializeField] private RectTransform matchdayPrepContentContainer;
@@ -73,11 +73,8 @@ namespace Manager
         [SerializeField] private TMP_Text playerListTitleText;
         [SerializeField] private SquadListView squadListView;
         [SerializeField] private Button playerListBackButton;
-        [SerializeField] private Button squadSortButton; // disabled placeholder - no sort logic built yet
-        [SerializeField] private Button squadFilterButton; // disabled placeholder - no filter logic built yet
 
         [Header("Substitutions")]
-        [SerializeField] private Button makeSubsButton; // Season Hub, pre-match team sheet
         [SerializeField] private TMP_Text subsStatusText;
         [SerializeField] private Button makeSubButton; // Matchday panel, in-match
 
@@ -112,6 +109,7 @@ namespace Manager
         private TextMeshProUGUI matchFullTimeCaptionLabel;
         private RectTransform matchStatsBarsContainer;
         private TextMeshProUGUI matchStatsCaptionLabel;
+        private RectTransform matchStatsCaptionRect;
         private RectTransform matchKeyMomentsCaptionRect;
         private GameObject matchLogGroup;
         private TextMeshProUGUI matchSubsStatusLabel;
@@ -171,6 +169,19 @@ namespace Manager
         private TextMeshProUGUI hubClubNameLabel;
         private TextMeshProUGUI hubBylineLabel;
 
+        // --- Squad: Tactics Board (pitch view, drag-to-sub, formation switching) ---
+        private bool tacticsBoardChromeBuilt;
+        private GameObject tacticsBoardPanel;
+        private RectTransform tacticsBoardPitchContainer;
+        private RectTransform tacticsBoardBenchContent;
+        private Button tacticsBoardFormationButton;
+        private GameObject tacticsBoardFormationDropdown;
+
+        // Player Inspect always hides seasonHubPanel and its Back button always returns
+        // to it - true for every OTHER entry point, but Tactics Board is a second panel
+        // that also needs hiding/restoring, so this flag distinguishes the two callers.
+        private bool playerInspectReturnsToTacticsBoard;
+
         // Set inside SimulateFixture and reused if an in-match substitution requires
         // resimulating the remainder of the match with the same underlying prediction.
         private float lastExpectedHomeGoals;
@@ -187,15 +198,6 @@ namespace Manager
         private PlayerAgent pendingSubOffPlayer;
         private bool subFlowIsInMatch;
 
-        // The bench player currently "armed" for an inline swap on the Squad browse
-        // screen (see OnSquadBrowseRowClicked) - separate from pendingSubOffPlayer,
-        // which belongs to the older full-screen off-then-on picker flow.
-        private PlayerAgent pendingInlineSubPlayer;
-
-        // Distinguishes the two non-in-match callers of the player list panel (Squad
-        // browse from the Hub vs. pre-match subs from Matchday Prep), so Back/cancel and
-        // sub-completion return to whichever screen actually opened the panel.
-        private bool playerListReturnsToMatchdayPrep;
         private bool pendingSubApplied;
         private int subsUsedThisMatch;
 
@@ -223,7 +225,6 @@ namespace Manager
             if (confirmTeamButton != null) confirmTeamButton.onClick.AddListener(OnConfirmTeamClicked);
             if (teamSelectBackButton != null) teamSelectBackButton.onClick.AddListener(OnTeamSelectBackClicked);
             if (playerListBackButton != null) playerListBackButton.onClick.AddListener(OnPlayerListBackClicked);
-            if (makeSubsButton != null) makeSubsButton.onClick.AddListener(OnMakeSubsClicked);
             if (makeSubButton != null) makeSubButton.onClick.AddListener(OnMakeSubDuringMatchClicked);
             if (exitToTitleButton != null) exitToTitleButton.onClick.AddListener(OnExitToTitleClicked);
 
@@ -279,7 +280,6 @@ namespace Manager
                 squadListImage.color = ManagerUITheme.PanelDark;
             }
 
-            StyleHubActionButton(makeSubsButton);
             StyleHubActionButton(skipToResultsButton);
             StyleHubActionButton(makeSubButton);
             StyleHubActionButton(matchdayPrepBackButton);
@@ -431,6 +431,16 @@ namespace Manager
             TextMeshProUGUI wordmarkLabel = ManagerUITheme.BuildLabel(wordmark.transform, "TF<color=#3ddc84>M</color>", 64, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
             wordmarkLabel.characterSpacing = 4f;
 
+            // The wordmark is the very first TextMeshProUGUI created in the whole play
+            // session (Title is always shown first), and on a genuinely fresh session it
+            // can silently fail to generate any mesh at all - texts built moments later
+            // (Subtitle, buttons) using the exact same font asset render fine, and
+            // ForceMeshUpdate/SetText/toggling .enabled done in the SAME frame don't
+            // recover it either (confirmed live), because whatever TMP/font-asset
+            // initialization it's racing hasn't finished within that first frame yet.
+            // Waiting a frame before checking gives that initialization time to complete.
+            StartCoroutine(RecoverBlankLabelNextFrame(wordmarkLabel));
+
             GameObject subtitle = new GameObject("Subtitle", typeof(RectTransform));
             subtitle.transform.SetParent(titleContentContainer, false);
             ManagerUITheme.AnchorTopCenter(subtitle, 175f, 600f, 30f);
@@ -476,6 +486,53 @@ namespace Manager
             exitButton.targetGraphic = exitObj.GetComponent<Image>();
             ManagerUITheme.BuildLabel(exitObj.transform, "EXIT", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
             exitButton.onClick.AddListener(OnTitleExitClicked);
+        }
+
+        // See BuildTitleScreenContent's call site - recovers a label that came out of
+        // creation with zero generated characters despite non-empty text (observed once
+        // per session, only ever on the very first TMP label built). Destroying and
+        // recreating the component is the only thing that's been found to recover it, and
+        // that only works once at least one real frame has passed.
+        private IEnumerator RecoverBlankLabelNextFrame(TextMeshProUGUI label)
+        {
+            yield return null;
+
+            if (label == null || string.IsNullOrEmpty(label.text))
+            {
+                yield break;
+            }
+
+            label.ForceMeshUpdate();
+
+            if (label.textInfo.characterCount > 0)
+            {
+                yield break;
+            }
+
+            GameObject labelObject = label.gameObject;
+            string text = label.text;
+            float fontSize = label.fontSize;
+            Color color = label.color;
+            TextAlignmentOptions alignment = label.alignment;
+            FontStyles fontStyle = label.fontStyle;
+            float characterSpacing = label.characterSpacing;
+            TMP_FontAsset font = label.font;
+
+            // Must be DestroyImmediate, not Destroy - AddComponent on the same GameObject
+            // in the same frame silently returns null while the old component is still
+            // pending removal from a deferred Destroy().
+            DestroyImmediate(label);
+
+            TextMeshProUGUI fresh = labelObject.AddComponent<TextMeshProUGUI>();
+            fresh.font = font;
+            fresh.text = text;
+            fresh.fontSize = fontSize;
+            fresh.color = color;
+            fresh.alignment = alignment;
+            fresh.fontStyle = fontStyle;
+            fresh.characterSpacing = characterSpacing;
+            fresh.raycastTarget = false;
+            fresh.ForceMeshUpdate();
         }
 
         public void OnTitleNewCareerClicked()
@@ -980,86 +1037,486 @@ namespace Manager
             }
         }
 
-        // --- Squad browsing / player list panel (click a row, jump straight there -
-        // no Prev/Next cycling needed to reach a specific player) ---
+        // --- Squad: Tactics Board (pitch view, position-pinned starters, drag a bench
+        // card onto a pin to substitute, switch formation from the header dropdown - no
+        // Editor-placed panel to wire, built entirely in code the first time it's
+        // opened, same precedent as Match Events). Replaces the old scrollview-based
+        // squad browse entirely; playerListPanel/squadListView stay alive below for the
+        // in-match sub picker only. ---
 
         public void OnViewSquadClicked()
         {
-            playerListReturnsToMatchdayPrep = false;
-            pendingInlineSubPlayer = null;
+            if (!tacticsBoardChromeBuilt)
+            {
+                BuildTacticsBoardChrome();
+                tacticsBoardChromeBuilt = true;
+            }
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
-            if (playerListPanel != null) playerListPanel.SetActive(true);
-            if (playerListTitleText != null) playerListTitleText.text = $"{managedTeamName} Squad";
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
 
-            RefreshSquadBrowseList();
-
-            if (squadSortButton != null) ManagerUITheme.SetDisabledPlaceholder(squadSortButton, "SORT: POSITION");
-            if (squadFilterButton != null) ManagerUITheme.SetDisabledPlaceholder(squadFilterButton, "FILTER");
+            RefreshTacticsBoardUI();
         }
 
-        // Rebuilds the Starting XI/Bench list with pendingInlineSubPlayer (if any) shown
-        // highlighted, for both the initial view and after every arm/cancel/swap action.
-        private void RefreshSquadBrowseList()
+        public void OnTacticsBoardBackClicked()
         {
-            if (squadListView == null)
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
+            CloseTacticsBoardFormationDropdown();
+
+            ShowSeasonHub();
+        }
+
+        private void BuildTacticsBoardChrome()
+        {
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
+            {
+                return;
+            }
+
+            // Shorter than other screens' header/footer bands deliberately - the pitch
+            // needs as much of this 540-tall canvas as it can get. The mockup's own pin
+            // percentages were authored against an ~600px-tall pitch region (960x820
+            // panel); squeezed into what's left here even after shrinking these two,
+            // pins still need a vertical compression factor - see BuildTacticsBoardPin.
+            const float headerHeight = 64f;
+            const float benchHeight = 96f;
+
+            tacticsBoardPanel = new GameObject("TacticsBoardPanel", typeof(RectTransform));
+            tacticsBoardPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = tacticsBoardPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(tacticsBoardPanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(tacticsBoardPanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -18f), new Vector2(300f, 32f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "SQUAD", 22, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            Button backButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-30f, -16f), new Vector2(150f, 36f));
+            backButton.onClick.AddListener(OnTacticsBoardBackClicked);
+
+            tacticsBoardFormationButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "FORMATION", ManagerUITheme.CardNeutral, ManagerUITheme.TextPrimary, 14);
+            ManagerUITheme.SetPointAnchor(tacticsBoardFormationButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-196f, -16f), new Vector2(200f, 36f));
+            tacticsBoardFormationButton.onClick.AddListener(ToggleTacticsBoardFormationDropdown);
+
+            // Pitch: flat rectangles for the halfway line/penalty boxes (no sprites in
+            // this project, same convention as everywhere else) - without them the pins
+            // are just numbers scattered on a plain rectangle, with nothing anchoring the
+            // eye to "this is a football formation" or explaining why the goalkeeper
+            // sits close behind the back line. Pin positions come from TacticsBoardLayout.
+            GameObject pitchObj = new GameObject("Pitch", typeof(RectTransform), typeof(Image));
+            pitchObj.transform.SetParent(tacticsBoardPanel.transform, false);
+            tacticsBoardPitchContainer = pitchObj.GetComponent<RectTransform>();
+            tacticsBoardPitchContainer.anchorMin = Vector2.zero;
+            tacticsBoardPitchContainer.anchorMax = Vector2.one;
+            tacticsBoardPitchContainer.offsetMin = new Vector2(40f, benchHeight + 20f);
+            tacticsBoardPitchContainer.offsetMax = new Vector2(-40f, -(headerHeight + 20f));
+            pitchObj.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            BuildPitchMarkings(tacticsBoardPitchContainer);
+
+            GameObject benchCaptionObj = new GameObject("BenchCaption", typeof(RectTransform));
+            benchCaptionObj.transform.SetParent(tacticsBoardPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(benchCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(40f, benchHeight - 24f), new Vector2(600f, 20f));
+            ManagerUITheme.BuildLabel(benchCaptionObj.transform, "BENCH · DRAG A PLAYER ONTO THE PITCH TO SUBSTITUTE", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            // Horizontal scroll row: same ScrollRect+Viewport+Content pattern as the
+            // vertical lists elsewhere (SquadListView/MatchEventsListContainer), just
+            // rotated - HorizontalLayoutGroup instead of Vertical, horizontal scroll only.
+            GameObject scrollViewObj = new GameObject("BenchScrollView", typeof(RectTransform), typeof(ScrollRect));
+            scrollViewObj.transform.SetParent(tacticsBoardPanel.transform, false);
+            RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scrollViewRect.anchorMin = new Vector2(0f, 0f);
+            scrollViewRect.anchorMax = new Vector2(1f, 0f);
+            scrollViewRect.pivot = new Vector2(0.5f, 0f);
+            scrollViewRect.anchoredPosition = new Vector2(0f, 16f);
+            scrollViewRect.sizeDelta = new Vector2(-80f, 64f);
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(scrollViewObj.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            tacticsBoardBenchContent = contentObj.GetComponent<RectTransform>();
+            tacticsBoardBenchContent.anchorMin = new Vector2(0f, 0.5f);
+            tacticsBoardBenchContent.anchorMax = new Vector2(0f, 0.5f);
+            tacticsBoardBenchContent.pivot = new Vector2(0f, 0.5f);
+            tacticsBoardBenchContent.anchoredPosition = Vector2.zero;
+            // Height must be explicit, not zero - childForceExpandHeight below stretches
+            // every card to fill THIS rect's own height, so a zero-height Content
+            // silently squashed every bench card to zero height too (invisible despite
+            // existing, with correct width/position - confirmed live).
+            tacticsBoardBenchContent.sizeDelta = new Vector2(0f, 56f);
+
+            HorizontalLayoutGroup layoutGroup = contentObj.AddComponent<HorizontalLayoutGroup>();
+            layoutGroup.childForceExpandWidth = false;
+            layoutGroup.childForceExpandHeight = true;
+            layoutGroup.childControlWidth = true;
+            layoutGroup.childControlHeight = true;
+            layoutGroup.spacing = 10f;
+
+            ContentSizeFitter fitter = contentObj.AddComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scrollRect.horizontal = true;
+            scrollRect.vertical = false;
+            scrollRect.viewport = viewportRect;
+            scrollRect.content = tacticsBoardBenchContent;
+
+            BuildTacticsBoardFormationDropdown();
+        }
+
+        // Halfway line + both penalty boxes, all built from thin flat-color rectangles
+        // (no sprite/mesh assets in this project - a true circle for the center circle
+        // isn't practical the same way, so it's skipped; the boxes alone are enough to
+        // read as "this is a pitch" and to explain why the goalkeeper sits close behind
+        // the back line). Static per formation - built once, not part of the per-refresh
+        // pin rebuild.
+        private void BuildPitchMarkings(RectTransform pitch)
+        {
+            Color lineColor = new Color(1f, 1f, 1f, 0.18f);
+
+            GameObject halfwayLine = new GameObject("HalfwayLine", typeof(RectTransform), typeof(Image));
+            halfwayLine.transform.SetParent(pitch, false);
+            RectTransform halfwayRect = halfwayLine.GetComponent<RectTransform>();
+            halfwayRect.anchorMin = new Vector2(0f, 0.5f);
+            halfwayRect.anchorMax = new Vector2(1f, 0.5f);
+            halfwayRect.pivot = new Vector2(0.5f, 0.5f);
+            halfwayRect.anchoredPosition = Vector2.zero;
+            halfwayRect.sizeDelta = new Vector2(0f, 1f);
+            halfwayLine.GetComponent<Image>().color = lineColor;
+
+            BuildPenaltyBox(pitch, atTop: true, lineColor);
+            BuildPenaltyBox(pitch, atTop: false, lineColor);
+        }
+
+        // An open-ended rectangle (three sides, no side facing the halfway line) built
+        // from three thin Image strips - top/bottom edge plus two verticals, same
+        // "no sprites, flat rectangles" approach as everywhere else.
+        private void BuildPenaltyBox(RectTransform pitch, bool atTop, Color lineColor)
+        {
+            const float boxWidthPercent = 0.30f;
+            const float boxDepthPercent = 0.16f;
+
+            float edgeY = atTop ? 1f : 0f;
+            float innerY = atTop ? 1f - boxDepthPercent : boxDepthPercent;
+
+            GameObject edgeLine = new GameObject(atTop ? "TopBoxLine" : "BottomBoxLine", typeof(RectTransform), typeof(Image));
+            edgeLine.transform.SetParent(pitch, false);
+            RectTransform edgeRect = edgeLine.GetComponent<RectTransform>();
+            edgeRect.anchorMin = new Vector2(0.5f - boxWidthPercent, innerY);
+            edgeRect.anchorMax = new Vector2(0.5f + boxWidthPercent, innerY);
+            edgeRect.pivot = new Vector2(0.5f, 0.5f);
+            edgeRect.anchoredPosition = Vector2.zero;
+            edgeRect.sizeDelta = new Vector2(0f, 1f);
+            edgeLine.GetComponent<Image>().color = lineColor;
+
+            foreach (float xPercent in new[] { 0.5f - boxWidthPercent, 0.5f + boxWidthPercent })
+            {
+                GameObject sideLine = new GameObject(atTop ? "TopBoxSide" : "BottomBoxSide", typeof(RectTransform), typeof(Image));
+                sideLine.transform.SetParent(pitch, false);
+                RectTransform sideRect = sideLine.GetComponent<RectTransform>();
+                sideRect.anchorMin = new Vector2(xPercent, Mathf.Min(edgeY, innerY));
+                sideRect.anchorMax = new Vector2(xPercent, Mathf.Max(edgeY, innerY));
+                sideRect.pivot = new Vector2(0.5f, 0.5f);
+                sideRect.anchoredPosition = Vector2.zero;
+                sideRect.sizeDelta = new Vector2(1f, 0f);
+                sideLine.GetComponent<Image>().color = lineColor;
+            }
+        }
+
+        private void BuildTacticsBoardFormationDropdown()
+        {
+            tacticsBoardFormationDropdown = new GameObject("FormationDropdown", typeof(RectTransform), typeof(Image));
+            tacticsBoardFormationDropdown.transform.SetParent(tacticsBoardPanel.transform, false);
+            RectTransform dropdownRect = tacticsBoardFormationDropdown.GetComponent<RectTransform>();
+            dropdownRect.anchorMin = new Vector2(1f, 1f);
+            dropdownRect.anchorMax = new Vector2(1f, 1f);
+            dropdownRect.pivot = new Vector2(1f, 1f);
+            dropdownRect.anchoredPosition = new Vector2(-30f, -58f);
+            dropdownRect.sizeDelta = new Vector2(200f, 6 * 34f);
+            tacticsBoardFormationDropdown.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            VerticalLayoutGroup layoutGroup = tacticsBoardFormationDropdown.AddComponent<VerticalLayoutGroup>();
+            layoutGroup.childForceExpandWidth = true;
+            layoutGroup.childForceExpandHeight = false;
+            layoutGroup.childControlHeight = true;
+            layoutGroup.childControlWidth = true;
+
+            Formation[] formations =
+            {
+                Formation.FourThreeThree, Formation.FourTwoThreeOne, Formation.FourFourTwo,
+                Formation.ThreeFiveTwo, Formation.ThreeFourThree, Formation.ThreeFourTwoOne
+            };
+
+            foreach (Formation formation in formations)
+            {
+                Button optionButton = ManagerUITheme.BuildButton(tacticsBoardFormationDropdown.transform, TacticsBoardLayout.FormatFormation(formation), ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+                optionButton.gameObject.AddComponent<LayoutElement>().preferredHeight = 34f;
+                optionButton.onClick.AddListener(() => OnFormationSelected(formation));
+            }
+
+            tacticsBoardFormationDropdown.SetActive(false);
+        }
+
+        private void ToggleTacticsBoardFormationDropdown()
+        {
+            if (tacticsBoardFormationDropdown != null)
+            {
+                tacticsBoardFormationDropdown.SetActive(!tacticsBoardFormationDropdown.activeSelf);
+            }
+        }
+
+        private void CloseTacticsBoardFormationDropdown()
+        {
+            if (tacticsBoardFormationDropdown != null) tacticsBoardFormationDropdown.SetActive(false);
+        }
+
+        // Greedy best-fit reassignment: for each slot in the new formation (in order),
+        // pick the best remaining player from the full squad by
+        // GetOverallRating() * GetPositionFit(slot) - a CB played at CB scores at full
+        // rating, the same CB pressed into an ST slot scores at 60% of it. Applies
+        // instantly, same immediacy as the drag-substitute mechanic on this same screen.
+        private void OnFormationSelected(Formation formation)
+        {
+            CloseTacticsBoardFormationDropdown();
+
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            if (team.Formation == formation)
+            {
+                return;
+            }
+
+            List<PlayerPosition> newSlots = squadGenerator.GetStartingPositions(formation);
+            List<PlayerAgent> pool = new List<PlayerAgent>(team.Players);
+            List<PlayerAgent> newStartingEleven = new List<PlayerAgent>();
+
+            foreach (PlayerPosition slot in newSlots)
+            {
+                PlayerAgent best = null;
+                float bestScore = float.MinValue;
+
+                foreach (PlayerAgent candidate in pool)
+                {
+                    float score = candidate.GetOverallRating() * candidate.GetPositionFit(slot);
+
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = candidate;
+                    }
+                }
+
+                if (best == null)
+                {
+                    break;
+                }
+
+                newStartingEleven.Add(best);
+                pool.Remove(best);
+            }
+
+            team.ChangeFormation(formation, newStartingEleven);
+            RefreshTacticsBoardUI();
+        }
+
+        private void RefreshTacticsBoardUI()
+        {
+            if (tacticsBoardPitchContainer == null || tacticsBoardBenchContent == null)
+            {
+                return;
+            }
+
+            CloseTacticsBoardFormationDropdown();
+
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            // Only clear pins, not the pitch markings built once in BuildPitchMarkings -
+            // those are siblings in the same container and would otherwise get destroyed
+            // right along with the pins on the very first refresh (confirmed live: the
+            // pitch had zero marking children left after OnViewSquadClicked's own first
+            // RefreshTacticsBoardUI call).
+            for (int i = tacticsBoardPitchContainer.childCount - 1; i >= 0; i--)
+            {
+                Transform child = tacticsBoardPitchContainer.GetChild(i);
+
+                if (child.name.StartsWith("Pin_"))
+                {
+                    Destroy(child.gameObject);
+                }
+            }
+
+            foreach (Transform child in tacticsBoardBenchContent)
+            {
+                Destroy(child.gameObject);
+            }
+
+            if (tacticsBoardFormationButton != null)
+            {
+                // "v" not the mockup's ▾ glyph - Oswald has no symbol glyphs at all (same
+                // reason "·" replaced the design's bullet/star/emoji elsewhere).
+                ManagerUITheme.NormalizeButtonLabel(tacticsBoardFormationButton, $"Formation: {TacticsBoardLayout.FormatFormation(team.Formation)} v", ManagerUITheme.TextPrimary, 14);
+            }
+
+            IReadOnlyList<Vector2> pins = TacticsBoardLayout.GetPins(team.Formation);
+            List<PlayerPosition> slots = squadGenerator.GetStartingPositions(team.Formation);
+
+            for (int i = 0; i < team.StartingEleven.Count && i < pins.Count; i++)
+            {
+                PlayerAgent player = team.StartingEleven[i];
+                PlayerPosition slotPosition = i < slots.Count ? slots[i] : player.PrimaryPosition;
+                BuildTacticsBoardPin(player, slotPosition, pins[i]);
+            }
+
+            foreach (PlayerAgent player in team.Bench)
+            {
+                BuildTacticsBoardBenchCard(player);
+            }
+        }
+
+        private void BuildTacticsBoardPin(PlayerAgent player, PlayerPosition slotPosition, Vector2 pinPercent)
+        {
+            GameObject pinObj = new GameObject($"Pin_{player.Name}", typeof(RectTransform), typeof(Image));
+            pinObj.transform.SetParent(tacticsBoardPitchContainer, false);
+
+            RectTransform pinRect = pinObj.GetComponent<RectTransform>();
+
+            // Compresses pinPercent.y toward the vertical center before mapping to an
+            // anchor. The mockup's pin percentages were authored against a pitch region
+            // roughly twice as tall as the one this 540-tall canvas has room for once
+            // the header/bench bands are accounted for - used verbatim, formations with
+            // a player stacked close behind another on the same flank (e.g. a back-three
+            // formation's GK sitting right above its central CB) visibly overlap here,
+            // even though they had enough room in the source design's taller pitch.
+            const float verticalCompression = 0.66f;
+            float compressedTopPercent = 0.5f + (pinPercent.y - 0.5f) * verticalCompression;
+
+            Vector2 anchor = new Vector2(pinPercent.x, 1f - compressedTopPercent);
+            pinRect.anchorMin = anchor;
+            pinRect.anchorMax = anchor;
+            pinRect.pivot = new Vector2(0.5f, 0.5f);
+            pinRect.anchoredPosition = Vector2.zero;
+            pinRect.sizeDelta = new Vector2(74f, 44f);
+
+            // Transparent - exists only so the pin has a Graphic to raycast against
+            // (IDropHandler needs one), not for the visible badge below.
+            pinObj.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
+
+            // Two-layer "border" (accent square behind, dark square inset on top) -
+            // a stand-in for the mockup's colored circle ring, since true circles
+            // need a sprite this project doesn't have (same flat-rectangles-only
+            // constraint as the pitch markings above).
+            GameObject badgeBorderObj = new GameObject("BadgeBorder", typeof(RectTransform), typeof(Image));
+            badgeBorderObj.transform.SetParent(pinObj.transform, false);
+            RectTransform badgeBorderRect = badgeBorderObj.GetComponent<RectTransform>();
+            badgeBorderRect.anchorMin = new Vector2(0.5f, 1f);
+            badgeBorderRect.anchorMax = new Vector2(0.5f, 1f);
+            badgeBorderRect.pivot = new Vector2(0.5f, 1f);
+            badgeBorderRect.anchoredPosition = Vector2.zero;
+            badgeBorderRect.sizeDelta = new Vector2(30f, 30f);
+            badgeBorderObj.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            GameObject badgeObj = new GameObject("Badge", typeof(RectTransform), typeof(Image));
+            badgeObj.transform.SetParent(badgeBorderObj.transform, false);
+            RectTransform badgeRect = badgeObj.GetComponent<RectTransform>();
+            badgeRect.anchorMin = Vector2.zero;
+            badgeRect.anchorMax = Vector2.one;
+            badgeRect.offsetMin = new Vector2(2f, 2f);
+            badgeRect.offsetMax = new Vector2(-2f, -2f);
+            badgeObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+            ManagerUITheme.BuildLabel(badgeObj.transform, GetDisplayRating(player.GetOverallRating()).ToString(), 10, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            GameObject labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(pinObj.transform, false);
+            RectTransform labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0.5f, 0f);
+            labelRect.anchorMax = new Vector2(0.5f, 0f);
+            labelRect.pivot = new Vector2(0.5f, 0f);
+            labelRect.anchoredPosition = Vector2.zero;
+            labelRect.sizeDelta = new Vector2(130f, 14f);
+            ManagerUITheme.BuildLabel(labelObj.transform, $"{player.Name} · {slotPosition}", 8, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center);
+
+            TacticsBoardPlayerCard card = pinObj.AddComponent<TacticsBoardPlayerCard>();
+            card.Configure(player, isDraggable: false, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin);
+        }
+
+        private void BuildTacticsBoardBenchCard(PlayerAgent player)
+        {
+            GameObject cardObj = new GameObject($"Bench_{player.Name}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            cardObj.transform.SetParent(tacticsBoardBenchContent, false);
+
+            LayoutElement layoutElement = cardObj.GetComponent<LayoutElement>();
+            layoutElement.preferredWidth = 150f;
+            layoutElement.preferredHeight = 46f;
+
+            cardObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            GameObject nameObj = new GameObject("Name", typeof(RectTransform));
+            nameObj.transform.SetParent(cardObj.transform, false);
+            RectTransform nameRect = nameObj.GetComponent<RectTransform>();
+            nameRect.anchorMin = new Vector2(0f, 0.5f);
+            nameRect.anchorMax = new Vector2(1f, 1f);
+            nameRect.offsetMin = new Vector2(10f, 0f);
+            nameRect.offsetMax = new Vector2(-10f, -2f);
+            ManagerUITheme.BuildLabel(nameObj.transform, player.Name, 13, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject ovrObj = new GameObject("OVR", typeof(RectTransform));
+            ovrObj.transform.SetParent(cardObj.transform, false);
+            RectTransform ovrRect = ovrObj.GetComponent<RectTransform>();
+            ovrRect.anchorMin = new Vector2(0f, 0.5f);
+            ovrRect.anchorMax = new Vector2(1f, 1f);
+            ovrRect.offsetMin = new Vector2(10f, 0f);
+            ovrRect.offsetMax = new Vector2(-10f, -2f);
+            ManagerUITheme.BuildLabel(ovrObj.transform, GetDisplayRating(player.GetOverallRating()).ToString(), 13, ManagerUITheme.Accent, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+
+            GameObject posObj = new GameObject("Position", typeof(RectTransform));
+            posObj.transform.SetParent(cardObj.transform, false);
+            RectTransform posRect = posObj.GetComponent<RectTransform>();
+            posRect.anchorMin = new Vector2(0f, 0f);
+            posRect.anchorMax = new Vector2(1f, 0.5f);
+            posRect.offsetMin = new Vector2(10f, 2f);
+            posRect.offsetMax = new Vector2(-10f, 0f);
+            ManagerUITheme.BuildLabel(posObj.transform, player.PrimaryPosition.ToString(), 11, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+
+            TacticsBoardPlayerCard card = cardObj.AddComponent<TacticsBoardPlayerCard>();
+            card.Configure(player, isDraggable: true, isDropTarget: false, OnTacticsBoardPlayerTapped, null);
+        }
+
+        private void OnTacticsBoardPlayerTapped(PlayerAgent player)
+        {
+            playerInspectReturnsToTacticsBoard = true;
+            OpenPlayerInspect(player);
+        }
+
+        private void OnBenchPlayerDroppedOnPin(PlayerAgent benchPlayer, PlayerAgent pinPlayer)
+        {
+            if (benchPlayer == pinPlayer)
             {
                 return;
             }
 
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            team.SubstitutePlayer(pinPlayer, benchPlayer);
 
-            squadListView.Clear();
-            squadListView.AddSectionHeader("Starting XI");
-
-            foreach (PlayerAgent player in team.StartingEleven)
-            {
-                squadListView.AddPlayerRow(player, DescribePlayer(player), OnSquadBrowseRowClicked, GetRatingPercent(player), player == pendingInlineSubPlayer);
-            }
-
-            squadListView.AddSectionHeader($"Bench ({team.Bench.Count})");
-
-            foreach (PlayerAgent player in team.Bench)
-            {
-                squadListView.AddPlayerRow(player, DescribePlayer(player), OnSquadBrowseRowClicked, GetRatingPercent(player), player == pendingInlineSubPlayer);
-            }
+            RefreshTacticsBoardUI();
         }
 
         private static float GetRatingPercent(PlayerAgent player)
         {
             return GetDisplayRating(player.GetOverallRating()) / 99f;
-        }
-
-        // Click-to-select subs, inline in the same list you're already looking at - no
-        // navigation. Click a bench row to arm it (highlighted); click it again to
-        // cancel; click a different bench row to switch the armed selection; click a
-        // Starting XI row while one's armed to swap them in immediately. Clicking a
-        // Starting XI row with nothing armed keeps the original "open Player Inspect"
-        // behavior, so normal browsing is unaffected.
-        private void OnSquadBrowseRowClicked(PlayerAgent player)
-        {
-            if (!player.IsStartingEleven)
-            {
-                pendingInlineSubPlayer = player == pendingInlineSubPlayer ? null : player;
-                RefreshSquadBrowseList();
-                return;
-            }
-
-            if (pendingInlineSubPlayer == null)
-            {
-                ClosePlayerListPanel();
-                OpenPlayerInspect(player);
-                return;
-            }
-
-            // The Squad screen is squad selection, not an in-match action - unlimited,
-            // same as OnMakeSubsClicked (see comment above it). Only actual in-match subs
-            // (OnSubOnPicked with subFlowIsInMatch true) count against the 5-per-match cap.
-            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
-            team.SubstitutePlayer(player, pendingInlineSubPlayer);
-
-            pendingInlineSubPlayer = null;
-            RefreshSquadBrowseList();
         }
 
         private void ShowPlayerListPanel(string title, List<PlayerAgent> players, Action<PlayerAgent> onRowClicked)
@@ -1077,7 +1534,6 @@ namespace Manager
         {
             if (playerListPanel != null) playerListPanel.SetActive(false);
             if (squadListView != null) squadListView.Clear();
-            pendingInlineSubPlayer = null;
         }
 
         public void OnPlayerListBackClicked()
@@ -1093,35 +1549,19 @@ namespace Manager
                 if (matchdayPanel != null) matchdayPanel.SetActive(true);
                 subSelectionConfirmed = true;
             }
-            else if (playerListReturnsToMatchdayPrep)
-            {
-                ShowMatchdayPrep();
-            }
             else
             {
                 ShowSeasonHub();
             }
         }
 
-        // --- Substitutions: pre-match (Season Hub/Matchday Prep/Squad screen) and
-        // in-match share this same off-then-on picker flow, but only in-match subs are
-        // capped (see OnMakeSubDuringMatchClicked) - picking your squad before kickoff
-        // is unlimited, same as real football; the 5-per-match limit only kicks in once
-        // the match is actually being played. Both ultimately mutate the same persistent
-        // AgentTeam instance for managedTeamName, so a sub made either way carries
-        // forward into future matches unless changed again. ---
-
-        public void OnMakeSubsClicked()
-        {
-            subFlowIsInMatch = false;
-            playerListReturnsToMatchdayPrep = true;
-
-            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
-
-            if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(false);
-
-            ShowPlayerListPanel("Substitute OFF (pick a starter)", new List<PlayerAgent>(team.StartingEleven), OnSubOffPicked);
-        }
+        // --- Substitutions: pre-match subs happen on the Tactics Board (drag a bench
+        // card onto a pin - see OnBenchPlayerDroppedOnPin), unlimited, same as real
+        // football before kickoff. This off-then-on picker flow exists only for the
+        // in-match case now, which IS capped (see OnMakeSubDuringMatchClicked). Both
+        // ultimately mutate the same persistent AgentTeam instance for managedTeamName,
+        // so a sub made either way carries forward into future matches unless changed
+        // again. ---
 
         public void OnMakeSubDuringMatchClicked()
         {
@@ -1166,10 +1606,6 @@ namespace Manager
                 RefreshMatchSubsStatus();
 
                 subSelectionConfirmed = true;
-            }
-            else if (playerListReturnsToMatchdayPrep)
-            {
-                ShowMatchdayPrep();
             }
             else
             {
@@ -1222,6 +1658,7 @@ namespace Manager
             }
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
             if (playerInspectPanel != null) playerInspectPanel.SetActive(true);
 
             RefreshPlayerInspectUI();
@@ -1309,7 +1746,15 @@ namespace Manager
         {
             if (playerInspectPanel != null) playerInspectPanel.SetActive(false);
 
-            ShowSeasonHub();
+            if (playerInspectReturnsToTacticsBoard)
+            {
+                playerInspectReturnsToTacticsBoard = false;
+                OnViewSquadClicked();
+            }
+            else
+            {
+                ShowSeasonHub();
+            }
         }
 
         private readonly List<GameObject> spawnedInspectElements = new();
@@ -1547,6 +1992,16 @@ namespace Manager
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(true);
 
+            // Tactic pills belong to live Match Day now, not scouting - but they're the
+            // same shared Button instances Match Day reparents into its own footer, and
+            // that reparenting only happens lazily the first time BuildMatchdayChrome runs
+            // (first Simulate Match click). Until then they're still sitting wherever they
+            // started (originally hand-placed under MatchdayPrepPanel), so explicitly hide
+            // them here rather than relying on that lazy reparent to have already happened.
+            if (attackingButton != null) attackingButton.gameObject.SetActive(false);
+            if (balancedButton != null) balancedButton.gameObject.SetActive(false);
+            if (defensiveButton != null) defensiveButton.gameObject.SetActive(false);
+
             RefreshMatchdayPrepUI();
         }
 
@@ -1629,51 +2084,19 @@ namespace Manager
 
             if (matchdayPrepSubtitleLabel != null)
             {
-                matchdayPrepSubtitleLabel.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {FormatFormation(opponentTeam.Formation)}";
+                matchdayPrepSubtitleLabel.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {TacticsBoardLayout.FormatFormation(opponentTeam.Formation)}";
             }
 
+            // Opponent scouting list is retired here - once the tactics board lands, this
+            // screen will show the opposition's formation on the board itself instead of a
+            // flat Starting XI/Bench list, so there's no point populating (or fixing the
+            // layout of) a list that's about to be replaced.
             if (opponentSquadListView != null)
             {
                 opponentSquadListView.Clear();
-                opponentSquadListView.AddSectionHeader("Starting XI");
-
-                foreach (PlayerAgent player in opponentTeam.StartingEleven)
-                {
-                    opponentSquadListView.AddPlayerRow(player, DescribePlayer(player), _ => { }, GetRatingPercent(player));
-                }
-
-                opponentSquadListView.AddSectionHeader($"Bench ({opponentTeam.Bench.Count})");
-
-                foreach (PlayerAgent player in opponentTeam.Bench)
-                {
-                    opponentSquadListView.AddPlayerRow(player, DescribePlayer(player), _ => { }, GetRatingPercent(player));
-                }
+                opponentSquadListView.gameObject.SetActive(false);
             }
 
-            HighlightSelectedTacticButton(attackingButton, selectedTactic == ManagerTactic.Attacking);
-            HighlightSelectedTacticButton(balancedButton, selectedTactic == ManagerTactic.Balanced);
-            HighlightSelectedTacticButton(defensiveButton, selectedTactic == ManagerTactic.Defensive);
-
-            // No RefreshSubsStatusUI() here - Matchday Prep is always pre-match, and
-            // pre-match subs are unlimited, so a "Subs: X/5 used" cap readout would be
-            // misleading. That status only means something once a match is live.
-            if (makeSubsButton != null) makeSubsButton.interactable = true;
-        }
-
-        // Formation enum names are PascalCase identifiers (FourThreeThree) - this converts
-        // them to the standard football notation ("4-3-3") shown in the UI.
-        private static string FormatFormation(Formation formation)
-        {
-            return formation switch
-            {
-                Formation.FourThreeThree => "4-3-3",
-                Formation.FourTwoThreeOne => "4-2-3-1",
-                Formation.FourFourTwo => "4-4-2",
-                Formation.ThreeFiveTwo => "3-5-2",
-                Formation.ThreeFourThree => "3-4-3",
-                Formation.ThreeFourTwoOne => "3-4-2-1",
-                _ => formation.ToString()
-            };
         }
 
         public void OnMatchdayPrepBackClicked()
@@ -1774,11 +2197,20 @@ namespace Manager
             homeScorersObj.transform.SetParent(matchdayPanel.transform, false);
             ManagerUITheme.SetPointAnchor(homeScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(-120f, -100f), new Vector2(260f, 44f));
             matchHomeScorersLabel = ManagerUITheme.BuildLabel(homeScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopRight, FontStyles.Normal, noWrap: false);
+            // A one-sided scoreline (hat-tricks etc.) can need more lines than this box's
+            // fixed 44px height allows - autosizing shrinks the font to fit rather than
+            // overflowing into whatever sits below (Substitutions/Match Stats).
+            matchHomeScorersLabel.enableAutoSizing = true;
+            matchHomeScorersLabel.fontSizeMin = 7;
+            matchHomeScorersLabel.fontSizeMax = 12;
 
             GameObject awayScorersObj = new GameObject("AwayScorers", typeof(RectTransform));
             awayScorersObj.transform.SetParent(matchdayPanel.transform, false);
             ManagerUITheme.SetPointAnchor(awayScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(120f, -100f), new Vector2(260f, 44f));
             matchAwayScorersLabel = ManagerUITheme.BuildLabel(awayScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
+            matchAwayScorersLabel.enableAutoSizing = true;
+            matchAwayScorersLabel.fontSizeMin = 7;
+            matchAwayScorersLabel.fontSizeMax = 12;
 
             matchFullTimeOnlyElements = new List<GameObject> { homeScorersObj, awayScorersObj };
             homeScorersObj.SetActive(false);
@@ -1864,9 +2296,23 @@ namespace Manager
                 ManagerUITheme.NormalizeButtonLabel(makeSubButton, "+ ADD SUBSTITUTION", ManagerUITheme.TextBody, 13);
             }
 
+            // Substitutions are a live-match-only concept (see also OnMakeSubDuringMatchClicked)
+            // - the design's Full-Time Summary has no Substitutions section at all, so this
+            // whole column needs to disappear at full-time exactly like the tactic pills do.
+            System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
+            matchLiveOnlyElements[^1] = subsCaptionObj;
+            System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
+            matchLiveOnlyElements[^1] = subsStatusObj;
+            if (makeSubButton != null)
+            {
+                System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
+                matchLiveOnlyElements[^1] = makeSubButton.gameObject;
+            }
+
             GameObject statsCaptionObj = new GameObject("MatchStatsCaption", typeof(RectTransform));
             statsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             RectTransform statsCaptionRect2 = statsCaptionObj.GetComponent<RectTransform>();
+            matchStatsCaptionRect = statsCaptionRect2;
             ManagerUITheme.SetPointAnchor(statsCaptionRect2, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 152f)), new Vector2(360f, 20f));
             statsCaptionRect2.pivot = new Vector2(0f, 1f);
             matchStatsCaptionLabel = ManagerUITheme.BuildLabel(statsCaptionObj.transform, "MATCH STATS", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
@@ -2364,9 +2810,15 @@ namespace Manager
 
             // Recenter the stats panel into a single centered 520-wide column (matching
             // the design) now that it doesn't need to share the row with anything else.
-            if (matchStatsCaptionLabel != null)
+            if (matchStatsCaptionRect != null)
             {
-                RectTransform captionRect = matchStatsCaptionLabel.rectTransform;
+                // Must be matchStatsCaptionRect (the "MatchStatsCaption" container that's
+                // actually parented to the canvas), not matchStatsCaptionLabel.rectTransform
+                // (BuildLabel's inner "Label" child, whose anchors/position are relative to
+                // that container instead) - repositioning the child left the container
+                // behind at its original column position and produced a nonsense on-screen
+                // spot for the text, nowhere near the intended centered position.
+                RectTransform captionRect = matchStatsCaptionRect;
                 captionRect.anchorMin = new Vector2(0.5f, 1f);
                 captionRect.anchorMax = new Vector2(0.5f, 1f);
                 captionRect.pivot = new Vector2(0f, 1f);

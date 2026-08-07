@@ -98,7 +98,10 @@ namespace Sim
             }
         }
 
-        private List<PlayerPosition> GetStartingPositions(Formation formation)
+        // Public so the Tactics Board (Manager Mode) can pair this same ordered shape
+        // with pixel/percentage pin coordinates, and so its formation-switch
+        // reassignment can build a new StartingEleven in matching slot order.
+        public List<PlayerPosition> GetStartingPositions(Formation formation)
         {
             switch (formation)
             {
@@ -182,6 +185,22 @@ namespace Sim
                         PlayerPosition.LW
                     };
 
+                case Formation.ThreeFourTwoOne:
+                    return new List<PlayerPosition>
+                    {
+                        PlayerPosition.GK,
+                        PlayerPosition.CB,
+                        PlayerPosition.CB,
+                        PlayerPosition.CB,
+                        PlayerPosition.LM,
+                        PlayerPosition.CM,
+                        PlayerPosition.CM,
+                        PlayerPosition.RM,
+                        PlayerPosition.AM,
+                        PlayerPosition.AM,
+                        PlayerPosition.ST
+                    };
+
                 default:
                     return GetStartingPositions(Formation.FourTwoThreeOne);
             }
@@ -189,7 +208,10 @@ namespace Sim
 
         private List<PlayerPosition> GetBenchPositions(Formation formation)
         {
-            // Seven-player bench: backup keeper, defensive cover, midfield cover, attacking cover.
+            // Nine-player bench (matches the current Premier League matchday-squad rule of
+            // 9 named subs, though only 5 are usable per match - see
+            // ManagerPrototypeController.MaxSubsPerMatch): backup keeper, defensive cover,
+            // midfield cover, attacking cover.
             switch (formation)
             {
                 case Formation.FourFourTwo:
@@ -198,9 +220,11 @@ namespace Sim
                         PlayerPosition.GK,
                         PlayerPosition.CB,
                         PlayerPosition.RB,
+                        PlayerPosition.LB,
                         PlayerPosition.CM,
                         PlayerPosition.LM,
                         PlayerPosition.RM,
+                        PlayerPosition.AM,
                         PlayerPosition.ST
                     };
 
@@ -209,10 +233,12 @@ namespace Sim
                     {
                         PlayerPosition.GK,
                         PlayerPosition.CB,
+                        PlayerPosition.CB,
                         PlayerPosition.RWB,
                         PlayerPosition.LWB,
                         PlayerPosition.CM,
                         PlayerPosition.AM,
+                        PlayerPosition.RM,
                         PlayerPosition.ST
                     };
                 case Formation.ThreeFourTwoOne:
@@ -220,10 +246,12 @@ namespace Sim
                     {
                         PlayerPosition.GK,
                         PlayerPosition.CB,
+                        PlayerPosition.CB,
                         PlayerPosition.RWB,
                         PlayerPosition.LWB,
                         PlayerPosition.CM,
                         PlayerPosition.AM,
+                        PlayerPosition.RM,
                         PlayerPosition.ST
                     };
 
@@ -233,9 +261,11 @@ namespace Sim
                         PlayerPosition.GK,
                         PlayerPosition.CB,
                         PlayerPosition.LB,
+                        PlayerPosition.RB,
                         PlayerPosition.CM,
                         PlayerPosition.AM,
                         PlayerPosition.RW,
+                        PlayerPosition.LW,
                         PlayerPosition.ST
                     };
             }
