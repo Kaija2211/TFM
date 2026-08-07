@@ -254,8 +254,13 @@ namespace Manager
 
         // Fresh Editor-created buttons ("Button - TextMeshPro") default to a large TMP font
         // size, which wraps/overflows once restyled with real copy. Every button touched at
-        // runtime should go through this so it never depends on whatever size the Editor
-        // happened to default to.
+        // runtime should go through this so it never depends on whatever size, alignment,
+        // or weight the Editor happened to default to - hand-placed buttons from before the
+        // code-driven reskin (e.g. the match screen's Attacking/Balanced/Defensive tactic
+        // buttons) never got their alignment/fontStyle touched by anything, so they kept
+        // whatever the Editor originally had (confirmed live: top-left aligned, non-bold,
+        // visibly different from every other button). BuildButton already sets both
+        // correctly at creation time, so this is a no-op for buttons that came from there.
         public static void NormalizeButtonLabel(Button button, string text, Color color, int fontSize)
         {
             if (button == null)
@@ -274,6 +279,8 @@ namespace Manager
             label.text = text;
             label.color = color;
             label.fontSize = fontSize;
+            label.alignment = TextAlignmentOptions.Center;
+            label.fontStyle = FontStyles.UpperCase | FontStyles.Bold;
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Truncate;
         }

@@ -142,6 +142,13 @@ namespace Manager
         private int currentFixtureIndex;
         private ManagerTactic selectedTactic = ManagerTactic.Balanced;
 
+        // TMP Sprite Assets (Assets/Resources/Manager/*.asset) - loaded once here rather
+        // than per-build-call. star-filled has star-empty wired as its fallback sprite
+        // asset (see the .asset itself), so a single <sprite name="..."> tag in text
+        // assigned this as its spriteAsset can resolve either glyph.
+        private TMP_SpriteAsset weakFootStarSpriteAsset;
+        private TMP_SpriteAsset footballIconSpriteAsset;
+
         // In-memory only - there is no save system, so this never persists across sessions.
         private string managerName = "Manager";
         private bool titleScreenBuilt;
@@ -168,6 +175,7 @@ namespace Manager
         private bool hubChromeBuilt;
         private TextMeshProUGUI hubClubNameLabel;
         private TextMeshProUGUI hubBylineLabel;
+        private Coroutine hubBylineRecreateCoroutine;
 
         // --- Squad: Tactics Board (pitch view, drag-to-sub, formation switching) ---
         private bool tacticsBoardChromeBuilt;
@@ -209,6 +217,9 @@ namespace Manager
 
         private void Start()
         {
+            weakFootStarSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/star-filled");
+            footballIconSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/football-icon");
+
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnNextMatchdayClicked);
             if (simulateMatchButton != null) simulateMatchButton.onClick.AddListener(OnSimulateMatchClicked);
             if (matchdayPrepBackButton != null) matchdayPrepBackButton.onClick.AddListener(OnMatchdayPrepBackClicked);
@@ -356,6 +367,8 @@ namespace Manager
             {
                 label.color = ManagerUITheme.TextBody;
                 label.fontSize = 15;
+                label.alignment = TextAlignmentOptions.Center;
+                label.fontStyle = FontStyles.UpperCase | FontStyles.Bold;
                 label.textWrappingMode = TextWrappingModes.NoWrap;
                 label.overflowMode = TextOverflowModes.Truncate;
 
@@ -589,6 +602,54 @@ namespace Manager
                 fresh.raycastTarget = false;
                 fresh.ForceMeshUpdate();
             }
+        }
+
+        // See RefreshHubUI's call site. hubBylineLabel is a class field (reassigned
+        // repeatedly across the session, unlike the one-shot local labels the other
+        // recovery coroutines handle), so this reassigns it to the fresh component
+        // rather than leaving the field pointing at the destroyed one.
+        // WaitForEndOfFrame rather than a plain "yield return null" - the coroutine-
+        // race fix (StopCoroutine before restarting) cut this down a lot but didn't
+        // fully eliminate a fainter version of the same overlap (confirmed live).
+        // "yield return null" resumes at the START of the next Update, before that
+        // frame's render pass - if the old label's draw call was already queued for
+        // THIS frame by the time the destroy/recreate runs, the stale glyph can still
+        // get composited once more. Waiting for the actual end of the frame instead
+        // means the destroy/recreate always happens strictly after a render, so the
+        // freshly rebuilt mesh has a full frame to settle before it's ever drawn.
+        private IEnumerator RecreateHubBylineLabelNextFrame()
+        {
+            yield return new WaitForEndOfFrame();
+
+            if (hubBylineLabel == null)
+            {
+                yield break;
+            }
+
+            GameObject labelObject = hubBylineLabel.gameObject;
+            string text = hubBylineLabel.text;
+            float fontSize = hubBylineLabel.fontSize;
+            Color color = hubBylineLabel.color;
+            TextAlignmentOptions alignment = hubBylineLabel.alignment;
+            FontStyles fontStyle = hubBylineLabel.fontStyle;
+            float characterSpacing = hubBylineLabel.characterSpacing;
+            TMP_FontAsset font = hubBylineLabel.font;
+
+            DestroyImmediate(hubBylineLabel);
+
+            TextMeshProUGUI fresh = labelObject.AddComponent<TextMeshProUGUI>();
+            fresh.font = font;
+            fresh.text = text;
+            fresh.fontSize = fontSize;
+            fresh.color = color;
+            fresh.alignment = alignment;
+            fresh.fontStyle = fontStyle;
+            fresh.characterSpacing = characterSpacing;
+            fresh.raycastTarget = false;
+            fresh.ForceMeshUpdate();
+
+            hubBylineLabel = fresh;
+            hubBylineRecreateCoroutine = null;
         }
 
         public void OnTitleNewCareerClicked()
@@ -1072,6 +1133,27 @@ namespace Manager
             if (hubBylineLabel != null)
             {
                 hubBylineLabel.text = $"Manager {managerName}   ·   Matchday {currentFixtureIndex + 1}";
+
+                // Same family of TMP mesh-generation flakiness as the blank-label bug
+                // (see RecoverBlankLabelNextFrame) - here it showed up as the OLD glyph
+                // mesh not being cleared, so old and new text render overlapped on top
+                // of each other (confirmed live, after the first matchday). Unlike the
+                // blank case there's no reliable characterCount check to detect it, so
+                // this just unconditionally destroys+recreates the label every refresh
+                // rather than trying to detect the failure first - cheap, since this
+                // only runs when returning to the Hub, not on a hot path.
+                // Must stop any coroutine already in flight from a PREVIOUS RefreshHubUI
+                // call first - without this, returning to the Hub again before the prior
+                // one-frame wait elapsed (confirmed live to happen by matchday 5) started
+                // a second recreate on top of the first, and the two destroy/recreate
+                // cycles racing each other is exactly what produced the overlapping text,
+                // not a one-off fluke.
+                if (hubBylineRecreateCoroutine != null)
+                {
+                    StopCoroutine(hubBylineRecreateCoroutine);
+                }
+
+                hubBylineRecreateCoroutine = StartCoroutine(RecreateHubBylineLabelNextFrame());
             }
 
             bool hasNextFixture = currentFixtureIndex < managedTeamFixtures.Count;
@@ -1202,17 +1284,38 @@ namespace Manager
             GameObject pitchObj = new GameObject("Pitch", typeof(RectTransform), typeof(Image));
             pitchObj.transform.SetParent(tacticsBoardPanel.transform, false);
             tacticsBoardPitchContainer = pitchObj.GetComponent<RectTransform>();
-            tacticsBoardPitchContainer.anchorMin = Vector2.zero;
-            tacticsBoardPitchContainer.anchorMax = Vector2.one;
-            tacticsBoardPitchContainer.offsetMin = new Vector2(40f, benchHeight + 20f);
-            tacticsBoardPitchContainer.offsetMax = new Vector2(-40f, -(headerHeight + 20f));
+
+            // Constrained to a fixed aspect ratio (1130:700, matching design's Tactics
+            // Board mockup) instead of stretching to fill the panel's full width - the
+            // panel is far wider than a pitch region is tall, so a full-width pitch read
+            // as a smeared rectangle with no visible formation shape. Width-fit against
+            // the available height (the tighter dimension here), centered, leaving empty
+            // margin on either side by design. Height budget/positioning unchanged from
+            // before, so the pin vertical-compression factor in BuildTacticsBoardPin
+            // still applies.
+            const float pitchAspectRatio = 1130f / 700f;
+            float availableWidth = panelRect.rect.width - 80f;
+            float availableHeight = panelRect.rect.height - (headerHeight + 20f) - (benchHeight + 20f);
+            float pitchWidth = Mathf.Min(availableWidth, availableHeight * pitchAspectRatio);
+            float pitchHeight = pitchWidth / pitchAspectRatio;
+
+            tacticsBoardPitchContainer.anchorMin = new Vector2(0.5f, 0f);
+            tacticsBoardPitchContainer.anchorMax = new Vector2(0.5f, 0f);
+            tacticsBoardPitchContainer.pivot = new Vector2(0.5f, 0f);
+            tacticsBoardPitchContainer.anchoredPosition = new Vector2(0f, benchHeight + 20f);
+            tacticsBoardPitchContainer.sizeDelta = new Vector2(pitchWidth, pitchHeight);
             pitchObj.GetComponent<Image>().color = ManagerUITheme.PanelDark;
 
             BuildPitchMarkings(tacticsBoardPitchContainer);
 
+            // Positioned at benchHeight-12 (not -24) so its bottom edge clears the scroll
+            // view's top edge (at y=16+64=80) with a few px of breathing room, instead of
+            // overlapping it - confirmed live, the two were almost touching. The extra
+            // headroom this eats into is the 20px gap already reserved between the bench
+            // band and the pitch above it, so this doesn't touch pitch geometry.
             GameObject benchCaptionObj = new GameObject("BenchCaption", typeof(RectTransform));
             benchCaptionObj.transform.SetParent(tacticsBoardPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(benchCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(40f, benchHeight - 24f), new Vector2(600f, 20f));
+            ManagerUITheme.SetPointAnchor(benchCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(40f, benchHeight - 12f), new Vector2(600f, 20f));
             ManagerUITheme.BuildLabel(benchCaptionObj.transform, "BENCH · DRAG A PLAYER ONTO THE PITCH TO SUBSTITUTE", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             // Horizontal scroll row: same ScrollRect+Viewport+Content pattern as the
@@ -1263,6 +1366,51 @@ namespace Manager
             scrollRect.vertical = false;
             scrollRect.viewport = viewportRect;
             scrollRect.content = tacticsBoardBenchContent;
+
+            // Slim scrollbar in the 16px gap below the card row - the bench row itself was
+            // already a working horizontal ScrollRect (drag or mouse-wheel scrolls it,
+            // confirmed live), but with more bench players than fit in one screen's width
+            // and no visible affordance, it read as broken/missing subs rather than "there's
+            // more, scroll for it". This is purely a discoverability fix, not a functional one.
+            GameObject scrollbarObj = new GameObject("BenchScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
+            scrollbarObj.transform.SetParent(tacticsBoardPanel.transform, false);
+            RectTransform scrollbarRect = scrollbarObj.GetComponent<RectTransform>();
+            scrollbarRect.anchorMin = new Vector2(0f, 0f);
+            scrollbarRect.anchorMax = new Vector2(1f, 0f);
+            scrollbarRect.pivot = new Vector2(0.5f, 0f);
+            scrollbarRect.anchoredPosition = new Vector2(0f, 4f);
+            scrollbarRect.sizeDelta = new Vector2(-80f, 6f);
+            scrollbarObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            GameObject handleAreaObj = new GameObject("SlidingArea", typeof(RectTransform));
+            handleAreaObj.transform.SetParent(scrollbarObj.transform, false);
+            RectTransform handleAreaRect = handleAreaObj.GetComponent<RectTransform>();
+            handleAreaRect.anchorMin = Vector2.zero;
+            handleAreaRect.anchorMax = Vector2.one;
+            handleAreaRect.offsetMin = Vector2.zero;
+            handleAreaRect.offsetMax = Vector2.zero;
+
+            GameObject handleObj = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handleObj.transform.SetParent(handleAreaObj.transform, false);
+            RectTransform handleRect = handleObj.GetComponent<RectTransform>();
+            handleRect.anchorMin = Vector2.zero;
+            handleRect.anchorMax = new Vector2(0.3f, 1f);
+            // Must be zeroed explicitly - a fresh RectTransform's default sizeDelta is
+            // (100,100), which under stretched anchors ADDS 100px to the computed size
+            // rather than being ignored, blowing the handle up far past this 6px-tall bar
+            // (confirmed live: rendered as a huge block covering the bench row).
+            handleRect.sizeDelta = Vector2.zero;
+            handleRect.offsetMin = Vector2.zero;
+            handleRect.offsetMax = Vector2.zero;
+            handleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.LeftToRight;
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handleObj.GetComponent<Image>();
+
+            scrollRect.horizontalScrollbar = scrollbar;
+            scrollRect.horizontalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
 
             BuildTacticsBoardFormationDropdown();
         }
@@ -1490,7 +1638,11 @@ namespace Manager
             // a player stacked close behind another on the same flank (e.g. a back-three
             // formation's GK sitting right above its central CB) visibly overlap here,
             // even though they had enough room in the source design's taller pitch.
-            const float verticalCompression = 0.66f;
+            // Raised from 0.66 - that value still left GK/CB pins overlapping in
+            // back-three formations (confirmed live), and there's more headroom to work
+            // with than 0.66 assumed (checked against every formation's most extreme pin
+            // percentages, 0.85 keeps all of them comfortably inside the pitch box).
+            const float verticalCompression = 0.85f;
             float compressedTopPercent = 0.5f + (pinPercent.y - 0.5f) * verticalCompression;
 
             Vector2 anchor = new Vector2(pinPercent.x, 1f - compressedTopPercent);
@@ -1909,7 +2061,8 @@ namespace Manager
             metaRect.sizeDelta = new Vector2(-220f, 22f);
             metaRect.anchoredPosition = new Vector2(116f, -54f);
             string metaText = $"{player.Role}  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
-            ManagerUITheme.BuildLabel(metaLabel.transform, metaText, 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            TextMeshProUGUI metaTMP = ManagerUITheme.BuildLabel(metaLabel.transform, metaText, 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            if (weakFootStarSpriteAsset != null) metaTMP.spriteAsset = weakFootStarSpriteAsset;
 
             float badgeX = 116f;
             AddPositionBadge(headerBand.transform, player.PrimaryPosition.ToString(), badgeX, true);
@@ -2046,10 +2199,19 @@ namespace Manager
             nameText.transform.SetParent(labelRow.transform, false);
             RectTransform nameRect = nameText.GetComponent<RectTransform>();
             nameRect.anchorMin = Vector2.zero;
-            nameRect.anchorMax = Vector2.one;
+            nameRect.anchorMax = new Vector2(0.8f, 1f);
             nameRect.offsetMin = Vector2.zero;
             nameRect.offsetMax = Vector2.zero;
             ManagerUITheme.BuildLabel(nameText.transform, label, 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
+
+            GameObject valueText = new GameObject("Value", typeof(RectTransform));
+            valueText.transform.SetParent(labelRow.transform, false);
+            RectTransform valueRect = valueText.GetComponent<RectTransform>();
+            valueRect.anchorMin = new Vector2(0.8f, 0f);
+            valueRect.anchorMax = Vector2.one;
+            valueRect.offsetMin = Vector2.zero;
+            valueRect.offsetMax = Vector2.zero;
+            ManagerUITheme.BuildLabel(valueText.transform, Mathf.RoundToInt(value).ToString(), 13, ManagerUITheme.RatingColor(value), TextAlignmentOptions.MidlineRight, FontStyles.Bold);
 
             GameObject barRow = new GameObject($"AttrBar_{label}", typeof(RectTransform));
             barRow.transform.SetParent(parent, false);
@@ -2059,13 +2221,32 @@ namespace Manager
             return topOffset + 34f;
         }
 
-        // "||||-" style rather than star glyphs (★/☆ aren't in Oswald's glyph set at all -
-        // same missing-glyph issue as the em-dash earlier, but this font has no symbols to
-        // fall back on) or a raw number (kept off attribute rows/ratings per direction).
+        // Weak foot uses a star rating rather than a raw number - unlike the attribute
+        // rows above (which do show their numeric value), weak foot is intentionally
+        // kept as a qualitative 1-5 rating instead.
+        // Star icons rather than the old "|||--" ASCII bars - relies on the caller
+        // assigning weakFootStarSpriteAsset to the label's spriteAsset (star-empty is
+        // wired as its fallback, so both glyphs resolve from a single sprite tag).
         private static string BuildFootRating(float rawValue)
         {
             int filled = Mathf.Clamp(Mathf.RoundToInt(rawValue / 20f), 1, 5);
-            return new string('|', filled) + new string('-', 5 - filled);
+            const string filledTag = "<sprite name=\"star-filled\">";
+            const string emptyTag = "<sprite name=\"star-empty\">";
+
+            // <sprite> has no "size" attribute in TMP - an earlier attempt at
+            // size=60% directly on the tag silently failed to parse and printed the
+            // tag text literally (confirmed live). <size=X%>...</size> is the
+            // real, documented way to scale inline content.
+            // <voffset> nudges the sprite block down to sit on the surrounding text's
+            // baseline instead of its own glyph-metric default (confirmed live: without
+            // it the stars sat high and crowded right up against "Weak Foot:" with no
+            // visible gap despite the space already in the caller's format string).
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append(" <voffset=-0.15em><size=60%>");
+            for (int i = 0; i < filled; i++) sb.Append(filledTag);
+            for (int i = filled; i < 5; i++) sb.Append(emptyTag);
+            sb.Append("</size></voffset>");
+            return sb.ToString();
         }
 
         // --- Matchday Prep (opponent scouting, Tactic, pre-match Subs - shown before
@@ -2250,9 +2431,14 @@ namespace Manager
             pauseButton.onClick.AddListener(OnPauseClicked);
 
             // --- Score row: team names flank a centered score + minute/LIVE tag ---
+            // Moved up from -64 (and team names from -72, scorers from -108 below) -
+            // the score/team-name row was crowding the very top of the panel while the
+            // full-time scorer row right below it was crammed almost flush against the
+            // header's bottom divider, with barely any gap between the two (confirmed
+            // live). This frees up room right below the divider for the scorer row.
             if (scoreText != null)
             {
-                ManagerUITheme.SetPointAnchor(scoreText.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -64f), new Vector2(220f, 44f));
+                ManagerUITheme.SetPointAnchor(scoreText.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -56f), new Vector2(220f, 44f));
                 scoreText.fontSize = 32;
                 scoreText.alignment = TextAlignmentOptions.Center;
                 scoreText.textWrappingMode = TextWrappingModes.NoWrap;
@@ -2271,7 +2457,7 @@ namespace Manager
             homeNameRect.anchorMin = new Vector2(0.5f, 1f);
             homeNameRect.anchorMax = new Vector2(0.5f, 1f);
             homeNameRect.pivot = new Vector2(1f, 1f);
-            homeNameRect.anchoredPosition = new Vector2(-120f, -72f);
+            homeNameRect.anchoredPosition = new Vector2(-120f, -64f);
             homeNameRect.sizeDelta = new Vector2(260f, 32f);
             matchHomeNameLabel = ManagerUITheme.BuildLabel(homeNameObj.transform, "", 18, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
 
@@ -2281,7 +2467,7 @@ namespace Manager
             awayNameRect.anchorMin = new Vector2(0.5f, 1f);
             awayNameRect.anchorMax = new Vector2(0.5f, 1f);
             awayNameRect.pivot = new Vector2(0f, 1f);
-            awayNameRect.anchoredPosition = new Vector2(120f, -72f);
+            awayNameRect.anchoredPosition = new Vector2(120f, -64f);
             awayNameRect.sizeDelta = new Vector2(260f, 32f);
             matchAwayNameLabel = ManagerUITheme.BuildLabel(awayNameObj.transform, "", 18, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
@@ -2300,10 +2486,15 @@ namespace Manager
             // overlapped by 20px there regardless of text, invisible with short scorer
             // names/few goals but a real collision once a name or scorer count pushed
             // right up against that boundary (confirmed live).
+            // Y moved from -108 to -128 - at -108 the text (top-aligned within this box)
+            // rendered right on top of the header's bottom divider with no visible gap
+            // (confirmed live); the header band itself isn't a mask, so this box is free
+            // to sit further down past the divider into the body's dark background.
             GameObject homeScorersObj = new GameObject("HomeScorers", typeof(RectTransform));
             homeScorersObj.transform.SetParent(matchdayPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(homeScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(-120f, -108f), new Vector2(220f, 44f));
+            ManagerUITheme.SetPointAnchor(homeScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(-120f, -128f), new Vector2(220f, 44f));
             matchHomeScorersLabel = ManagerUITheme.BuildLabel(homeScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopRight, FontStyles.Normal, noWrap: false);
+            if (footballIconSpriteAsset != null) matchHomeScorersLabel.spriteAsset = footballIconSpriteAsset;
             // A one-sided scoreline (hat-tricks etc.) can need more lines than this box's
             // fixed 44px height allows - autosizing shrinks the font to fit rather than
             // overflowing into whatever sits below (Substitutions/Match Stats).
@@ -2313,8 +2504,9 @@ namespace Manager
 
             GameObject awayScorersObj = new GameObject("AwayScorers", typeof(RectTransform));
             awayScorersObj.transform.SetParent(matchdayPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(awayScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(120f, -108f), new Vector2(220f, 44f));
+            ManagerUITheme.SetPointAnchor(awayScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(120f, -128f), new Vector2(220f, 44f));
             matchAwayScorersLabel = ManagerUITheme.BuildLabel(awayScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
+            if (footballIconSpriteAsset != null) matchAwayScorersLabel.spriteAsset = footballIconSpriteAsset;
             matchAwayScorersLabel.enableAutoSizing = true;
             matchAwayScorersLabel.fontSizeMin = 7;
             matchAwayScorersLabel.fontSizeMax = 12;
@@ -2458,6 +2650,11 @@ namespace Manager
             {
                 attackingButton.transform.SetParent(footerBand.transform, false);
                 ManagerUITheme.SetPointAnchor(attackingButton.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(120f, 0f), new Vector2(120f, 44f));
+                // Hand-placed Editor buttons, never routed through BuildButton - their
+                // labels kept the Editor's original alignment/font/weight until now
+                // (confirmed live: top-left aligned, non-bold, visibly different from
+                // every other button in the app).
+                ManagerUITheme.NormalizeButtonLabel(attackingButton, "ATTACKING", ManagerUITheme.TextBody, 13);
                 System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
                 matchLiveOnlyElements[^1] = attackingButton.gameObject;
             }
@@ -2466,6 +2663,7 @@ namespace Manager
             {
                 balancedButton.transform.SetParent(footerBand.transform, false);
                 ManagerUITheme.SetPointAnchor(balancedButton.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(250f, 0f), new Vector2(120f, 44f));
+                ManagerUITheme.NormalizeButtonLabel(balancedButton, "BALANCED", ManagerUITheme.TextBody, 13);
                 System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
                 matchLiveOnlyElements[^1] = balancedButton.gameObject;
             }
@@ -2474,6 +2672,7 @@ namespace Manager
             {
                 defensiveButton.transform.SetParent(footerBand.transform, false);
                 ManagerUITheme.SetPointAnchor(defensiveButton.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(380f, 0f), new Vector2(120f, 44f));
+                ManagerUITheme.NormalizeButtonLabel(defensiveButton, "DEFENSIVE", ManagerUITheme.TextBody, 13);
                 System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
                 matchLiveOnlyElements[^1] = defensiveButton.gameObject;
             }
@@ -2586,7 +2785,9 @@ namespace Manager
             tacticLineRect.pivot = new Vector2(0f, 1f);
             tacticLineRect.anchoredPosition = new Vector2(0f, -y - 8f);
             tacticLineRect.sizeDelta = new Vector2(0f, 22f);
-            ManagerUITheme.BuildLabel(tacticLineObj.transform, $"Tactic used: {tacticUsedForCurrentMatch}", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            // Centered, matching the design's Full-Time Summary board (it centers this
+            // line under the stat bars rather than left-aligning it).
+            ManagerUITheme.BuildLabel(tacticLineObj.transform, $"Tactic used: {tacticUsedForCurrentMatch}", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
         }
 
         private float BuildFullTimeStatRow(string label, int homeValue, int awayValue, float y)
@@ -2655,6 +2856,23 @@ namespace Manager
             RefreshMatchSubsStatus();
             if (matchFullTimeCaptionGroup != null) matchFullTimeCaptionGroup.SetActive(false);
 
+            // Undo everything ShowFullTimeResults did to these shared elements for the
+            // previous match - without this, the second matchday inherited the first
+            // match's full-time layout (centered/repositioned stats panel, hidden match
+            // log, full-time-only scorer lists and View Match Events button still
+            // visible) and rendered as an overlapping mess (confirmed live: fine on
+            // matchday 1, badly broken on matchday 2).
+            if (matchKeyMomentsCaptionRect != null) matchKeyMomentsCaptionRect.gameObject.SetActive(true);
+            if (matchLogGroup != null) matchLogGroup.SetActive(true);
+            if (matchFullTimeOnlyElements != null)
+            {
+                foreach (GameObject fullTimeElement in matchFullTimeOnlyElements)
+                {
+                    if (fullTimeElement != null) fullTimeElement.SetActive(false);
+                }
+            }
+            ResetMatchStatsPanelToLiveLayout();
+
             foreach (GameObject liveElement in matchLiveOnlyElements)
             {
                 if (liveElement != null) liveElement.SetActive(true);
@@ -2666,6 +2884,33 @@ namespace Manager
             }
 
             StartCoroutine(ReplayMatchCoroutine(result));
+        }
+
+        // Mirrors the anchor/position/size BuildMatchdayChrome originally gave these two
+        // elements for the live two-column layout - must match those values exactly,
+        // since ShowFullTimeResults overwrites them in place (same RectTransforms,
+        // reused rather than rebuilt) to get the full-time centered layout.
+        private void ResetMatchStatsPanelToLiveLayout()
+        {
+            const float headerHeight = 110f;
+
+            if (matchStatsCaptionRect != null)
+            {
+                matchStatsCaptionRect.anchorMin = new Vector2(0.55f, 1f);
+                matchStatsCaptionRect.anchorMax = new Vector2(0.55f, 1f);
+                matchStatsCaptionRect.pivot = new Vector2(0f, 1f);
+                matchStatsCaptionRect.anchoredPosition = new Vector2(20f, -(headerHeight + 152f));
+                matchStatsCaptionRect.sizeDelta = new Vector2(360f, 20f);
+            }
+
+            if (matchStatsBarsContainer != null)
+            {
+                matchStatsBarsContainer.anchorMin = new Vector2(0.55f, 1f);
+                matchStatsBarsContainer.anchorMax = new Vector2(0.55f, 1f);
+                matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
+                matchStatsBarsContainer.anchoredPosition = new Vector2(20f, -(headerHeight + 180f));
+                matchStatsBarsContainer.sizeDelta = new Vector2(360f, 140f);
+            }
         }
 
         // Instantly plays out every remaining fixture with no matchday replay, applying
@@ -2802,7 +3047,33 @@ namespace Manager
             {
                 if (!skipToResultsRequested)
                 {
-                    yield return new WaitForSeconds(secondsPerMinute);
+                    // Was a single blocking WaitForSeconds(secondsPerMinute) - since that's
+                    // scaled-time, it (correctly) freezes solid while paused (timeScale=0),
+                    // but that also meant a sub requested while paused couldn't be noticed
+                    // until this wait naturally elapsed, which can only happen after
+                    // resuming - the picker only ever popped open right when you hit
+                    // Resume, not when you actually pressed the sub button (confirmed
+                    // live). Polling per-frame with an early-exit lets a paused sub
+                    // request be handled immediately without changing the normal
+                    // (unpaused) per-minute pacing at all.
+                    float elapsed = 0f;
+
+                    while (elapsed < secondsPerMinute)
+                    {
+                        // skipToResultsRequested alone (not gated on matchPaused like the
+                        // sub check) - same frozen-wait trap while paused (confirmed live:
+                        // Skip to Results silently did nothing until Resume), and breaking
+                        // early here costs nothing in the unpaused case either, since the
+                        // very next loop iteration's "if (!skipToResultsRequested)" would
+                        // have skipped the wait anyway.
+                        if ((inMatchSubRequested && matchPaused) || skipToResultsRequested)
+                        {
+                            break;
+                        }
+
+                        yield return null;
+                        elapsed += Time.deltaTime;
+                    }
                 }
 
                 if (clockText != null) clockText.text = $"{minute}' LIVE";
@@ -2917,6 +3188,10 @@ namespace Manager
 
             // Recenter the stats panel into a single centered 520-wide column (matching
             // the design) now that it doesn't need to share the row with anything else.
+            // Vertically centered in the space between the header and footer too (the
+            // mockup's own Full-Time Summary board vertically centers this block) -
+            // previously just pinned near the top, leaving a large dead gap below it
+            // before the footer (confirmed live).
             if (matchStatsCaptionRect != null)
             {
                 // Must be matchStatsCaptionRect (the "MatchStatsCaption" container that's
@@ -2929,7 +3204,7 @@ namespace Manager
                 captionRect.anchorMin = new Vector2(0.5f, 1f);
                 captionRect.anchorMax = new Vector2(0.5f, 1f);
                 captionRect.pivot = new Vector2(0f, 1f);
-                captionRect.anchoredPosition = new Vector2(-260f, -160f);
+                captionRect.anchoredPosition = new Vector2(-260f, -183f);
                 captionRect.sizeDelta = new Vector2(240f, 20f);
             }
 
@@ -2939,7 +3214,7 @@ namespace Manager
                 viewEventsRect.anchorMin = new Vector2(0.5f, 1f);
                 viewEventsRect.anchorMax = new Vector2(0.5f, 1f);
                 viewEventsRect.pivot = new Vector2(1f, 1f);
-                viewEventsRect.anchoredPosition = new Vector2(260f, -156f);
+                viewEventsRect.anchoredPosition = new Vector2(260f, -179f);
                 viewEventsRect.sizeDelta = new Vector2(220f, 32f);
             }
 
@@ -2948,7 +3223,7 @@ namespace Manager
                 matchStatsBarsContainer.anchorMin = new Vector2(0.5f, 1f);
                 matchStatsBarsContainer.anchorMax = new Vector2(0.5f, 1f);
                 matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
-                matchStatsBarsContainer.anchoredPosition = new Vector2(-260f, -192f);
+                matchStatsBarsContainer.anchoredPosition = new Vector2(-260f, -215f);
                 matchStatsBarsContainer.sizeDelta = new Vector2(520f, 150f);
             }
 
@@ -2974,10 +3249,10 @@ namespace Manager
                     continue;
                 }
 
-                // "·" not the design's soccer-ball emoji - Oswald has no symbol/emoji
-                // glyphs at all (same reason the star rating had to change earlier), and
-                // "·" is already proven to render fine in this exact font asset.
-                string line = $"· {evt.ScorerName} {evt.Minute}'\n";
+                // Football icon TMP Sprite Asset, not the "·" placeholder this used before
+                // real art existed - matchHomeScorersLabel/matchAwayScorersLabel have
+                // footballIconSpriteAsset assigned where they're built.
+                string line = $"<size=60%><sprite name=\"football-icon\"></size> {evt.ScorerName} {evt.Minute}'\n";
 
                 if (evt.HomeTeamScored)
                 {
@@ -3002,6 +3277,13 @@ namespace Manager
 
             matchPaused = false;
             Time.timeScale = 1f;
+
+            // The Match Events screen has its own Continue button wired to this same
+            // method - without hiding it here, clicking Continue from there did switch
+            // to the Hub underneath, but this still-active panel stayed on top and
+            // masked the change completely, making the button look dead from that
+            // screen (confirmed live).
+            if (matchEventsPanel != null) matchEventsPanel.SetActive(false);
 
             ShowSeasonHub();
         }
@@ -3106,7 +3388,12 @@ namespace Manager
             scrollViewRect.anchorMin = new Vector2(0f, 0f);
             scrollViewRect.anchorMax = new Vector2(1f, 1f);
             scrollViewRect.offsetMin = new Vector2(40f, footerHeight + 24f);
-            scrollViewRect.offsetMax = new Vector2(-40f, -(headerHeight + 56f));
+            // Right margin widened from 40 to 56 to make room for the scrollbar added
+            // below - same lesson as the Tactics Board bench row earlier: the list was
+            // already genuinely scrollable (mouse wheel confirmed working), but with no
+            // visible affordance it read as "broken/missing events" rather than
+            // "scroll for more" (confirmed live).
+            scrollViewRect.offsetMax = new Vector2(-56f, -(headerHeight + 56f));
 
             GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
             viewportObj.transform.SetParent(scrollViewObj.transform, false);
@@ -3141,6 +3428,53 @@ namespace Manager
             scrollRect.horizontal = false;
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            // Negated from the default +1 - mouse wheel felt backwards (scrolling down
+            // revealed earlier events instead of later ones, confirmed live) with
+            // Unity's stock sign convention on this setup.
+            scrollRect.scrollSensitivity = -1f;
+
+            // Slim vertical scrollbar in the 16px gap freed up above - see the comment
+            // on scrollViewRect.offsetMax.
+            GameObject scrollbarObj = new GameObject("MatchEventsScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
+            scrollbarObj.transform.SetParent(matchEventsPanel.transform, false);
+            RectTransform scrollbarRect = scrollbarObj.GetComponent<RectTransform>();
+            scrollbarRect.anchorMin = new Vector2(1f, 0f);
+            scrollbarRect.anchorMax = new Vector2(1f, 1f);
+            // offsetMin/offsetMax, not sizeDelta - mirrors scrollViewRect's own margins
+            // exactly (footerHeight+24 bottom, headerHeight+56 top) so the two line up,
+            // and avoids the sizeDelta-under-stretched-anchors trap entirely.
+            scrollbarRect.offsetMin = new Vector2(-46f, footerHeight + 24f);
+            scrollbarRect.offsetMax = new Vector2(-40f, -(headerHeight + 56f));
+            scrollbarObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            GameObject scrollHandleAreaObj = new GameObject("SlidingArea", typeof(RectTransform));
+            scrollHandleAreaObj.transform.SetParent(scrollbarObj.transform, false);
+            RectTransform scrollHandleAreaRect = scrollHandleAreaObj.GetComponent<RectTransform>();
+            scrollHandleAreaRect.anchorMin = Vector2.zero;
+            scrollHandleAreaRect.anchorMax = Vector2.one;
+            scrollHandleAreaRect.offsetMin = Vector2.zero;
+            scrollHandleAreaRect.offsetMax = Vector2.zero;
+
+            GameObject scrollHandleObj = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            scrollHandleObj.transform.SetParent(scrollHandleAreaObj.transform, false);
+            RectTransform scrollHandleRect = scrollHandleObj.GetComponent<RectTransform>();
+            scrollHandleRect.anchorMin = Vector2.zero;
+            scrollHandleRect.anchorMax = new Vector2(1f, 0.3f);
+            // Must be zeroed explicitly - a fresh RectTransform's default sizeDelta is
+            // (100,100), which under stretched anchors ADDS 100px to the computed size
+            // rather than being ignored (confirmed live on the bench scrollbar earlier).
+            scrollHandleRect.sizeDelta = Vector2.zero;
+            scrollHandleRect.offsetMin = Vector2.zero;
+            scrollHandleRect.offsetMax = Vector2.zero;
+            scrollHandleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.TopToBottom;
+            scrollbar.handleRect = scrollHandleRect;
+            scrollbar.targetGraphic = scrollHandleObj.GetComponent<Image>();
+
+            scrollRect.verticalScrollbar = scrollbar;
+            scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
 
             Button continueButton = ManagerUITheme.BuildButton(footer.transform, "CONTINUE", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 15);
             ManagerUITheme.SetPointAnchor(continueButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-40f, 0f), new Vector2(220f, 50f));

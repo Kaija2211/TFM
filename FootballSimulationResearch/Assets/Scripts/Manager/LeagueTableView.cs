@@ -8,9 +8,12 @@ using Sim;
 namespace Manager
 {
     // Runtime-generated scrollable league table grid, parallel to SquadListView. One
-    // header row plus one row per club (#, Club, Pts, P, W, D, L, GF, GA), with the
+    // header row plus one row per club (#, Club, Pts, P, W, D, L, GD), with the
     // managed club's row highlighted in accent green. Built and laid out entirely in
-    // code, same convention as every other list in Manager Mode.
+    // code, same convention as every other list in Manager Mode. Shows GD (goal
+    // difference) rather than separate GF/GA columns - this is a Manager Mode display
+    // choice only, unconnected to LeagueTable.Entry's own GoalsFor/GoalsAgainst fields
+    // (which stay untouched, still used by Research Mode's evaluation output).
     public class LeagueTableView : MonoBehaviour
     {
         // Assign to the "Content" RectTransform of a standard Unity Scroll View.
@@ -19,8 +22,8 @@ namespace Manager
         [SerializeField] private float headerRowHeight = 22f;
         [SerializeField] private int fontSize = 13;
 
-        private static readonly float[] ColumnFractions = { 0.07f, 0.30f, 0.09f, 0.09f, 0.09f, 0.09f, 0.09f, 0.09f, 0.09f };
-        private static readonly string[] ColumnHeaders = { "#", "CLUB", "PTS", "P", "W", "D", "L", "GF", "GA" };
+        private static readonly float[] ColumnFractions = { 0.07f, 0.34f, 0.10f, 0.10f, 0.10f, 0.10f, 0.10f, 0.09f };
+        private static readonly string[] ColumnHeaders = { "#", "CLUB", "PTS", "P", "W", "D", "L", "GD" };
 
         private readonly List<GameObject> spawnedRows = new();
 
@@ -42,6 +45,8 @@ namespace Manager
                 LeagueTable.Entry entry = sortedEntries[i];
                 bool highlighted = entry.TeamId == highlightedTeamId;
 
+                int goalDifference = entry.GoalsFor - entry.GoalsAgainst;
+
                 string[] cells =
                 {
                     (i + 1).ToString(),
@@ -51,8 +56,7 @@ namespace Manager
                     entry.Wins.ToString(),
                     entry.Draws.ToString(),
                     entry.Losses.ToString(),
-                    entry.GoalsFor.ToString(),
-                    entry.GoalsAgainst.ToString()
+                    goalDifference > 0 ? $"+{goalDifference}" : goalDifference.ToString()
                 };
 
                 Color background = highlighted ? ManagerUITheme.CardNeutral : ManagerUITheme.CardNeutralAlt;
