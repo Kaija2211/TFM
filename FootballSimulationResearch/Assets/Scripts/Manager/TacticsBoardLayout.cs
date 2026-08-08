@@ -14,17 +14,20 @@ namespace Manager
     // CSS convention (0 = visual top of the pitch, near the opponent's goal; 1 = visual
     // bottom, GK's own goal). BuildPitchPin converts that to Unity's bottom-up anchor
     // fraction (anchorY = 1 - topPercent) rather than storing pre-converted values, so
-    // this table stays a direct, auditable copy of the source design's own numbers -
-    // ONE deliberate deviation carried over from the original 960x540 canvas: every
-    // formation's GK is nudged from the source's 0.90 to 0.95. That canvas's pitch
-    // region topped out around 350-400px tall (vs the mockup's own ~600-700px), which
-    // compressed the source's 10% GK-to-back-line gap into a real label overlap
-    // (confirmed live). Now that the canvas is a native 1920x1080 (pitch genuinely
-    // ~900px tall, close to the source design's own proportions), this nudge and
-    // BuildTacticsBoardPin's separate vertical-compression factor (now removed
-    // entirely) may no longer be needed - re-verify live per formation, including the
-    // un-mocked 4-3-3, before assuming 0.95 is still the right value over the
-    // source's own 0.90.
+    // this table stays a direct, auditable copy of the source design's own numbers.
+    // Every formation's GK briefly used 0.95 instead of the source's 0.90 to compensate
+    // for the old 960x540 canvas's short ~350-400px pitch, which compressed the
+    // source's 10% GK-to-back-line gap into a real label overlap. Reverted back to the
+    // source's own 0.90 now that the canvas is a native 1920x1080 (pitch genuinely
+    // ~900px tall) - 0.95 was instead sitting the GK pin right on the pitch's bottom
+    // edge (confirmed live).
+    //
+    // Second deviation from the source: the three back-three formations' center CB
+    // (ThreeFiveTwo/ThreeFourThree/ThreeFourTwoOne) is 0.74 here, not the source's 0.80.
+    // At 0.80 it was only a 0.10 gap from the GK's 0.90 - visibly overlapping the GK pin
+    // (confirmed live), tighter than every other back line's ~0.14-0.18 gap since a
+    // back-three's center CB sits deeper than its own side CBs by design. 0.74 keeps it
+    // roughly level with the 0.76 side CBs instead of dropping deeper still.
     public static class TacticsBoardLayout
     {
         private static readonly Dictionary<Formation, Vector2[]> Pins = new()
@@ -32,7 +35,7 @@ namespace Manager
             // GK, RB, CB, CB, LB, DM, CM, CM, RW, ST, LW
             [Formation.FourThreeThree] = new[]
             {
-                new Vector2(0.50f, 0.95f),
+                new Vector2(0.50f, 0.90f),
                 new Vector2(0.85f, 0.72f),
                 new Vector2(0.65f, 0.76f),
                 new Vector2(0.35f, 0.76f),
@@ -48,7 +51,7 @@ namespace Manager
             // GK, RB, CB, CB, LB, DM, DM, RW, AM, LW, ST
             [Formation.FourTwoThreeOne] = new[]
             {
-                new Vector2(0.50f, 0.95f),
+                new Vector2(0.50f, 0.90f),
                 new Vector2(0.85f, 0.72f),
                 new Vector2(0.65f, 0.76f),
                 new Vector2(0.35f, 0.76f),
@@ -64,7 +67,7 @@ namespace Manager
             // GK, RB, CB, CB, LB, RM, CM, CM, LM, ST, ST
             [Formation.FourFourTwo] = new[]
             {
-                new Vector2(0.50f, 0.95f),
+                new Vector2(0.50f, 0.90f),
                 new Vector2(0.85f, 0.72f),
                 new Vector2(0.65f, 0.76f),
                 new Vector2(0.35f, 0.76f),
@@ -80,9 +83,9 @@ namespace Manager
             // GK, CB, CB, CB, RWB, CM, DM, CM, LWB, ST, ST
             [Formation.ThreeFiveTwo] = new[]
             {
-                new Vector2(0.50f, 0.95f),
+                new Vector2(0.50f, 0.90f),
                 new Vector2(0.70f, 0.76f),
-                new Vector2(0.50f, 0.80f),
+                new Vector2(0.50f, 0.74f),
                 new Vector2(0.30f, 0.76f),
                 new Vector2(0.88f, 0.50f),
                 new Vector2(0.32f, 0.53f),
@@ -96,9 +99,9 @@ namespace Manager
             // GK, CB, CB, CB, RM, CM, CM, LM, RW, ST, LW
             [Formation.ThreeFourThree] = new[]
             {
-                new Vector2(0.50f, 0.95f),
+                new Vector2(0.50f, 0.90f),
                 new Vector2(0.70f, 0.76f),
-                new Vector2(0.50f, 0.80f),
+                new Vector2(0.50f, 0.74f),
                 new Vector2(0.30f, 0.76f),
                 new Vector2(0.85f, 0.50f),
                 new Vector2(0.38f, 0.52f),
@@ -112,9 +115,9 @@ namespace Manager
             // GK, CB, CB, CB, LM, CM, CM, RM, AM, AM, ST
             [Formation.ThreeFourTwoOne] = new[]
             {
-                new Vector2(0.50f, 0.95f),
+                new Vector2(0.50f, 0.90f),
                 new Vector2(0.70f, 0.76f),
-                new Vector2(0.50f, 0.80f),
+                new Vector2(0.50f, 0.74f),
                 new Vector2(0.30f, 0.76f),
                 new Vector2(0.15f, 0.50f),
                 new Vector2(0.38f, 0.52f),

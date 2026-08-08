@@ -21,16 +21,22 @@ namespace Manager
     {
         // Assign to the "Content" RectTransform of a standard Unity Scroll View.
         [SerializeField] private RectTransform rowContainer;
-        [SerializeField] private float rowHeight = 28f;
-        [SerializeField] private float headerRowHeight = 22f;
-        [SerializeField] private int fontSize = 13;
+        [SerializeField] private float rowHeight = 48f;
+        [SerializeField] private float headerRowHeight = 32f;
+        [SerializeField] private int fontSize = 20;
 
-        private static readonly float[] ColumnFractions = { 0.09f, 0.35f, 0.14f, 0.14f, 0.14f, 0.14f };
+        // PL/GD/PTS are centered rather than right-aligned so their short values sit in
+        // the middle of their column instead of glued to its far edge - right-aligning a
+        // 1-2 digit number in a wide column left a large dead gap on the column's near
+        // side (confirmed live: looked like a big gap between PL and GD, and FORM's
+        // left-aligned text starting immediately made it look squeezed against GD's
+        // right-aligned text with almost no gap at all).
+        private static readonly float[] ColumnFractions = { 0.07f, 0.33f, 0.11f, 0.11f, 0.25f, 0.13f };
         private static readonly string[] ColumnHeaders = { "#", "CLUB", "PL", "GD", "FORM", "PTS" };
         private static readonly TextAlignmentOptions[] ColumnAlignments =
         {
-            TextAlignmentOptions.MidlineRight, TextAlignmentOptions.MidlineLeft, TextAlignmentOptions.MidlineRight,
-            TextAlignmentOptions.MidlineRight, TextAlignmentOptions.MidlineLeft, TextAlignmentOptions.MidlineRight
+            TextAlignmentOptions.MidlineRight, TextAlignmentOptions.MidlineLeft, TextAlignmentOptions.Center,
+            TextAlignmentOptions.Center, TextAlignmentOptions.MidlineLeft, TextAlignmentOptions.Center
         };
 
         private readonly List<GameObject> spawnedRows = new();
