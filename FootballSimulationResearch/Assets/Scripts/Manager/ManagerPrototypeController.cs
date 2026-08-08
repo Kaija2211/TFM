@@ -428,13 +428,29 @@ namespace Manager
             const float logoHeight = logoWidth * 220f / 700f;
             const float logoTop = 280f;
 
-            GameObject wordmark = new GameObject("Wordmark", typeof(RectTransform), typeof(Image));
+            GameObject wordmark = new GameObject("Wordmark", typeof(RectTransform));
             wordmark.transform.SetParent(titleContentContainer, false);
             ManagerUITheme.AnchorTopCenter(wordmark, logoTop, logoWidth, logoHeight);
-            Image wordmarkImage = wordmark.GetComponent<Image>();
-            wordmarkImage.sprite = tfmLogoSprite;
-            wordmarkImage.preserveAspect = true;
-            wordmarkImage.raycastTarget = false;
+
+            if (tfmLogoSprite != null)
+            {
+                Image wordmarkImage = wordmark.AddComponent<Image>();
+                wordmarkImage.sprite = tfmLogoSprite;
+                wordmarkImage.preserveAspect = true;
+                wordmarkImage.raycastTarget = false;
+            }
+            else
+            {
+                // Falls back to the old text wordmark if tfm-logo.png didn't come through
+                // as a loadable Sprite - Unity's own TextureImporter has been failing to
+                // read this specific asset ("File could not be read", reproduced against
+                // multiple re-encoded copies of the file, so not a content problem) - an
+                // Image with sprite == null renders as a solid white box, which reads as
+                // more broken than the plain text mark it's meant to replace.
+                TextMeshProUGUI wordmarkLabel = ManagerUITheme.BuildLabel(wordmark.transform, "TF<color=#3ddc84>M</color>", 64, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+                wordmarkLabel.characterSpacing = 4f;
+                StartCoroutine(RecoverBlankLabelNextFrame(wordmarkLabel));
+            }
 
             const float subtitleTop = logoTop + logoHeight + 32f;
             GameObject subtitle = new GameObject("Subtitle", typeof(RectTransform));
@@ -1050,15 +1066,24 @@ namespace Manager
             // The mockup's Hub header has no separate club-crest badge - just the
             // tfm-logo mark directly beside the club name/byline block, so this replaces
             // the old colored-initials crest badge rather than sitting alongside it.
-            GameObject logoObj = new GameObject("Logo", typeof(RectTransform), typeof(Image));
-            logoObj.transform.SetParent(seasonHubPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(logoObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -headerTop), new Vector2(logoWidth, logoHeight));
-            Image logoImage = logoObj.GetComponent<Image>();
-            logoImage.sprite = tfmLogoSprite;
-            logoImage.preserveAspect = true;
-            logoImage.raycastTarget = false;
+            // Skipped entirely (rather than showing a blank white box) if tfm-logo.png
+            // didn't come through as a loadable Sprite - see the Title screen's wordmark
+            // for the same fallback reasoning. Club name just falls back to sitting where
+            // the logo would have started.
+            float nameLeft = contentLeft;
 
-            const float nameLeft = contentLeft + logoWidth + 20f;
+            if (tfmLogoSprite != null)
+            {
+                GameObject logoObj = new GameObject("Logo", typeof(RectTransform), typeof(Image));
+                logoObj.transform.SetParent(seasonHubPanel.transform, false);
+                ManagerUITheme.SetPointAnchor(logoObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -headerTop), new Vector2(logoWidth, logoHeight));
+                Image logoImage = logoObj.GetComponent<Image>();
+                logoImage.sprite = tfmLogoSprite;
+                logoImage.preserveAspect = true;
+                logoImage.raycastTarget = false;
+
+                nameLeft = contentLeft + logoWidth + 20f;
+            }
 
             GameObject nameObj = new GameObject("ClubName", typeof(RectTransform));
             nameObj.transform.SetParent(seasonHubPanel.transform, false);

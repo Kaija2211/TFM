@@ -377,15 +377,7 @@ MonoBehaviour:
   inspectPreviousButton: {fileID: 21204}
   inspectNextButton: {fileID: 21404}
   inspectBackButton: {fileID: 21604}
-  playerListPanel: {fileID: 20102284}
-  playerListTitleText: {fileID: 383396628}
-  squadListView: {fileID: 1115711739}
-  playerListBackButton: {fileID: 0}
-  squadSortButton: {fileID: 0}
-  squadFilterButton: {fileID: 0}
-  makeSubsButton: {fileID: 267540241}
   subsStatusText: {fileID: 1743846267}
-  makeSubButton: {fileID: 406268015}
   attackingButton: {fileID: 15004}
   balancedButton: {fileID: 16004}
   defensiveButton: {fileID: 17004}
@@ -7333,7 +7325,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: 110, y: -14.999908}
+  m_AnchoredPosition: {x: 110, y: -14.999939}
   m_SizeDelta: {x: -220, y: -210}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1240974194
@@ -7933,7 +7925,7 @@ MonoBehaviour:
   m_HandleRect: {fileID: 119061651}
   m_Direction: 0
   m_Value: 0
-  m_Size: 0.99999994
+  m_Size: 1
   m_NumberOfSteps: 0
   m_OnValueChanged:
     m_PersistentCalls:
