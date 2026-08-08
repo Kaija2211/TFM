@@ -24,6 +24,15 @@ namespace Manager
 
         private readonly List<GameObject> spawnedRows = new();
 
+        // For instances added via AddComponent at runtime (no Editor Inspector wiring
+        // available) rather than hand-placed in the scene - e.g. the Squad screen and
+        // Matchday Prep's opponent scout list, both built entirely in code the same way
+        // the Tactics Board and Match Events panels are.
+        public void Bind(RectTransform contentRect)
+        {
+            rowContainer = contentRect;
+        }
+
         // Flat list, no section headers - used by the substitution pickers (Starting
         // XI-only or Bench-only, no grouping needed).
         public void Populate(
@@ -60,6 +69,132 @@ namespace Manager
         {
             EnsureLayoutComponents();
             spawnedRows.Add(BuildSectionHeader(label));
+        }
+
+        // --- Grid rows (Pos/Player/OVR/Rating) - used by the Squad screen (clickable,
+        // reaches Player Detail) and Matchday Prep's read-only opponent scout list
+        // (onRowClicked null -> no Button at all, purely informational). Column-fraction
+        // technique mirrored from LeagueTableView.BuildRow, since both lists share the
+        // same "fixed columns across the row's own width" grid shape.
+        private static readonly float[] GridColumnFractions = { 0.08f, 0.50f, 0.14f, 0.28f };
+        private static readonly string[] GridColumnHeaders = { "POS", "PLAYER", "OVR", "RATING" };
+
+        public void AddGridHeaderRow()
+        {
+            EnsureLayoutComponents();
+            spawnedRows.Add(BuildGridHeaderRow());
+        }
+
+        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked)
+        {
+            EnsureLayoutComponents();
+            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked));
+        }
+
+        private GameObject BuildGridHeaderRow()
+        {
+            GameObject row = new GameObject("GridHeader", typeof(RectTransform), typeof(LayoutElement));
+            row.transform.SetParent(rowContainer, false);
+
+            LayoutElement layoutElement = row.GetComponent<LayoutElement>();
+            layoutElement.preferredHeight = headerHeight;
+            layoutElement.flexibleWidth = 1f;
+
+            float x = 0f;
+
+            for (int i = 0; i < GridColumnHeaders.Length; i++)
+            {
+                GameObject cell = new GameObject($"HeaderCell_{i}", typeof(RectTransform));
+                cell.transform.SetParent(row.transform, false);
+
+                RectTransform cellRect = cell.GetComponent<RectTransform>();
+                cellRect.anchorMin = new Vector2(x, 0f);
+                cellRect.anchorMax = new Vector2(x + GridColumnFractions[i], 1f);
+                cellRect.offsetMin = new Vector2(10f, 0f);
+                cellRect.offsetMax = new Vector2(-10f, 0f);
+
+                ManagerUITheme.BuildLabel(cell.transform, GridColumnHeaders[i], 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+                x += GridColumnFractions[i];
+            }
+
+            return row;
+        }
+
+        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked)
+        {
+            bool clickable = onRowClicked != null;
+
+            GameObject row = clickable
+                ? new GameObject($"Row_{player.Name}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement))
+                : new GameObject($"Row_{player.Name}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            row.transform.SetParent(rowContainer, false);
+
+            LayoutElement layoutElement = row.GetComponent<LayoutElement>();
+            layoutElement.preferredHeight = rowHeight;
+            layoutElement.flexibleWidth = 1f;
+
+            // Transparent row background with a thin bottom border line, matching the
+            // mockup's border-bottom-separated rows rather than the alternating solid
+            // background used by the flat single-column rows above.
+            Image background = row.GetComponent<Image>();
+            background.color = new Color(0f, 0f, 0f, 0f);
+
+            if (clickable && row.TryGetComponent(out Button button))
+            {
+                button.targetGraphic = background;
+                button.onClick.AddListener(() => onRowClicked(player));
+            }
+
+            GameObject borderObj = new GameObject("Border", typeof(RectTransform), typeof(Image));
+            borderObj.transform.SetParent(row.transform, false);
+            RectTransform borderRect = borderObj.GetComponent<RectTransform>();
+            borderRect.anchorMin = new Vector2(0f, 0f);
+            borderRect.anchorMax = new Vector2(1f, 0f);
+            borderRect.pivot = new Vector2(0.5f, 0f);
+            borderRect.sizeDelta = new Vector2(0f, 1f);
+            borderRect.anchoredPosition = Vector2.zero;
+            borderObj.GetComponent<Image>().color = ManagerUITheme.BarTrack;
+
+            float x = 0f;
+
+            // Pos
+            BuildGridCell(row.transform, x, GridColumnFractions[0], position, fontSize, ManagerUITheme.Accent, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            x += GridColumnFractions[0];
+
+            // Player
+            BuildGridCell(row.transform, x, GridColumnFractions[1], player.Name, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            x += GridColumnFractions[1];
+
+            // OVR
+            BuildGridCell(row.transform, x, GridColumnFractions[2], displayRating.ToString(), fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            x += GridColumnFractions[2];
+
+            // Rating bar
+            GameObject barContainer = new GameObject("RatingBar", typeof(RectTransform));
+            barContainer.transform.SetParent(row.transform, false);
+            RectTransform barRect = barContainer.GetComponent<RectTransform>();
+            barRect.anchorMin = new Vector2(x, 0.5f);
+            barRect.anchorMax = new Vector2(x + GridColumnFractions[3], 0.5f);
+            barRect.offsetMin = new Vector2(10f, 0f);
+            barRect.offsetMax = new Vector2(-10f, 0f);
+            ManagerUITheme.BuildBar(barContainer.transform, ratingPercent, ManagerUITheme.Accent, height: 7f);
+
+            return row;
+        }
+
+        private void BuildGridCell(Transform parent, float x, float widthFraction, string text, int size, Color color, TextAlignmentOptions alignment, FontStyles style)
+        {
+            GameObject cell = new GameObject("Cell", typeof(RectTransform));
+            cell.transform.SetParent(parent, false);
+
+            RectTransform cellRect = cell.GetComponent<RectTransform>();
+            cellRect.anchorMin = new Vector2(x, 0f);
+            cellRect.anchorMax = new Vector2(x + widthFraction, 1f);
+            cellRect.offsetMin = new Vector2(10f, 0f);
+            cellRect.offsetMax = new Vector2(-10f, 0f);
+
+            ManagerUITheme.BuildLabel(cell.transform, text, size, color, alignment, style);
         }
 
         public void Clear()

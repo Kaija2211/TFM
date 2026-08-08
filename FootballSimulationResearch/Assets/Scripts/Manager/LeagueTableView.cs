@@ -8,12 +8,15 @@ using Sim;
 namespace Manager
 {
     // Runtime-generated scrollable league table grid, parallel to SquadListView. One
-    // header row plus one row per club (#, Club, Pts, P, W, D, L, GD), with the
-    // managed club's row highlighted in accent green. Built and laid out entirely in
-    // code, same convention as every other list in Manager Mode. Shows GD (goal
-    // difference) rather than separate GF/GA columns - this is a Manager Mode display
-    // choice only, unconnected to LeagueTable.Entry's own GoalsFor/GoalsAgainst fields
-    // (which stay untouched, still used by Research Mode's evaluation output).
+    // header row plus one row per club (#, Club, Pl, GD, Form, Pts), with the managed
+    // club's row highlighted in accent green. Built and laid out entirely in code, same
+    // convention as every other list in Manager Mode. Shows GD (goal difference) rather
+    // than separate GF/GA columns, and a Form column (last-5 results) - both are a
+    // Manager Mode display choice only, unconnected to LeagueTable.Entry's own
+    // GoalsFor/GoalsAgainst fields or any Research Mode data (which stay untouched,
+    // still used by Research Mode's evaluation output). Form's actual W/D/L history
+    // comes from a caller-supplied resolver, not from LeagueTable.Entry itself - see
+    // ManagerPrototypeController's recentFormByTeamId.
     public class LeagueTableView : MonoBehaviour
     {
         // Assign to the "Content" RectTransform of a standard Unity Scroll View.
@@ -22,12 +25,17 @@ namespace Manager
         [SerializeField] private float headerRowHeight = 22f;
         [SerializeField] private int fontSize = 13;
 
-        private static readonly float[] ColumnFractions = { 0.07f, 0.34f, 0.10f, 0.10f, 0.10f, 0.10f, 0.10f, 0.09f };
-        private static readonly string[] ColumnHeaders = { "#", "CLUB", "PTS", "P", "W", "D", "L", "GD" };
+        private static readonly float[] ColumnFractions = { 0.09f, 0.35f, 0.14f, 0.14f, 0.14f, 0.14f };
+        private static readonly string[] ColumnHeaders = { "#", "CLUB", "PL", "GD", "FORM", "PTS" };
+        private static readonly TextAlignmentOptions[] ColumnAlignments =
+        {
+            TextAlignmentOptions.MidlineRight, TextAlignmentOptions.MidlineLeft, TextAlignmentOptions.MidlineRight,
+            TextAlignmentOptions.MidlineRight, TextAlignmentOptions.MidlineLeft, TextAlignmentOptions.MidlineRight
+        };
 
         private readonly List<GameObject> spawnedRows = new();
 
-        public void Populate(IReadOnlyList<LeagueTable.Entry> sortedEntries, Func<int, string> teamNameResolver, int highlightedTeamId)
+        public void Populate(IReadOnlyList<LeagueTable.Entry> sortedEntries, Func<int, string> teamNameResolver, int highlightedTeamId, Func<int, string> formResolver)
         {
             Clear();
 
@@ -51,12 +59,10 @@ namespace Manager
                 {
                     (i + 1).ToString(),
                     teamNameResolver(entry.TeamId),
-                    entry.Points.ToString(),
                     entry.Played.ToString(),
-                    entry.Wins.ToString(),
-                    entry.Draws.ToString(),
-                    entry.Losses.ToString(),
-                    goalDifference > 0 ? $"+{goalDifference}" : goalDifference.ToString()
+                    goalDifference > 0 ? $"+{goalDifference}" : goalDifference.ToString(),
+                    formResolver != null ? formResolver(entry.TeamId) : string.Empty,
+                    entry.Points.ToString()
                 };
 
                 Color background = highlighted ? ManagerUITheme.CardNeutral : ManagerUITheme.CardNeutralAlt;
@@ -124,7 +130,7 @@ namespace Manager
                 cellRect.offsetMin = new Vector2(4f, 0f);
                 cellRect.offsetMax = new Vector2(-4f, 0f);
 
-                TextAlignmentOptions alignment = i == 1 ? TextAlignmentOptions.MidlineLeft : TextAlignmentOptions.MidlineRight;
+                TextAlignmentOptions alignment = i < ColumnAlignments.Length ? ColumnAlignments[i] : TextAlignmentOptions.MidlineRight;
 
                 ManagerUITheme.BuildLabel(cell.transform, cells[i], fontSize, textColor, alignment, bold ? FontStyles.Bold : FontStyles.Normal);
 

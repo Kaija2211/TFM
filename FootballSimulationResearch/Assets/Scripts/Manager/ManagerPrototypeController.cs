@@ -65,18 +65,8 @@ namespace Manager
         [SerializeField] private Button inspectNextButton;
         [SerializeField] private Button inspectBackButton;
 
-        // Runtime-generated clickable list (see SquadListView) reused for squad browsing
-        // and both substitution pickers, so none of them need Prev/Next cycling to reach
-        // a specific player - only one of these three purposes is ever active at a time.
-        [Header("Player List (squad browse / sub picker)")]
-        [SerializeField] private GameObject playerListPanel;
-        [SerializeField] private TMP_Text playerListTitleText;
-        [SerializeField] private SquadListView squadListView;
-        [SerializeField] private Button playerListBackButton;
-
         [Header("Substitutions")]
         [SerializeField] private TMP_Text subsStatusText;
-        [SerializeField] private Button makeSubButton; // Matchday panel, in-match
 
         // Tactic is chosen between matches on the Hub, not mid-match - no manager is
         // rethinking their approach to the next opponent while the current game is live.
@@ -112,7 +102,7 @@ namespace Manager
         private RectTransform matchStatsCaptionRect;
         private RectTransform matchKeyMomentsCaptionRect;
         private GameObject matchLogGroup;
-        private TextMeshProUGUI matchSubsStatusLabel;
+        private RectTransform matchSubsLogContainer;
         private TextMeshProUGUI matchHomeScorersLabel;
         private TextMeshProUGUI matchAwayScorersLabel;
         private Button viewMatchEventsButton;
@@ -149,6 +139,11 @@ namespace Manager
         private TMP_SpriteAsset weakFootStarSpriteAsset;
         private TMP_SpriteAsset footballIconSpriteAsset;
 
+        // Standalone wordmark image (Title screen, Hub header) - unlike the two sprite
+        // assets above, this is never used inline within a text string, so it's a plain
+        // Sprite + Image rather than a TMP Sprite Asset.
+        private Sprite tfmLogoSprite;
+
         // In-memory only - there is no save system, so this never persists across sessions.
         private string managerName = "Manager";
         private bool titleScreenBuilt;
@@ -171,6 +166,7 @@ namespace Manager
         private bool matchdayPrepChromeBuilt;
         private TextMeshProUGUI matchdayPrepTitleLabel;
         private TextMeshProUGUI matchdayPrepSubtitleLabel;
+        private RectTransform matchdayPrepPitchContainer;
 
         private bool hubChromeBuilt;
         private TextMeshProUGUI hubClubNameLabel;
@@ -185,10 +181,20 @@ namespace Manager
         private Button tacticsBoardFormationButton;
         private GameObject tacticsBoardFormationDropdown;
 
-        // Player Inspect always hides seasonHubPanel and its Back button always returns
-        // to it - true for every OTHER entry point, but Tactics Board is a second panel
-        // that also needs hiding/restoring, so this flag distinguishes the two callers.
-        private bool playerInspectReturnsToTacticsBoard;
+        // Which screen "Back to Squad" on Player Inspect actually returns to - three
+        // possible entry points now that the Squad list screen exists alongside the
+        // Tactics Board and the Hub (row-tapped-from-Squad-list vs pin-tapped-from-board
+        // need different return screens, and Hub is the fallback for any other caller).
+        private enum PlayerInspectReturnTarget { Hub, TacticsBoard, Squad }
+        private PlayerInspectReturnTarget playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
+
+        // --- Squad list (read-only Pos/Player/OVR/Rating browse screen, reached from a
+        // "List View" button on the Tactics Board header - Hub's own Squad button still
+        // goes straight to the Tactics Board, unchanged) ---
+        private bool squadBrowseChromeBuilt;
+        private GameObject squadBrowsePanel;
+        private TextMeshProUGUI squadBrowseByline;
+        private SquadListView squadBrowseListView;
 
         // Set inside SimulateFixture and reused if an in-match substitution requires
         // resimulating the remainder of the match with the same underlying prediction.
@@ -199,26 +205,22 @@ namespace Manager
         private List<PlayerAgent> inspectSquadPlayers = new();
         private int inspectPlayerIndex;
 
-        // --- Substitutions (pre-match team sheet + in-match interjection share one
-        // picker flow and one 5-per-match cap, matching real football's sub limit) ---
-        private const int MaxSubsPerMatch = 5;
-
-        private PlayerAgent pendingSubOffPlayer;
-        private bool subFlowIsInMatch;
-
-        private bool pendingSubApplied;
-        private int subsUsedThisMatch;
-
-        // Raised by the in-match "Make Sub" button; the replay coroutine only acts on it
-        // at a minute boundary, and resumes via subSelectionConfirmed once a pick is made
-        // (or cancelled) so the coroutine's own WaitUntil can proceed.
-        private bool inMatchSubRequested;
-        private bool subSelectionConfirmed;
+        // --- Substitutions: pre-match subs happen on the Tactics Board (drag a bench
+        // card onto a pin - see OnBenchPlayerDroppedOnPin). Mid-match subs now reuse the
+        // exact same drag-drop path via "Make Changes" (see
+        // OnOpenTacticsBoardDuringMatchClicked) - uncapped, matching pre-match behaviour,
+        // no separate off-then-on picker flow or per-match sub limit anymore. ---
+        private bool tacticsBoardOpenedMidMatch;
+        private readonly List<(string offName, string offPosition, string onName, string onPosition, int minute)> matchSubsLog = new();
+        private int currentMatchMinute;
+        private int liveHomeGoalsSoFar;
+        private int liveAwayGoalsSoFar;
 
         private void Start()
         {
             weakFootStarSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/star-filled");
             footballIconSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/football-icon");
+            tfmLogoSprite = Resources.Load<Sprite>("Manager/tfm-logo");
 
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnNextMatchdayClicked);
             if (simulateMatchButton != null) simulateMatchButton.onClick.AddListener(OnSimulateMatchClicked);
@@ -235,8 +237,6 @@ namespace Manager
             if (defensiveButton != null) defensiveButton.onClick.AddListener(SelectDefensiveTactic);
             if (confirmTeamButton != null) confirmTeamButton.onClick.AddListener(OnConfirmTeamClicked);
             if (teamSelectBackButton != null) teamSelectBackButton.onClick.AddListener(OnTeamSelectBackClicked);
-            if (playerListBackButton != null) playerListBackButton.onClick.AddListener(OnPlayerListBackClicked);
-            if (makeSubButton != null) makeSubButton.onClick.AddListener(OnMakeSubDuringMatchClicked);
             if (exitToTitleButton != null) exitToTitleButton.onClick.AddListener(OnExitToTitleClicked);
 
             ApplyManagerUITheme();
@@ -279,20 +279,9 @@ namespace Manager
             ManagerUITheme.ApplyPanelBackground(matchdayPanel);
             ManagerUITheme.ApplyPanelBackground(teamSelectPanel);
             ManagerUITheme.ApplyPanelBackground(playerInspectPanel);
-            ManagerUITheme.ApplyPanelBackground(playerListPanel);
             ManagerUITheme.ApplyPanelBackground(matchdayPrepPanel);
 
-            // squadListView's ScrollView background was never recolored (same gap as the
-            // Hub's league table before it was fixed) - invisible whenever the list has
-            // enough rows to cover it, but exposed as a gray box on shorter lists like the
-            // Starting-XI-only substitution picker.
-            if (squadListView != null && squadListView.TryGetComponent(out Image squadListImage))
-            {
-                squadListImage.color = ManagerUITheme.PanelDark;
-            }
-
             StyleHubActionButton(skipToResultsButton);
-            StyleHubActionButton(makeSubButton);
             StyleHubActionButton(matchdayPrepBackButton);
             // StyleHubActionButton only recolors - it never sets label text, since the other
             // three buttons it's used on kept their correct hand-authored Editor text. This
@@ -327,14 +316,6 @@ namespace Manager
                 if (themeFont != null) subsStatusText.font = themeFont;
             }
 
-            if (playerListTitleText != null)
-            {
-                playerListTitleText.color = ManagerUITheme.TextPrimary;
-                playerListTitleText.fontSize = 20;
-                playerListTitleText.textWrappingMode = TextWrappingModes.NoWrap;
-                playerListTitleText.overflowMode = TextOverflowModes.Truncate;
-                if (themeFont != null) playerListTitleText.font = themeFont;
-            }
             if (fixtureTitleText != null) fixtureTitleText.color = ManagerUITheme.TextPrimary;
             if (clockText != null) { clockText.color = ManagerUITheme.Accent; if (themeFont != null) clockText.font = themeFont; }
             if (scoreText != null) { scoreText.color = ManagerUITheme.TextPrimary; if (themeFont != null) scoreText.font = themeFont; }
@@ -419,6 +400,7 @@ namespace Manager
             }
 
             ManagerUITheme.ApplyPanelBackground(titlePanel);
+            ManagerUITheme.ApplyDiagonalGradientBackground(titlePanel, ManagerUITheme.Background, ManagerUITheme.GradientEnd);
 
             // titleContentContainer had several hand-set values baked into the scene from
             // an earlier manual Editor edit - a m_LocalScale of (2,2,1), plus a shrunk
@@ -435,34 +417,43 @@ namespace Manager
             titleContentContainer.anchoredPosition = Vector2.zero;
             titleContentContainer.sizeDelta = Vector2.zero;
 
-            // The old shield-icon + "MATCHDAY MANAGER" text combo is replaced by the
-            // single wordmark ("TF" + accent-green "M") - the club crest badge on the Hub
-            // is a separate thing (the managed club's crest) and is untouched.
-            GameObject wordmark = new GameObject("Wordmark", typeof(RectTransform));
+            // The old "TF"+accent-green-"M" text wordmark is replaced by the designer's
+            // tfm-logo.png (native 700x220) - a standalone image, so a plain Image rather
+            // than the TMP-inline-glyph sprite-asset pattern used for football-icon/stars.
+            // Whole stack (logo/subtitle/buttons) is vertically centered in the 1080-tall
+            // panel per the mockup's flex-centered layout, via fixed top offsets computed
+            // from the stack's approximate total height (this file's existing top-anchored
+            // pattern, not a real layout group - simplest fit for a screen this static).
+            const float logoWidth = 420f;
+            const float logoHeight = logoWidth * 220f / 700f;
+            const float logoTop = 280f;
+
+            GameObject wordmark = new GameObject("Wordmark", typeof(RectTransform), typeof(Image));
             wordmark.transform.SetParent(titleContentContainer, false);
-            ManagerUITheme.AnchorTopCenter(wordmark, 70f, 400f, 90f);
-            TextMeshProUGUI wordmarkLabel = ManagerUITheme.BuildLabel(wordmark.transform, "TF<color=#3ddc84>M</color>", 64, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
-            wordmarkLabel.characterSpacing = 4f;
+            ManagerUITheme.AnchorTopCenter(wordmark, logoTop, logoWidth, logoHeight);
+            Image wordmarkImage = wordmark.GetComponent<Image>();
+            wordmarkImage.sprite = tfmLogoSprite;
+            wordmarkImage.preserveAspect = true;
+            wordmarkImage.raycastTarget = false;
 
-            // The wordmark is the very first TextMeshProUGUI created in the whole play
-            // session (Title is always shown first), and on a genuinely fresh session it
-            // can silently fail to generate any mesh at all - texts built moments later
-            // (Subtitle, buttons) using the exact same font asset render fine, and
-            // ForceMeshUpdate/SetText/toggling .enabled done in the SAME frame don't
-            // recover it either (confirmed live), because whatever TMP/font-asset
-            // initialization it's racing hasn't finished within that first frame yet.
-            // Waiting a frame before checking gives that initialization time to complete.
-            StartCoroutine(RecoverBlankLabelNextFrame(wordmarkLabel));
-
+            const float subtitleTop = logoTop + logoHeight + 32f;
             GameObject subtitle = new GameObject("Subtitle", typeof(RectTransform));
             subtitle.transform.SetParent(titleContentContainer, false);
-            ManagerUITheme.AnchorTopCenter(subtitle, 175f, 600f, 30f);
-            ManagerUITheme.BuildLabel(subtitle.transform, "THE ENGLISH PREMIER LEAGUE", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
+            ManagerUITheme.AnchorTopCenter(subtitle, subtitleTop, 600f, 30f);
+            TextMeshProUGUI subtitleLabel = ManagerUITheme.BuildLabel(subtitle.transform, "THE ENGLISH PREMIER LEAGUE", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
+
+            // Subtitle is now the very first TextMeshProUGUI created in the whole play
+            // session (Title is always shown first, and the wordmark above is an Image,
+            // not TMP anymore) - on a genuinely fresh session that first label can silently
+            // fail to generate any mesh at all, texts built moments later (buttons) using
+            // the exact same font asset render fine. Waiting a frame before checking gives
+            // whatever TMP/font-asset initialization it's racing time to complete.
+            StartCoroutine(RecoverBlankLabelNextFrame(subtitleLabel));
 
             const float buttonWidth = 340f;
             const float buttonHeight = 52f;
             const float spacing = 12f;
-            const float startY = 250f;
+            const float startY = subtitleTop + 30f + 44f;
 
             GameObject newCareerObj = new GameObject("NewCareerButton", typeof(RectTransform), typeof(Image), typeof(Button));
             newCareerObj.transform.SetParent(titleContentContainer, false);
@@ -503,7 +494,7 @@ namespace Manager
 
         // See BuildTitleScreenContent's call site - recovers a label that came out of
         // creation with zero generated characters despite non-empty text. Originally seen
-        // only on the very first TMP label built each session (the Title wordmark); later
+        // only on the very first TMP label built each session (the Title subtitle); later
         // also seen on a label rebuilt via rapid destroy/recreate churn (Player Inspect's
         // OvrValue - see RecoverBlankLabelsNextFrame below), so it isn't actually limited
         // to "first ever" - something about TMP's mesh generation is more generally
@@ -708,6 +699,17 @@ namespace Manager
 
             const float bandHeight = 90f;
 
+            // Mockup's body is a max-width:1500px column centered in the 1920-wide panel
+            // (`margin:0 auto`), not edge-to-edge - contentLeft/contentRight mark that
+            // centered region's horizontal bounds, matching the panel's new width-wide
+            // 1920x1080 canvas instead of the old 24px-from-edge layout tuned for 960x540.
+            const float contentWidth = 1500f;
+            const float contentLeft = (1920f - contentWidth) / 2f;
+            const float contentRight = 1920f - contentLeft;
+            const float nameColumnWidth = 240f;
+            const float columnGap = 56f;
+            const float clubColumnLeft = contentLeft + nameColumnWidth + columnGap;
+
             GameObject header = ManagerUITheme.BuildAccentBand(teamSelectPanel.transform, topBand: true, height: bandHeight);
 
             GameObject titleObj = new GameObject("Title", typeof(RectTransform));
@@ -716,9 +718,9 @@ namespace Manager
             titleRect.anchorMin = new Vector2(0f, 1f);
             titleRect.anchorMax = new Vector2(1f, 1f);
             titleRect.pivot = new Vector2(0f, 1f);
-            titleRect.sizeDelta = new Vector2(-44f, 30f);
-            titleRect.anchoredPosition = new Vector2(24f, -18f);
-            ManagerUITheme.BuildLabel(titleObj.transform, "NEW CAREER", 22, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            titleRect.sizeDelta = new Vector2(-2f * contentLeft, 34f);
+            titleRect.anchoredPosition = new Vector2(contentLeft, -22f);
+            ManagerUITheme.BuildLabel(titleObj.transform, "NEW CAREER", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject subtitleObj = new GameObject("Subtitle", typeof(RectTransform));
             subtitleObj.transform.SetParent(header.transform, false);
@@ -726,9 +728,9 @@ namespace Manager
             subtitleRect.anchorMin = new Vector2(0f, 1f);
             subtitleRect.anchorMax = new Vector2(1f, 1f);
             subtitleRect.pivot = new Vector2(0f, 1f);
-            subtitleRect.sizeDelta = new Vector2(-44f, 20f);
-            subtitleRect.anchoredPosition = new Vector2(24f, -52f);
-            ManagerUITheme.BuildLabel(subtitleObj.transform, "Step 1 of 1 · Manager & Club", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            subtitleRect.sizeDelta = new Vector2(-2f * contentLeft, 20f);
+            subtitleRect.anchoredPosition = new Vector2(contentLeft, -58f);
+            ManagerUITheme.BuildLabel(subtitleObj.transform, "Step 1 of 1 · Manager & Club", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
 
             ManagerUITheme.BuildAccentBand(teamSelectPanel.transform, topBand: false, height: bandHeight);
 
@@ -738,9 +740,8 @@ namespace Manager
             nameCaptionRect.anchorMin = new Vector2(0f, 1f);
             nameCaptionRect.anchorMax = new Vector2(0f, 1f);
             nameCaptionRect.pivot = new Vector2(0f, 1f);
-            nameCaptionRect.sizeDelta = new Vector2(180f, 18f);
-            nameCaptionRect.anchoredPosition = new Vector2(24f, -(bandHeight + 6f));
-            ManagerUITheme.BuildLabel(nameCaption.transform, "MANAGER NAME", 11, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            nameCaptionRect.sizeDelta = new Vector2(nameColumnWidth, 18f);
+            ManagerUITheme.BuildLabel(nameCaption.transform, "MANAGER NAME", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             nameCaption.transform.SetAsFirstSibling();
 
             GameObject clubCaption = new GameObject("SelectClubCaption", typeof(RectTransform));
@@ -749,9 +750,8 @@ namespace Manager
             clubCaptionRect.anchorMin = new Vector2(0f, 1f);
             clubCaptionRect.anchorMax = new Vector2(0f, 1f);
             clubCaptionRect.pivot = new Vector2(0f, 1f);
-            clubCaptionRect.sizeDelta = new Vector2(400f, 18f);
-            clubCaptionRect.anchoredPosition = new Vector2(220f, -(bandHeight + 6f));
-            ManagerUITheme.BuildLabel(clubCaption.transform, "SELECT CLUB · PREMIER LEAGUE", 11, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            clubCaptionRect.sizeDelta = new Vector2(contentRight - clubColumnLeft, 18f);
+            ManagerUITheme.BuildLabel(clubCaption.transform, "SELECT CLUB · PREMIER LEAGUE", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             clubCaption.transform.SetAsFirstSibling();
 
             // managerNameInput and teamGridContainer are Editor-placed objects (an
@@ -764,13 +764,13 @@ namespace Manager
             const float captionHeight = 18f;
             float contentTop = captionTop + captionHeight + 32f;
 
-            nameCaptionRect.anchoredPosition = new Vector2(24f, -captionTop);
-            clubCaptionRect.anchoredPosition = new Vector2(220f, -captionTop);
+            nameCaptionRect.anchoredPosition = new Vector2(contentLeft, -captionTop);
+            clubCaptionRect.anchoredPosition = new Vector2(clubColumnLeft, -captionTop);
 
             if (managerNameInput != null)
             {
                 RectTransform inputRect = managerNameInput.GetComponent<RectTransform>();
-                ManagerUITheme.SetPointAnchor(inputRect, new Vector2(0f, 1f), new Vector2(24f, -contentTop), new Vector2(200f, 48f));
+                ManagerUITheme.SetPointAnchor(inputRect, new Vector2(0f, 1f), new Vector2(contentLeft, -contentTop), new Vector2(nameColumnWidth, 48f));
 
                 if (managerNameInput.TryGetComponent(out Image inputImage))
                 {
@@ -808,8 +808,24 @@ namespace Manager
                 RectTransform gridRect = teamGridContainer.GetComponent<RectTransform>();
                 gridRect.anchorMin = new Vector2(0f, 0f);
                 gridRect.anchorMax = new Vector2(1f, 1f);
-                gridRect.offsetMin = new Vector2(220f, bandHeight + 47f);
-                gridRect.offsetMax = new Vector2(-40f, -contentTop);
+                gridRect.offsetMin = new Vector2(clubColumnLeft, bandHeight + 47f);
+                gridRect.offsetMax = new Vector2(-contentLeft, -contentTop);
+            }
+
+            // confirmTeamButton/teamSelectBackButton are Editor-placed and were never
+            // explicitly positioned in code - their baked scene position was tuned
+            // against the old 960x540 CanvasScaler reference resolution, so once that
+            // changed to 1920x1080 their fixed pixel offset would have silently drifted
+            // out of the mockup's intended footer position. Pinned explicitly here, same
+            // pattern as every other screen's buttons.
+            if (confirmTeamButton != null)
+            {
+                ManagerUITheme.SetPointAnchor(confirmTeamButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-contentLeft, 22f), new Vector2(200f, 48f));
+            }
+
+            if (teamSelectBackButton != null)
+            {
+                ManagerUITheme.SetPointAnchor(teamSelectBackButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-contentLeft - 200f - 12f, 22f), new Vector2(140f, 48f));
             }
         }
 
@@ -1006,6 +1022,7 @@ namespace Manager
             }
 
             ManagerUITheme.ApplyPanelBackground(seasonHubPanel);
+            ManagerUITheme.ApplyDiagonalGradientBackground(seasonHubPanel, ManagerUITheme.Background, ManagerUITheme.GradientEnd);
 
             // Left accent bar - this mockup uses a thin vertical edge bar instead of the
             // top/bottom bands used on Team Select/Matchday Prep/Squad/Player Detail.
@@ -1020,28 +1037,42 @@ namespace Manager
             leftBarRect.anchoredPosition = Vector2.zero;
             leftBar.GetComponent<Image>().color = ManagerUITheme.Accent;
 
-            // Crest badge - a colored initials badge, not the mockup's exact pentagon
-            // shape (that needs real crest artwork or a custom mesh, neither of which
-            // exist here).
-            GameObject crest = new GameObject("CrestBadge", typeof(RectTransform), typeof(Image));
-            crest.transform.SetParent(seasonHubPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(crest.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -24f), new Vector2(52f, 52f));
-            crest.GetComponent<Image>().color = ManagerUITheme.Accent;
-            ManagerUITheme.BuildLabel(crest.transform, GetClubInitials(managedTeamName), 16, ManagerUITheme.OnAccent, TextAlignmentOptions.Center, FontStyles.Bold);
+            // Content is a max-width:1700px column centered in the 1920-wide panel
+            // (mockup's `padding:48px 80px; max-width:1700px; margin:0 auto`), not
+            // edge-to-edge against the panel's own corners like the old layout.
+            const float outerLeft = (1920f - 1700f) / 2f;
+            const float contentLeft = outerLeft + 80f;
+            const float contentRight = 1920f - contentLeft;
+            const float headerTop = 48f;
+            const float logoHeight = 48f;
+            const float logoWidth = logoHeight * 700f / 220f;
+
+            // The mockup's Hub header has no separate club-crest badge - just the
+            // tfm-logo mark directly beside the club name/byline block, so this replaces
+            // the old colored-initials crest badge rather than sitting alongside it.
+            GameObject logoObj = new GameObject("Logo", typeof(RectTransform), typeof(Image));
+            logoObj.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(logoObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -headerTop), new Vector2(logoWidth, logoHeight));
+            Image logoImage = logoObj.GetComponent<Image>();
+            logoImage.sprite = tfmLogoSprite;
+            logoImage.preserveAspect = true;
+            logoImage.raycastTarget = false;
+
+            const float nameLeft = contentLeft + logoWidth + 20f;
 
             GameObject nameObj = new GameObject("ClubName", typeof(RectTransform));
             nameObj.transform.SetParent(seasonHubPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(nameObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(98f, -24f), new Vector2(500f, 32f));
-            hubClubNameLabel = ManagerUITheme.BuildLabel(nameObj.transform, "", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.SetPointAnchor(nameObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(nameLeft, -headerTop), new Vector2(600f, 36f));
+            hubClubNameLabel = ManagerUITheme.BuildLabel(nameObj.transform, "", 32, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject bylineObj = new GameObject("Byline", typeof(RectTransform));
             bylineObj.transform.SetParent(seasonHubPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(bylineObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(98f, -58f), new Vector2(500f, 20f));
-            hubBylineLabel = ManagerUITheme.BuildLabel(bylineObj.transform, "", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            ManagerUITheme.SetPointAnchor(bylineObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(nameLeft, -(headerTop + 38f)), new Vector2(600f, 20f));
+            hubBylineLabel = ManagerUITheme.BuildLabel(bylineObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
 
             if (simulateSeasonButton != null)
             {
-                ManagerUITheme.SetPointAnchor(simulateSeasonButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-30f, -24f), new Vector2(200f, 36f));
+                ManagerUITheme.SetPointAnchor(simulateSeasonButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-contentLeft, -headerTop), new Vector2(220f, logoHeight));
                 if (simulateSeasonButton.TryGetComponent(out Image simulateSeasonImage))
                 {
                     simulateSeasonImage.color = ManagerUITheme.CardNeutral;
@@ -1049,78 +1080,98 @@ namespace Manager
                 ManagerUITheme.NormalizeButtonLabel(simulateSeasonButton, "SIMULATE SEASON", ManagerUITheme.TextBody, 13);
             }
 
-            // Left column (menu): Next Matchday / Squad / Transfers / Settings / Save & Exit.
+            // Left column (menu): Next Matchday / Squad / Transfers / Inbox / Settings /
+            // Save & Exit. Row top offsets computed from the header block's own height
+            // (headerTop + logoHeight + mockup's 40px margin-bottom below it) plus each
+            // preceding row's own height and the mockup's 12px inter-row gap.
+            const float menuWidth = 400f;
+            const float menuTop = headerTop + logoHeight + 40f;
+            const float rowGap = 12f;
+            const float mainRowHeight = 64f;
+            const float subRowHeight = 54f;
+
             if (playNextMatchButton != null)
             {
-                ManagerUITheme.SetPointAnchor(playNextMatchButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -130f), new Vector2(430f, 55f));
+                ManagerUITheme.SetPointAnchor(playNextMatchButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -menuTop), new Vector2(menuWidth, mainRowHeight));
                 if (playNextMatchButton.TryGetComponent(out Image playNextImage))
                 {
                     playNextImage.color = ManagerUITheme.Accent;
                 }
-                ManagerUITheme.NormalizeButtonLabel(playNextMatchButton, "NEXT MATCHDAY", ManagerUITheme.OnAccent, 16);
+                ManagerUITheme.NormalizeButtonLabel(playNextMatchButton, "NEXT MATCHDAY", ManagerUITheme.OnAccent, 20);
             }
+
+            float squadTop = menuTop + mainRowHeight + rowGap;
 
             if (viewSquadButton != null)
             {
-                ManagerUITheme.SetPointAnchor(viewSquadButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -197f), new Vector2(430f, 50f));
+                ManagerUITheme.SetPointAnchor(viewSquadButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -squadTop), new Vector2(menuWidth, subRowHeight));
                 StyleHubActionButton(viewSquadButton);
-                ManagerUITheme.NormalizeButtonLabel(viewSquadButton, "SQUAD", ManagerUITheme.TextBody, 15);
+                ManagerUITheme.NormalizeButtonLabel(viewSquadButton, "SQUAD", ManagerUITheme.TextBody, 17);
             }
+
+            float transfersTop = squadTop + subRowHeight + rowGap;
 
             if (transfersButton != null)
             {
-                ManagerUITheme.SetPointAnchor(transfersButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -259f), new Vector2(430f, 50f));
+                ManagerUITheme.SetPointAnchor(transfersButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -transfersTop), new Vector2(menuWidth, subRowHeight));
                 ManagerUITheme.SetDisabledPlaceholder(transfersButton, "TRANSFERS");
             }
 
+            float inboxTop = transfersTop + subRowHeight + rowGap;
+
+            // "Inbox" is new copy from the mockup with no backing inbox system anywhere
+            // in Manager Mode - treated as a disabled placeholder, same as
+            // Transfers/Settings, rather than faking a feature that doesn't exist.
+            GameObject inboxObj = new GameObject("InboxButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            inboxObj.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(inboxObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -inboxTop), new Vector2(menuWidth, subRowHeight));
+            Button inboxButton = inboxObj.GetComponent<Button>();
+            inboxButton.targetGraphic = inboxObj.GetComponent<Image>();
+            ManagerUITheme.BuildLabel(inboxObj.transform, "INBOX", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
+            ManagerUITheme.SetDisabledPlaceholder(inboxButton, "INBOX");
+
+            float settingsTop = inboxTop + subRowHeight + rowGap;
+
             GameObject settingsObj = new GameObject("SettingsButton", typeof(RectTransform), typeof(Image), typeof(Button));
             settingsObj.transform.SetParent(seasonHubPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(settingsObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -321f), new Vector2(430f, 50f));
+            ManagerUITheme.SetPointAnchor(settingsObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -settingsTop), new Vector2(menuWidth, subRowHeight));
             Button settingsButton = settingsObj.GetComponent<Button>();
             settingsButton.targetGraphic = settingsObj.GetComponent<Image>();
-            ManagerUITheme.BuildLabel(settingsObj.transform, "SETTINGS", 15, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
+            ManagerUITheme.BuildLabel(settingsObj.transform, "SETTINGS", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
             ManagerUITheme.SetDisabledPlaceholder(settingsButton, "SETTINGS");
 
             if (exitToTitleButton != null)
             {
                 // Anchored to the bottom of the panel (not the top, unlike the buttons
-                // above) so it stays visible regardless of canvas height - the previous
-                // y=-980 top-anchored offset assumed a canvas far taller than this one
-                // actually renders at, pushing it off-screen entirely.
-                ManagerUITheme.SetPointAnchor(exitToTitleButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(30f, 24f), new Vector2(430f, 44f));
+                // above) so it stays visible regardless of canvas height.
+                ManagerUITheme.SetPointAnchor(exitToTitleButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(contentLeft, 24f), new Vector2(menuWidth, 44f));
                 if (exitToTitleButton.TryGetComponent(out Image exitImage))
                 {
                     exitImage.color = ManagerUITheme.PanelDark;
                 }
-                ManagerUITheme.NormalizeButtonLabel(exitToTitleButton, "SAVE & EXIT TO TITLE", ManagerUITheme.TextMuted, 14);
+                ManagerUITheme.NormalizeButtonLabel(exitToTitleButton, "SAVE & EXIT TO TITLE", ManagerUITheme.TextMuted, 15);
             }
 
-            // Right column: league table caption. The Scroll View itself is an Editor
-            // object (leagueTableView) - positioned to occupy the rest of this column.
+            // Right column: league table caption + the table itself. The Scroll View is
+            // an Editor object (leagueTableView) - its RectTransform is repositioned here
+            // (full-stretch anchors, explicit pixel offsets) rather than left at whatever
+            // it was baked to in the scene, since that baked offset was tuned against the
+            // old 960x540 CanvasScaler reference resolution and would silently drift once
+            // the reference resolution changed to 1920x1080.
+            float tableColumnLeft = contentLeft + menuWidth + 60f;
+
             GameObject tableCaption = new GameObject("TableCaption", typeof(RectTransform));
             tableCaption.transform.SetParent(seasonHubPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(tableCaption.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(500f, -130f), new Vector2(430f, 22f));
-            ManagerUITheme.BuildLabel(tableCaption.transform, "PREMIER LEAGUE · TABLE", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
-        }
+            ManagerUITheme.SetPointAnchor(tableCaption.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(tableColumnLeft, -menuTop), new Vector2(contentRight - tableColumnLeft, 22f));
+            ManagerUITheme.BuildLabel(tableCaption.transform, "PREMIER LEAGUE · TABLE", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
-        // First letter of each of the first two words (e.g. "Manchester City" -> "MC"),
-        // or the first two letters of a single-word name. An approximation, not a real
-        // club abbreviation - there's no crest artwork/data source to draw a real one from.
-        private static string GetClubInitials(string clubName)
-        {
-            if (string.IsNullOrWhiteSpace(clubName))
+            if (leagueTableView != null && leagueTableView.TryGetComponent(out RectTransform tableRect))
             {
-                return "?";
+                tableRect.anchorMin = new Vector2(0f, 0f);
+                tableRect.anchorMax = new Vector2(1f, 1f);
+                tableRect.offsetMin = new Vector2(tableColumnLeft, 48f);
+                tableRect.offsetMax = new Vector2(-(1920f - contentRight), -(menuTop + 36f));
             }
-
-            string[] words = clubName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-            if (words.Length >= 2)
-            {
-                return $"{words[0][0]}{words[1][0]}".ToUpperInvariant();
-            }
-
-            return clubName.Length >= 2 ? clubName.Substring(0, 2).ToUpperInvariant() : clubName.ToUpperInvariant();
         }
 
         private void RefreshHubUI()
@@ -1171,16 +1222,16 @@ namespace Manager
             if (leagueTableView != null)
             {
                 int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
-                leagueTableView.Populate(playableTable.Sorted(), teamRegistry.GetTeamName, managedTeamId);
+                leagueTableView.Populate(playableTable.Sorted(), teamRegistry.GetTeamName, managedTeamId, GetRecentFormString);
             }
         }
 
         // --- Squad: Tactics Board (pitch view, position-pinned starters, drag a bench
         // card onto a pin to substitute, switch formation from the header dropdown - no
         // Editor-placed panel to wire, built entirely in code the first time it's
-        // opened, same precedent as Match Events). Replaces the old scrollview-based
-        // squad browse entirely; playerListPanel/squadListView stay alive below for the
-        // in-match sub picker only. ---
+        // opened, same precedent as Match Events). Mid-match subs also go through this
+        // same board now (see OnOpenTacticsBoardDuringMatchClicked) - the old in-match
+        // off-then-on picker flow (playerListPanel/squadListView) is gone entirely. ---
 
         public void OnViewSquadClicked()
         {
@@ -1202,7 +1253,18 @@ namespace Manager
             CloseTacticsBoardFormationDropdown();
             CleanupStrayDragGhosts();
 
-            ShowSeasonHub();
+            if (tacticsBoardOpenedMidMatch)
+            {
+                // Opened via "Make Changes" during a live match - return there instead of
+                // the Hub, and don't auto-resume (matches every other manual pause/resume
+                // flow in this file - the user hits Resume explicitly when ready).
+                tacticsBoardOpenedMidMatch = false;
+                if (matchdayPanel != null) matchdayPanel.SetActive(true);
+            }
+            else
+            {
+                ShowSeasonHub();
+            }
         }
 
         // Belt-and-suspenders on top of TacticsBoardPlayerCard's own drag-cleanup fixes -
@@ -1244,13 +1306,7 @@ namespace Manager
                 return;
             }
 
-            // Shorter than other screens' header/footer bands deliberately - the pitch
-            // needs as much of this 540-tall canvas as it can get. The mockup's own pin
-            // percentages were authored against an ~600px-tall pitch region (960x820
-            // panel); squeezed into what's left here even after shrinking these two,
-            // pins still need a vertical compression factor - see BuildTacticsBoardPin.
-            const float headerHeight = 64f;
-            const float benchHeight = 96f;
+            const float headerHeight = 90f;
 
             tacticsBoardPanel = new GameObject("TacticsBoardPanel", typeof(RectTransform));
             tacticsBoardPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
@@ -1265,16 +1321,43 @@ namespace Manager
 
             GameObject titleObj = new GameObject("Title", typeof(RectTransform));
             titleObj.transform.SetParent(header.transform, false);
-            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(30f, -18f), new Vector2(300f, 32f));
-            ManagerUITheme.BuildLabel(titleObj.transform, "SQUAD", 22, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -28f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "SQUAD", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             Button backButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
-            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-30f, -16f), new Vector2(150f, 36f));
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(150f, 36f));
             backButton.onClick.AddListener(OnTacticsBoardBackClicked);
 
             tacticsBoardFormationButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "FORMATION", ManagerUITheme.CardNeutral, ManagerUITheme.TextPrimary, 14);
-            ManagerUITheme.SetPointAnchor(tacticsBoardFormationButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-196f, -16f), new Vector2(200f, 36f));
+            ManagerUITheme.SetPointAnchor(tacticsBoardFormationButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-226f, -27f), new Vector2(200f, 36f));
             tacticsBoardFormationButton.onClick.AddListener(ToggleTacticsBoardFormationDropdown);
+
+            // Not in the mockup (which assumed a separate Squad-list-first navigation) -
+            // the user's chosen flow keeps the Tactics Board as the direct landing screen
+            // from the Hub's Squad button, with this as the way to reach the read-only
+            // Squad list instead of the other way around.
+            Button listViewButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "LIST VIEW", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(listViewButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-442f, -27f), new Vector2(150f, 36f));
+            listViewButton.onClick.AddListener(OnOpenSquadListClicked);
+
+            // Body row: pitch (flex, capped at 1320px wide) beside a 300px vertical bench
+            // rail, both filling the row band between the header and the panel's own
+            // bottom margin - replaces the old bottom-anchored horizontal bench strip
+            // beneath a fixed-1130:700-aspect-ratio pitch. Centered within a max-width
+            // 1700px content region, matching the mockup's own centered body row (this
+            // leaves a small unused margin after the bench rail when 1320+40+300 <
+            // 1700, same as the mockup's own flex layout would - not a bug).
+            const float outerContentWidth = 1700f;
+            const float sideMargin = (1920f - outerContentWidth) / 2f;
+            const float bodyPadding = 28f;
+            const float benchRailWidth = 300f;
+            const float columnGap = 40f;
+            const float pitchMaxWidth = 1320f;
+
+            float rowTop = headerHeight + bodyPadding;
+            float rowHeight = panelRect.rect.height - headerHeight - bodyPadding * 2f;
+            float availablePitchWidth = outerContentWidth - benchRailWidth - columnGap;
+            float pitchWidth = Mathf.Min(pitchMaxWidth, availablePitchWidth);
 
             // Pitch: flat rectangles for the halfway line/penalty boxes (no sprites in
             // this project, same convention as everywhere else) - without them the pins
@@ -1284,51 +1367,42 @@ namespace Manager
             GameObject pitchObj = new GameObject("Pitch", typeof(RectTransform), typeof(Image));
             pitchObj.transform.SetParent(tacticsBoardPanel.transform, false);
             tacticsBoardPitchContainer = pitchObj.GetComponent<RectTransform>();
-
-            // Constrained to a fixed aspect ratio (1130:700, matching design's Tactics
-            // Board mockup) instead of stretching to fill the panel's full width - the
-            // panel is far wider than a pitch region is tall, so a full-width pitch read
-            // as a smeared rectangle with no visible formation shape. Width-fit against
-            // the available height (the tighter dimension here), centered, leaving empty
-            // margin on either side by design. Height budget/positioning unchanged from
-            // before, so the pin vertical-compression factor in BuildTacticsBoardPin
-            // still applies.
-            const float pitchAspectRatio = 1130f / 700f;
-            float availableWidth = panelRect.rect.width - 80f;
-            float availableHeight = panelRect.rect.height - (headerHeight + 20f) - (benchHeight + 20f);
-            float pitchWidth = Mathf.Min(availableWidth, availableHeight * pitchAspectRatio);
-            float pitchHeight = pitchWidth / pitchAspectRatio;
-
-            tacticsBoardPitchContainer.anchorMin = new Vector2(0.5f, 0f);
-            tacticsBoardPitchContainer.anchorMax = new Vector2(0.5f, 0f);
-            tacticsBoardPitchContainer.pivot = new Vector2(0.5f, 0f);
-            tacticsBoardPitchContainer.anchoredPosition = new Vector2(0f, benchHeight + 20f);
-            tacticsBoardPitchContainer.sizeDelta = new Vector2(pitchWidth, pitchHeight);
+            tacticsBoardPitchContainer.anchorMin = new Vector2(0f, 1f);
+            tacticsBoardPitchContainer.anchorMax = new Vector2(0f, 1f);
+            tacticsBoardPitchContainer.pivot = new Vector2(0f, 1f);
+            tacticsBoardPitchContainer.anchoredPosition = new Vector2(sideMargin, -rowTop);
+            tacticsBoardPitchContainer.sizeDelta = new Vector2(pitchWidth, rowHeight);
             pitchObj.GetComponent<Image>().color = ManagerUITheme.PanelDark;
 
             BuildPitchMarkings(tacticsBoardPitchContainer);
 
-            // Positioned at benchHeight-12 (not -24) so its bottom edge clears the scroll
-            // view's top edge (at y=16+64=80) with a few px of breathing room, instead of
-            // overlapping it - confirmed live, the two were almost touching. The extra
-            // headroom this eats into is the 20px gap already reserved between the bench
-            // band and the pitch above it, so this doesn't touch pitch geometry.
+            float benchRailLeft = sideMargin + pitchWidth + columnGap;
+
             GameObject benchCaptionObj = new GameObject("BenchCaption", typeof(RectTransform));
             benchCaptionObj.transform.SetParent(tacticsBoardPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(benchCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(40f, benchHeight - 12f), new Vector2(600f, 20f));
-            ManagerUITheme.BuildLabel(benchCaptionObj.transform, "BENCH · DRAG A PLAYER ONTO THE PITCH TO SUBSTITUTE", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.SetPointAnchor(benchCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(benchRailLeft, -rowTop), new Vector2(benchRailWidth, 18f));
+            ManagerUITheme.BuildLabel(benchCaptionObj.transform, "BENCH", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
-            // Horizontal scroll row: same ScrollRect+Viewport+Content pattern as the
-            // vertical lists elsewhere (SquadListView/MatchEventsListContainer), just
-            // rotated - HorizontalLayoutGroup instead of Vertical, horizontal scroll only.
+            GameObject benchSubCaptionObj = new GameObject("BenchSubCaption", typeof(RectTransform));
+            benchSubCaptionObj.transform.SetParent(tacticsBoardPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(benchSubCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(benchRailLeft, -(rowTop + 24f)), new Vector2(benchRailWidth, 16f));
+            ManagerUITheme.BuildLabel(benchSubCaptionObj.transform, "DRAG ONTO THE PITCH TO SUBSTITUTE", 11, ManagerUITheme.TextDim, TextAlignmentOptions.MidlineLeft);
+
+            float benchListTop = rowTop + 24f + 24f;
+            float benchListHeight = rowHeight - 24f - 24f;
+
+            // Vertical scroll rail: same ScrollRect+Viewport+Content pattern as every
+            // other list in this file (SquadListView/LeagueTableView/MatchEvents), just
+            // a plain VerticalLayoutGroup instead of the bench's old rotated horizontal
+            // one now that it's a right-side column instead of a bottom strip.
             GameObject scrollViewObj = new GameObject("BenchScrollView", typeof(RectTransform), typeof(ScrollRect));
             scrollViewObj.transform.SetParent(tacticsBoardPanel.transform, false);
             RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
-            scrollViewRect.anchorMin = new Vector2(0f, 0f);
-            scrollViewRect.anchorMax = new Vector2(1f, 0f);
-            scrollViewRect.pivot = new Vector2(0.5f, 0f);
-            scrollViewRect.anchoredPosition = new Vector2(0f, 16f);
-            scrollViewRect.sizeDelta = new Vector2(-80f, 64f);
+            scrollViewRect.anchorMin = new Vector2(0f, 1f);
+            scrollViewRect.anchorMax = new Vector2(0f, 1f);
+            scrollViewRect.pivot = new Vector2(0f, 1f);
+            scrollViewRect.anchoredPosition = new Vector2(benchRailLeft, -benchListTop);
+            scrollViewRect.sizeDelta = new Vector2(benchRailWidth - 16f, benchListHeight);
 
             GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
             viewportObj.transform.SetParent(scrollViewObj.transform, false);
@@ -1341,45 +1415,49 @@ namespace Manager
             GameObject contentObj = new GameObject("Content", typeof(RectTransform));
             contentObj.transform.SetParent(viewportObj.transform, false);
             tacticsBoardBenchContent = contentObj.GetComponent<RectTransform>();
-            tacticsBoardBenchContent.anchorMin = new Vector2(0f, 0.5f);
-            tacticsBoardBenchContent.anchorMax = new Vector2(0f, 0.5f);
-            tacticsBoardBenchContent.pivot = new Vector2(0f, 0.5f);
+            tacticsBoardBenchContent.anchorMin = new Vector2(0f, 1f);
+            tacticsBoardBenchContent.anchorMax = new Vector2(1f, 1f);
+            tacticsBoardBenchContent.pivot = new Vector2(0.5f, 1f);
             tacticsBoardBenchContent.anchoredPosition = Vector2.zero;
             // Height must be explicit, not zero - childForceExpandHeight below stretches
             // every card to fill THIS rect's own height, so a zero-height Content
             // silently squashed every bench card to zero height too (invisible despite
-            // existing, with correct width/position - confirmed live).
-            tacticsBoardBenchContent.sizeDelta = new Vector2(0f, 56f);
+            // existing, with correct width/position - confirmed live, on the old
+            // horizontal version of this same rail).
+            tacticsBoardBenchContent.sizeDelta = new Vector2(0f, 76f);
 
-            HorizontalLayoutGroup layoutGroup = contentObj.AddComponent<HorizontalLayoutGroup>();
-            layoutGroup.childForceExpandWidth = false;
-            layoutGroup.childForceExpandHeight = true;
+            VerticalLayoutGroup layoutGroup = contentObj.AddComponent<VerticalLayoutGroup>();
+            layoutGroup.childForceExpandWidth = true;
+            layoutGroup.childForceExpandHeight = false;
             layoutGroup.childControlWidth = true;
             layoutGroup.childControlHeight = true;
             layoutGroup.spacing = 10f;
 
             ContentSizeFitter fitter = contentObj.AddComponent<ContentSizeFitter>();
-            fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
-            scrollRect.horizontal = true;
-            scrollRect.vertical = false;
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
             scrollRect.viewport = viewportRect;
             scrollRect.content = tacticsBoardBenchContent;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = -1f;
 
-            // Slim scrollbar in the 16px gap below the card row - the bench row itself was
-            // already a working horizontal ScrollRect (drag or mouse-wheel scrolls it,
-            // confirmed live), but with more bench players than fit in one screen's width
-            // and no visible affordance, it read as broken/missing subs rather than "there's
-            // more, scroll for it". This is purely a discoverability fix, not a functional one.
+            // Slim scrollbar in the 16px gap to the right of the card column - the bench
+            // rail itself is already a working vertical ScrollRect (drag or mouse-wheel
+            // scrolls it), but with more bench players than fit in one screen's height
+            // and no visible affordance, it reads as broken/missing subs rather than
+            // "there's more, scroll for it" (same lesson as the old horizontal strip's
+            // scrollbar, and Match Events' vertical one).
             GameObject scrollbarObj = new GameObject("BenchScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
             scrollbarObj.transform.SetParent(tacticsBoardPanel.transform, false);
             RectTransform scrollbarRect = scrollbarObj.GetComponent<RectTransform>();
-            scrollbarRect.anchorMin = new Vector2(0f, 0f);
-            scrollbarRect.anchorMax = new Vector2(1f, 0f);
-            scrollbarRect.pivot = new Vector2(0.5f, 0f);
-            scrollbarRect.anchoredPosition = new Vector2(0f, 4f);
-            scrollbarRect.sizeDelta = new Vector2(-80f, 6f);
+            scrollbarRect.anchorMin = new Vector2(0f, 1f);
+            scrollbarRect.anchorMax = new Vector2(0f, 1f);
+            scrollbarRect.pivot = new Vector2(0f, 1f);
+            scrollbarRect.anchoredPosition = new Vector2(benchRailLeft + benchRailWidth - 10f, -benchListTop);
+            scrollbarRect.sizeDelta = new Vector2(6f, benchListHeight);
             scrollbarObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
 
             GameObject handleAreaObj = new GameObject("SlidingArea", typeof(RectTransform));
@@ -1394,23 +1472,23 @@ namespace Manager
             handleObj.transform.SetParent(handleAreaObj.transform, false);
             RectTransform handleRect = handleObj.GetComponent<RectTransform>();
             handleRect.anchorMin = Vector2.zero;
-            handleRect.anchorMax = new Vector2(0.3f, 1f);
+            handleRect.anchorMax = new Vector2(1f, 0.3f);
             // Must be zeroed explicitly - a fresh RectTransform's default sizeDelta is
             // (100,100), which under stretched anchors ADDS 100px to the computed size
-            // rather than being ignored, blowing the handle up far past this 6px-tall bar
-            // (confirmed live: rendered as a huge block covering the bench row).
+            // rather than being ignored (confirmed live on this exact scrollbar's
+            // earlier horizontal incarnation).
             handleRect.sizeDelta = Vector2.zero;
             handleRect.offsetMin = Vector2.zero;
             handleRect.offsetMax = Vector2.zero;
             handleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
 
             Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
-            scrollbar.direction = Scrollbar.Direction.LeftToRight;
+            scrollbar.direction = Scrollbar.Direction.TopToBottom;
             scrollbar.handleRect = handleRect;
             scrollbar.targetGraphic = handleObj.GetComponent<Image>();
 
-            scrollRect.horizontalScrollbar = scrollbar;
-            scrollRect.horizontalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            scrollRect.verticalScrollbar = scrollbar;
+            scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
 
             BuildTacticsBoardFormationDropdown();
         }
@@ -1626,69 +1704,27 @@ namespace Manager
 
         private void BuildTacticsBoardPin(PlayerAgent player, PlayerPosition slotPosition, Vector2 pinPercent)
         {
-            GameObject pinObj = new GameObject($"Pin_{player.Name}", typeof(RectTransform), typeof(Image));
-            pinObj.transform.SetParent(tacticsBoardPitchContainer, false);
+            // No more vertical-compression fudge - that existed only to squeeze the
+            // mockup's pin percentages into the old 960x540 canvas's much shorter pitch
+            // region (see TacticsBoardLayout's own header comment). The 1920x1080 pitch
+            // is close enough to the source design's own proportions that the raw
+            // percentages should already read cleanly; re-verify live per formation
+            // (including the un-mocked 4-3-3) and reintroduce a compression factor here
+            // only if a specific formation still shows real overlap.
+            Vector2 anchor = new Vector2(pinPercent.x, 1f - pinPercent.y);
 
-            RectTransform pinRect = pinObj.GetComponent<RectTransform>();
+            GameObject pinObj = ManagerUITheme.BuildPitchPinVisual(
+                tacticsBoardPitchContainer,
+                $"Pin_{player.Name}",
+                anchor,
+                circleSize: 68f,
+                borderColor: ManagerUITheme.Accent,
+                ratingText: GetDisplayRating(player.GetOverallRating()).ToString(),
+                ratingFontSize: 18,
+                labelText: $"{player.Name} · {slotPosition}",
+                labelFontSize: 14);
 
-            // Compresses pinPercent.y toward the vertical center before mapping to an
-            // anchor. The mockup's pin percentages were authored against a pitch region
-            // roughly twice as tall as the one this 540-tall canvas has room for once
-            // the header/bench bands are accounted for - used verbatim, formations with
-            // a player stacked close behind another on the same flank (e.g. a back-three
-            // formation's GK sitting right above its central CB) visibly overlap here,
-            // even though they had enough room in the source design's taller pitch.
-            // Raised from 0.66 - that value still left GK/CB pins overlapping in
-            // back-three formations (confirmed live), and there's more headroom to work
-            // with than 0.66 assumed (checked against every formation's most extreme pin
-            // percentages, 0.85 keeps all of them comfortably inside the pitch box).
-            const float verticalCompression = 0.85f;
-            float compressedTopPercent = 0.5f + (pinPercent.y - 0.5f) * verticalCompression;
-
-            Vector2 anchor = new Vector2(pinPercent.x, 1f - compressedTopPercent);
-            pinRect.anchorMin = anchor;
-            pinRect.anchorMax = anchor;
-            pinRect.pivot = new Vector2(0.5f, 0.5f);
-            pinRect.anchoredPosition = Vector2.zero;
-            pinRect.sizeDelta = new Vector2(74f, 44f);
-
-            // Transparent - exists only so the pin has a Graphic to raycast against
-            // (IDropHandler needs one), not for the visible badge below.
-            pinObj.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
-
-            // Two-layer "border" (accent square behind, dark square inset on top) -
-            // a stand-in for the mockup's colored circle ring, since true circles
-            // need a sprite this project doesn't have (same flat-rectangles-only
-            // constraint as the pitch markings above).
-            GameObject badgeBorderObj = new GameObject("BadgeBorder", typeof(RectTransform), typeof(Image));
-            badgeBorderObj.transform.SetParent(pinObj.transform, false);
-            RectTransform badgeBorderRect = badgeBorderObj.GetComponent<RectTransform>();
-            badgeBorderRect.anchorMin = new Vector2(0.5f, 1f);
-            badgeBorderRect.anchorMax = new Vector2(0.5f, 1f);
-            badgeBorderRect.pivot = new Vector2(0.5f, 1f);
-            badgeBorderRect.anchoredPosition = Vector2.zero;
-            badgeBorderRect.sizeDelta = new Vector2(30f, 30f);
-            badgeBorderObj.GetComponent<Image>().color = ManagerUITheme.Accent;
-
-            GameObject badgeObj = new GameObject("Badge", typeof(RectTransform), typeof(Image));
-            badgeObj.transform.SetParent(badgeBorderObj.transform, false);
-            RectTransform badgeRect = badgeObj.GetComponent<RectTransform>();
-            badgeRect.anchorMin = Vector2.zero;
-            badgeRect.anchorMax = Vector2.one;
-            badgeRect.offsetMin = new Vector2(2f, 2f);
-            badgeRect.offsetMax = new Vector2(-2f, -2f);
-            badgeObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
-            ManagerUITheme.BuildLabel(badgeObj.transform, GetDisplayRating(player.GetOverallRating()).ToString(), 10, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
-
-            GameObject labelObj = new GameObject("Label", typeof(RectTransform));
-            labelObj.transform.SetParent(pinObj.transform, false);
-            RectTransform labelRect = labelObj.GetComponent<RectTransform>();
-            labelRect.anchorMin = new Vector2(0.5f, 0f);
-            labelRect.anchorMax = new Vector2(0.5f, 0f);
-            labelRect.pivot = new Vector2(0.5f, 0f);
-            labelRect.anchoredPosition = Vector2.zero;
-            labelRect.sizeDelta = new Vector2(130f, 14f);
-            ManagerUITheme.BuildLabel(labelObj.transform, $"{player.Name} · {slotPosition}", 8, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center);
+            pinObj.GetComponent<Image>().raycastTarget = true;
 
             TacticsBoardPlayerCard card = pinObj.AddComponent<TacticsBoardPlayerCard>();
             card.Configure(player, isDraggable: false, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin);
@@ -1700,8 +1736,8 @@ namespace Manager
             cardObj.transform.SetParent(tacticsBoardBenchContent, false);
 
             LayoutElement layoutElement = cardObj.GetComponent<LayoutElement>();
-            layoutElement.preferredWidth = 150f;
-            layoutElement.preferredHeight = 46f;
+            layoutElement.flexibleWidth = 1f;
+            layoutElement.preferredHeight = 66f;
 
             cardObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
 
@@ -1710,27 +1746,27 @@ namespace Manager
             RectTransform nameRect = nameObj.GetComponent<RectTransform>();
             nameRect.anchorMin = new Vector2(0f, 0.5f);
             nameRect.anchorMax = new Vector2(1f, 1f);
-            nameRect.offsetMin = new Vector2(10f, 0f);
-            nameRect.offsetMax = new Vector2(-10f, -2f);
-            ManagerUITheme.BuildLabel(nameObj.transform, player.Name, 13, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            nameRect.offsetMin = new Vector2(18f, 0f);
+            nameRect.offsetMax = new Vector2(-18f, -2f);
+            ManagerUITheme.BuildLabel(nameObj.transform, player.Name, 17, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject ovrObj = new GameObject("OVR", typeof(RectTransform));
             ovrObj.transform.SetParent(cardObj.transform, false);
             RectTransform ovrRect = ovrObj.GetComponent<RectTransform>();
             ovrRect.anchorMin = new Vector2(0f, 0.5f);
             ovrRect.anchorMax = new Vector2(1f, 1f);
-            ovrRect.offsetMin = new Vector2(10f, 0f);
-            ovrRect.offsetMax = new Vector2(-10f, -2f);
-            ManagerUITheme.BuildLabel(ovrObj.transform, GetDisplayRating(player.GetOverallRating()).ToString(), 13, ManagerUITheme.Accent, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+            ovrRect.offsetMin = new Vector2(18f, 0f);
+            ovrRect.offsetMax = new Vector2(-18f, -2f);
+            ManagerUITheme.BuildLabel(ovrObj.transform, GetDisplayRating(player.GetOverallRating()).ToString(), 17, ManagerUITheme.Accent, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
 
             GameObject posObj = new GameObject("Position", typeof(RectTransform));
             posObj.transform.SetParent(cardObj.transform, false);
             RectTransform posRect = posObj.GetComponent<RectTransform>();
             posRect.anchorMin = new Vector2(0f, 0f);
             posRect.anchorMax = new Vector2(1f, 0.5f);
-            posRect.offsetMin = new Vector2(10f, 2f);
-            posRect.offsetMax = new Vector2(-10f, 0f);
-            ManagerUITheme.BuildLabel(posObj.transform, player.PrimaryPosition.ToString(), 11, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            posRect.offsetMin = new Vector2(18f, 2f);
+            posRect.offsetMax = new Vector2(-18f, 0f);
+            ManagerUITheme.BuildLabel(posObj.transform, player.PrimaryPosition.ToString(), 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
 
             TacticsBoardPlayerCard card = cardObj.AddComponent<TacticsBoardPlayerCard>();
             card.Configure(player, isDraggable: true, isDropTarget: false, OnTacticsBoardPlayerTapped, null);
@@ -1738,7 +1774,7 @@ namespace Manager
 
         private void OnTacticsBoardPlayerTapped(PlayerAgent player)
         {
-            playerInspectReturnsToTacticsBoard = true;
+            playerInspectReturnTarget = PlayerInspectReturnTarget.TacticsBoard;
             OpenPlayerInspect(player);
         }
 
@@ -1750,9 +1786,53 @@ namespace Manager
             }
 
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
-            team.SubstitutePlayer(pinPlayer, benchPlayer);
+            bool applied = team.SubstitutePlayer(pinPlayer, benchPlayer);
+
+            // Only log/show as a "Subs Made" entry - and only resimulate the rest of the
+            // match - when this swap happens via the mid-match "Make Changes" flow;
+            // pre-match team-sheet edits on this same board (reached via the Hub's Squad
+            // button) aren't match events and have no match in progress to resimulate.
+            if (applied && tacticsBoardOpenedMidMatch)
+            {
+                matchSubsLog.Add((pinPlayer.Name, pinPlayer.PrimaryPosition.ToString(), benchPlayer.Name, benchPlayer.PrimaryPosition.ToString(), currentMatchMinute));
+                RefreshMatchSubsMadeList();
+                TriggerMidMatchResimulation();
+            }
 
             RefreshTacticsBoardUI();
+        }
+
+        // Regenerates the remainder of the currently-live match (from the minute after
+        // the sub was made) against the same underlying prediction, so a mid-match sub
+        // actually affects the rest of that match's events/result instead of only
+        // taking effect from the *next* match onward. lastSimulatedResult is the same
+        // object reference ReplayMatchCoroutine holds as its own "result" parameter, so
+        // mutating it here is visible to that coroutine as soon as it resumes (it's
+        // sitting frozen at Time.timeScale=0 while the Tactics Board is open, not
+        // actively reading events right now).
+        private void TriggerMidMatchResimulation()
+        {
+            if (lastSimulatedResult == null)
+            {
+                return;
+            }
+
+            AgentTeam homeTeamAgent = GetOrCreateAgentTeam(currentFixture.HomeTeam);
+            AgentTeam awayTeamAgent = GetOrCreateAgentTeam(currentFixture.AwayTeam);
+
+            AgentMatchSimulator.AgentMatchResult tail = matchSimulator.SimulateFromMinute(
+                homeTeamAgent,
+                awayTeamAgent,
+                lastExpectedHomeGoals,
+                lastExpectedAwayGoals,
+                currentMatchMinute + 1,
+                liveHomeGoalsSoFar,
+                liveAwayGoalsSoFar);
+
+            lastSimulatedResult.Events.RemoveAll(e => e.Minute > currentMatchMinute);
+            lastSimulatedResult.Events.AddRange(tail.Events);
+            lastSimulatedResult.HomeGoals = tail.HomeGoals;
+            lastSimulatedResult.AwayGoals = tail.AwayGoals;
         }
 
         private static float GetRatingPercent(PlayerAgent player)
@@ -1760,103 +1840,202 @@ namespace Manager
             return GetDisplayRating(player.GetOverallRating()) / 99f;
         }
 
-        private void ShowPlayerListPanel(string title, List<PlayerAgent> players, Action<PlayerAgent> onRowClicked)
-        {
-            if (playerListPanel != null) playerListPanel.SetActive(true);
-            if (playerListTitleText != null) playerListTitleText.text = title;
+        // --- Squad list: read-only Pos/Player/OVR/Rating browse screen (Starting XI +
+        // Bench), reached via the Tactics Board's "List View" button. Built entirely in
+        // code the first time it's opened, same precedent as the Tactics Board and Match
+        // Events panels - no Editor-placed panel to wire. ---
 
-            if (squadListView != null)
+        public void OnOpenSquadListClicked()
+        {
+            if (!squadBrowseChromeBuilt)
             {
-                squadListView.Populate(players, DescribePlayer, onRowClicked, ratingSelector: GetRatingPercent);
+                BuildSquadChrome();
+                squadBrowseChromeBuilt = true;
             }
+
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
+            if (squadBrowsePanel != null) squadBrowsePanel.SetActive(true);
+
+            RefreshSquadUI();
         }
 
-        private void ClosePlayerListPanel()
+        public void OnSquadListBackClicked()
         {
-            if (playerListPanel != null) playerListPanel.SetActive(false);
-            if (squadListView != null) squadListView.Clear();
+            if (squadBrowsePanel != null) squadBrowsePanel.SetActive(false);
+
+            OnViewSquadClicked();
         }
 
-        public void OnPlayerListBackClicked()
+        private void BuildSquadChrome()
         {
-            ClosePlayerListPanel();
-
-            if (subFlowIsInMatch)
-            {
-                // Cancelling an in-match sub attempt: resume the replay exactly as it
-                // was, no swap applied (pendingSubApplied stays false).
-                subFlowIsInMatch = false;
-                pendingSubApplied = false;
-                if (matchdayPanel != null) matchdayPanel.SetActive(true);
-                subSelectionConfirmed = true;
-            }
-            else
-            {
-                ShowSeasonHub();
-            }
-        }
-
-        // --- Substitutions: pre-match subs happen on the Tactics Board (drag a bench
-        // card onto a pin - see OnBenchPlayerDroppedOnPin), unlimited, same as real
-        // football before kickoff. This off-then-on picker flow exists only for the
-        // in-match case now, which IS capped (see OnMakeSubDuringMatchClicked). Both
-        // ultimately mutate the same persistent AgentTeam instance for managedTeamName,
-        // so a sub made either way carries forward into future matches unless changed
-        // again. ---
-
-        public void OnMakeSubDuringMatchClicked()
-        {
-            if (subsUsedThisMatch >= MaxSubsPerMatch || inMatchSubRequested)
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
             {
                 return;
             }
 
-            // Only raises the flag - the replay coroutine opens the picker itself at the
-            // next minute boundary, where it already has the match's team references.
-            inMatchSubRequested = true;
+            const float headerHeight = 90f;
+
+            squadBrowsePanel = new GameObject("SquadBrowsePanel", typeof(RectTransform));
+            squadBrowsePanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = squadBrowsePanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(squadBrowsePanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(squadBrowsePanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "SQUAD", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject bylineObj = new GameObject("Byline", typeof(RectTransform));
+            bylineObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(bylineObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -58f), new Vector2(1000f, 20f));
+            squadBrowseByline = ManagerUITheme.BuildLabel(bylineObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+
+            Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK TO TACTICS BOARD", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(230f, 36f));
+            backButton.onClick.AddListener(OnSquadListBackClicked);
+
+            Button sortButton = ManagerUITheme.BuildButton(header.transform, "SORT: POSITION", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(sortButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-306f, -27f), new Vector2(160f, 36f));
+            ManagerUITheme.SetDisabledPlaceholder(sortButton, "SORT: POSITION");
+
+            Button filterButton = ManagerUITheme.BuildButton(header.transform, "FILTER", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(filterButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-482f, -27f), new Vector2(150f, 36f));
+            ManagerUITheme.SetDisabledPlaceholder(filterButton, "FILTER");
+
+            // Centered max-width:1600 scrollable list - code-built ScrollRect+Viewport+
+            // Content+Scrollbar, same pattern as BuildMatchEventsPanel.
+            const float contentWidth = 1600f;
+            const float sideMargin = (1920f - contentWidth) / 2f;
+
+            GameObject scrollViewObj = new GameObject("SquadScrollView", typeof(RectTransform), typeof(ScrollRect));
+            scrollViewObj.transform.SetParent(squadBrowsePanel.transform, false);
+            RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scrollViewRect.anchorMin = new Vector2(0f, 0f);
+            scrollViewRect.anchorMax = new Vector2(1f, 1f);
+            scrollViewRect.offsetMin = new Vector2(sideMargin, 40f);
+            scrollViewRect.offsetMax = new Vector2(-(sideMargin + 20f), -(headerHeight + 40f));
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(scrollViewObj.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform), typeof(SquadListView));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            RectTransform contentRect = contentObj.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.anchoredPosition = Vector2.zero;
+            contentRect.sizeDelta = Vector2.zero;
+
+            squadBrowseListView = contentObj.GetComponent<SquadListView>();
+            squadBrowseListView.Bind(contentRect);
+
+            ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scrollRect.content = contentRect;
+            scrollRect.viewport = viewportRect;
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = -1f;
+
+            GameObject scrollbarObj = new GameObject("SquadScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
+            scrollbarObj.transform.SetParent(squadBrowsePanel.transform, false);
+            RectTransform scrollbarRect = scrollbarObj.GetComponent<RectTransform>();
+            scrollbarRect.anchorMin = new Vector2(1f, 0f);
+            scrollbarRect.anchorMax = new Vector2(1f, 1f);
+            scrollbarRect.offsetMin = new Vector2(-(sideMargin + 20f), 40f);
+            scrollbarRect.offsetMax = new Vector2(-(sideMargin + 4f), -(headerHeight + 40f));
+            scrollbarObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            GameObject handleAreaObj = new GameObject("SlidingArea", typeof(RectTransform));
+            handleAreaObj.transform.SetParent(scrollbarObj.transform, false);
+            RectTransform handleAreaRect = handleAreaObj.GetComponent<RectTransform>();
+            handleAreaRect.anchorMin = Vector2.zero;
+            handleAreaRect.anchorMax = Vector2.one;
+            handleAreaRect.offsetMin = Vector2.zero;
+            handleAreaRect.offsetMax = Vector2.zero;
+
+            GameObject handleObj = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handleObj.transform.SetParent(handleAreaObj.transform, false);
+            RectTransform handleRect = handleObj.GetComponent<RectTransform>();
+            handleRect.anchorMin = Vector2.zero;
+            handleRect.anchorMax = new Vector2(1f, 0.3f);
+            handleRect.sizeDelta = Vector2.zero;
+            handleRect.offsetMin = Vector2.zero;
+            handleRect.offsetMax = Vector2.zero;
+            handleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.TopToBottom;
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handleObj.GetComponent<Image>();
+
+            scrollRect.verticalScrollbar = scrollbar;
+            scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
         }
 
-        private void OnSubOffPicked(PlayerAgent playerOff)
+        private void RefreshSquadUI()
         {
-            pendingSubOffPlayer = playerOff;
-
-            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
-            ShowPlayerListPanel("Substitute ON (pick from bench)", new List<PlayerAgent>(team.Bench), OnSubOnPicked);
-        }
-
-        private void OnSubOnPicked(PlayerAgent playerOn)
-        {
-            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
-            pendingSubApplied = team.SubstitutePlayer(pendingSubOffPlayer, playerOn);
-
-            ClosePlayerListPanel();
-
-            if (subFlowIsInMatch)
+            if (squadBrowseListView == null)
             {
-                // Only in-match subs count against the 5-per-match cap - this branch is
-                // the only place subsUsedThisMatch increments.
-                if (pendingSubApplied)
+                return;
+            }
+
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            if (squadBrowseByline != null)
+            {
+                string formationText = TacticsBoardLayout.FormatFormation(team.Formation);
+
+                if (currentFixtureIndex < managedTeamFixtures.Count)
                 {
-                    subsUsedThisMatch++;
+                    OpenFootballMatch nextFixture = managedTeamFixtures[currentFixtureIndex];
+                    bool managedIsHome = nextFixture.HomeTeam == managedTeamName;
+                    string opponentName = managedIsHome ? nextFixture.AwayTeam : nextFixture.HomeTeam;
+                    squadBrowseByline.text = $"Next: vs {opponentName} ({(managedIsHome ? "H" : "A")})   ·   Formation {formationText}   ·   Tactic: {selectedTactic}";
                 }
-
-                subFlowIsInMatch = false;
-
-                if (matchdayPanel != null) matchdayPanel.SetActive(true);
-                if (makeSubButton != null) makeSubButton.interactable = subsUsedThisMatch < MaxSubsPerMatch;
-                RefreshMatchSubsStatus();
-
-                subSelectionConfirmed = true;
+                else
+                {
+                    squadBrowseByline.text = $"Season complete   ·   Formation {formationText}   ·   Tactic: {selectedTactic}";
+                }
             }
-            else
+
+            squadBrowseListView.Clear();
+            squadBrowseListView.AddGridHeaderRow();
+            squadBrowseListView.AddSectionHeader("Starting XI");
+
+            List<PlayerPosition> slots = squadGenerator.GetStartingPositions(team.Formation);
+
+            for (int i = 0; i < team.StartingEleven.Count; i++)
             {
-                ShowSeasonHub();
+                PlayerAgent player = team.StartingEleven[i];
+                PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
+                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked);
+            }
+
+            squadBrowseListView.AddSectionHeader($"Bench ({team.Bench.Count})");
+
+            foreach (PlayerAgent player in team.Bench)
+            {
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked);
             }
         }
 
-        private string DescribePlayer(PlayerAgent player)
+        private void OnSquadRowClicked(PlayerAgent player)
         {
-            return $"{player.PrimaryPosition,-3} {player.Name,-20} OVR {GetDisplayRating(player.GetOverallRating())}";
+            playerInspectReturnTarget = PlayerInspectReturnTarget.Squad;
+            OpenPlayerInspect(player);
         }
 
         // Cosmetic only: stretches the true weighted rating away from the midpoint so
@@ -1931,7 +2110,7 @@ namespace Manager
 
             if (inspectBackButton != null)
             {
-                ManagerUITheme.SetPointAnchor(inspectBackButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-30f, navButtonY), new Vector2(220f, navButtonHeight));
+                ManagerUITheme.SetPointAnchor(inspectBackButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-60f, navButtonY), new Vector2(220f, navButtonHeight));
                 if (inspectBackButton.TryGetComponent(out Image backImage))
                 {
                     backImage.color = ManagerUITheme.CardNeutral;
@@ -1942,7 +2121,7 @@ namespace Manager
 
             if (inspectPreviousButton != null)
             {
-                ManagerUITheme.SetPointAnchor(inspectPreviousButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(30f, navButtonY), new Vector2(140f, navButtonHeight));
+                ManagerUITheme.SetPointAnchor(inspectPreviousButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(60f, navButtonY), new Vector2(140f, navButtonHeight));
                 if (inspectPreviousButton.TryGetComponent(out Image prevImage))
                 {
                     prevImage.color = ManagerUITheme.CardNeutral;
@@ -1953,7 +2132,7 @@ namespace Manager
 
             if (inspectNextButton != null)
             {
-                ManagerUITheme.SetPointAnchor(inspectNextButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(186f, navButtonY), new Vector2(140f, navButtonHeight));
+                ManagerUITheme.SetPointAnchor(inspectNextButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(216f, navButtonY), new Vector2(140f, navButtonHeight));
                 if (inspectNextButton.TryGetComponent(out Image nextImage))
                 {
                     nextImage.color = ManagerUITheme.CardNeutral;
@@ -1989,14 +2168,20 @@ namespace Manager
         {
             if (playerInspectPanel != null) playerInspectPanel.SetActive(false);
 
-            if (playerInspectReturnsToTacticsBoard)
+            switch (playerInspectReturnTarget)
             {
-                playerInspectReturnsToTacticsBoard = false;
-                OnViewSquadClicked();
-            }
-            else
-            {
-                ShowSeasonHub();
+                case PlayerInspectReturnTarget.TacticsBoard:
+                    playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
+                    OnViewSquadClicked();
+                    break;
+                case PlayerInspectReturnTarget.Squad:
+                    playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
+                    OnOpenSquadListClicked();
+                    break;
+                default:
+                    playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
+                    ShowSeasonHub();
+                    break;
             }
         }
 
@@ -2026,9 +2211,13 @@ namespace Manager
             PlayerAgent player = inspectSquadPlayers[inspectPlayerIndex];
             string squadStatus = player.IsStartingEleven ? "Starting XI" : "Bench";
 
+            // Centered max-width:1600px content region within the full-stretch 1920-wide
+            // container, matching the mockup's centered layout instead of edge-to-edge.
+            const float contentMargin = (1920f - 1600f) / 2f;
+
             GameObject headerBand = new GameObject("HeaderBand", typeof(RectTransform), typeof(Image));
             headerBand.transform.SetParent(playerInspectContentContainer, false);
-            ManagerUITheme.AnchorTopStretch(headerBand, 0f, 130f);
+            ManagerUITheme.AnchorTopStretch(headerBand, 0f, 130f, contentMargin);
             headerBand.GetComponent<Image>().color = ManagerUITheme.PanelDark;
             spawnedInspectElements.Add(headerBand);
 
@@ -2050,7 +2239,7 @@ namespace Manager
             nameRect.pivot = new Vector2(0f, 1f);
             nameRect.sizeDelta = new Vector2(-220f, 30f);
             nameRect.anchoredPosition = new Vector2(116f, -22f);
-            ManagerUITheme.BuildLabel(nameLabel.transform, player.Name.ToUpperInvariant(), 22, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(nameLabel.transform, player.Name.ToUpperInvariant(), 24, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject metaLabel = new GameObject("Meta", typeof(RectTransform));
             metaLabel.transform.SetParent(headerBand.transform, false);
@@ -2084,7 +2273,7 @@ namespace Manager
             ovrRect.pivot = new Vector2(1f, 1f);
             ovrRect.sizeDelta = new Vector2(90f, 44f);
             ovrRect.anchoredPosition = new Vector2(-24f, -20f);
-            ManagerUITheme.BuildLabel(ovrValue.transform, displayRating.ToString(), 34, ManagerUITheme.Accent, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(ovrValue.transform, displayRating.ToString(), 40, ManagerUITheme.Accent, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
 
             GameObject ovrCaption = new GameObject("OvrCaption", typeof(RectTransform));
             ovrCaption.transform.SetParent(headerBand.transform, false);
@@ -2093,20 +2282,21 @@ namespace Manager
             ovrCaptionRect.anchorMax = new Vector2(1f, 1f);
             ovrCaptionRect.pivot = new Vector2(1f, 1f);
             ovrCaptionRect.sizeDelta = new Vector2(140f, 16f);
-            ovrCaptionRect.anchoredPosition = new Vector2(-24f, -60f);
-            ManagerUITheme.BuildLabel(ovrCaption.transform, $"OVERALL ({player.PrimaryPosition})", 10, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
+            ovrCaptionRect.anchoredPosition = new Vector2(-24f, -66f);
+            ManagerUITheme.BuildLabel(ovrCaption.transform, $"OVERALL ({player.PrimaryPosition})", 11, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
 
             GameObject attributeGrid = new GameObject("AttributeGrid", typeof(RectTransform));
             attributeGrid.transform.SetParent(playerInspectContentContainer, false);
             spawnedInspectElements.Add(attributeGrid);
 
             // Full stretch down to the footer (not a fixed height) - the old fixed 220px
-            // height left most of the panel as dead empty space below the grid.
+            // height left most of the panel as dead empty space below the grid. Same
+            // centered max-width:1600 region as the header band above.
             RectTransform attributeGridRect = attributeGrid.GetComponent<RectTransform>();
             attributeGridRect.anchorMin = new Vector2(0f, 0f);
             attributeGridRect.anchorMax = new Vector2(1f, 1f);
-            attributeGridRect.offsetMin = new Vector2(20f, 110f);
-            attributeGridRect.offsetMax = new Vector2(-20f, -150f);
+            attributeGridRect.offsetMin = new Vector2(contentMargin + 20f, 110f);
+            attributeGridRect.offsetMax = new Vector2(-(contentMargin + 20f), -150f);
 
             BuildAttributeColumn(attributeGridRect, 0, 4, "Technical", new (string, float)[]
             {
@@ -2309,9 +2499,9 @@ namespace Manager
             titleRect.anchorMin = new Vector2(0f, 1f);
             titleRect.anchorMax = new Vector2(1f, 1f);
             titleRect.pivot = new Vector2(0f, 1f);
-            titleRect.sizeDelta = new Vector2(-44f, 30f);
-            titleRect.anchoredPosition = new Vector2(24f, -18f);
-            matchdayPrepTitleLabel = ManagerUITheme.BuildLabel(titleObj.transform, "", 20, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            titleRect.sizeDelta = new Vector2(-120f, 34f);
+            titleRect.anchoredPosition = new Vector2(60f, -22f);
+            matchdayPrepTitleLabel = ManagerUITheme.BuildLabel(titleObj.transform, "", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject subtitleObj = new GameObject("Subtitle", typeof(RectTransform));
             subtitleObj.transform.SetParent(header.transform, false);
@@ -2319,9 +2509,9 @@ namespace Manager
             subtitleRect.anchorMin = new Vector2(0f, 1f);
             subtitleRect.anchorMax = new Vector2(1f, 1f);
             subtitleRect.pivot = new Vector2(0f, 1f);
-            subtitleRect.sizeDelta = new Vector2(-44f, 20f);
-            subtitleRect.anchoredPosition = new Vector2(24f, -52f);
-            matchdayPrepSubtitleLabel = ManagerUITheme.BuildLabel(subtitleObj.transform, "", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            subtitleRect.sizeDelta = new Vector2(-120f, 20f);
+            subtitleRect.anchoredPosition = new Vector2(60f, -58f);
+            matchdayPrepSubtitleLabel = ManagerUITheme.BuildLabel(subtitleObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
 
             ManagerUITheme.BuildAccentBand(matchdayPrepContentContainer, topBand: false, height: bandHeight);
 
@@ -2331,25 +2521,52 @@ namespace Manager
             // rendered on top of and completely hid the correctly-styled Simulate Match button.
             if (simulateMatchButton != null)
             {
-                ManagerUITheme.SetPointAnchor(simulateMatchButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-40f, 20f), new Vector2(220f, 50f));
+                ManagerUITheme.SetPointAnchor(simulateMatchButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-60f, 22f), new Vector2(220f, 50f));
             }
 
             if (matchdayPrepBackButton != null)
             {
-                ManagerUITheme.SetPointAnchor(matchdayPrepBackButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-272f, 20f), new Vector2(170f, 50f));
+                ManagerUITheme.SetPointAnchor(matchdayPrepBackButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-292f, 22f), new Vector2(170f, 50f));
             }
 
-            // Tactic and Substitutions moved to the live Match Day screen (see
-            // BuildMatchdayChrome) - Matchday Prep is scouting-only now, so the opponent
-            // squad list gets the full width instead of sharing it with a right column.
+            // Two-column body: opponent scout list (left, flexible width) beside a
+            // read-only opponent-formation pitch (right, 620px, matching the mockup).
+            // Both fill the row between the header/footer bands.
+            const float sideMargin = 60f;
+            const float columnGap = 48f;
+            const float opponentPitchWidth = 620f;
+            const float rowMargin = bandHeight + 24f;
+
+            float scoutListRight = 1920f - sideMargin - opponentPitchWidth - columnGap;
+
             if (opponentSquadListView != null)
             {
                 RectTransform opponentListRect = opponentSquadListView.GetComponent<RectTransform>();
                 opponentListRect.anchorMin = new Vector2(0f, 0f);
                 opponentListRect.anchorMax = new Vector2(1f, 1f);
-                opponentListRect.offsetMin = new Vector2(40f, bandHeight + 24f);
-                opponentListRect.offsetMax = new Vector2(-40f, -(bandHeight + 24f));
+                opponentListRect.offsetMin = new Vector2(sideMargin, rowMargin);
+                opponentListRect.offsetMax = new Vector2(-(1920f - scoutListRight), -rowMargin);
+                opponentSquadListView.gameObject.SetActive(true);
             }
+
+            float pitchLeft = scoutListRight + columnGap;
+
+            GameObject pitchColumnCaption = new GameObject("OpponentShapeCaption", typeof(RectTransform));
+            pitchColumnCaption.transform.SetParent(matchdayPrepContentContainer, false);
+            ManagerUITheme.SetPointAnchor(pitchColumnCaption.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(pitchLeft, -rowMargin), new Vector2(opponentPitchWidth, 20f));
+            ManagerUITheme.BuildLabel(pitchColumnCaption.transform, "OPPONENT SHAPE", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject pitchObj = new GameObject("OpponentPitch", typeof(RectTransform), typeof(Image));
+            pitchObj.transform.SetParent(matchdayPrepContentContainer, false);
+            matchdayPrepPitchContainer = pitchObj.GetComponent<RectTransform>();
+            matchdayPrepPitchContainer.anchorMin = new Vector2(0f, 1f);
+            matchdayPrepPitchContainer.anchorMax = new Vector2(0f, 1f);
+            matchdayPrepPitchContainer.pivot = new Vector2(0f, 1f);
+            matchdayPrepPitchContainer.anchoredPosition = new Vector2(pitchLeft, -(rowMargin + 30f));
+            matchdayPrepPitchContainer.sizeDelta = new Vector2(opponentPitchWidth, 1080f - (rowMargin + 30f) - rowMargin);
+            pitchObj.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            BuildPitchMarkings(matchdayPrepPitchContainer);
         }
 
         private void RefreshMatchdayPrepUI()
@@ -2370,16 +2587,75 @@ namespace Manager
                 matchdayPrepSubtitleLabel.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {TacticsBoardLayout.FormatFormation(opponentTeam.Formation)}";
             }
 
-            // Opponent scouting list is retired here - once the tactics board lands, this
-            // screen will show the opposition's formation on the board itself instead of a
-            // flat Starting XI/Bench list, so there's no point populating (or fixing the
-            // layout of) a list that's about to be replaced.
+            // Read-only scouting list - Starting XI + Bench, no row click handler (null
+            // onRowClicked means SquadListView.AddPlayerGridRow builds no Button at all).
             if (opponentSquadListView != null)
             {
                 opponentSquadListView.Clear();
-                opponentSquadListView.gameObject.SetActive(false);
+                opponentSquadListView.AddGridHeaderRow();
+                opponentSquadListView.AddSectionHeader("Starting XI");
+
+                List<PlayerPosition> slots = squadGenerator.GetStartingPositions(opponentTeam.Formation);
+
+                for (int i = 0; i < opponentTeam.StartingEleven.Count; i++)
+                {
+                    PlayerAgent player = opponentTeam.StartingEleven[i];
+                    PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
+                    opponentSquadListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), null);
+                }
+
+                opponentSquadListView.AddSectionHeader($"Bench ({opponentTeam.Bench.Count})");
+
+                foreach (PlayerAgent player in opponentTeam.Bench)
+                {
+                    opponentSquadListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), null);
+                }
             }
 
+            RefreshMatchdayPrepOpponentPitch(opponentTeam);
+        }
+
+        // Read-only opponent-formation pitch - shares BuildPitchMarkings and the
+        // BuildPitchPinVisual helper with the interactive Tactics Board, but never adds
+        // a TacticsBoardPlayerCard (no drag, no drop, no tap), and uses the Danger red
+        // border color instead of Accent green to read as "not yours to touch".
+        private void RefreshMatchdayPrepOpponentPitch(AgentTeam opponentTeam)
+        {
+            if (matchdayPrepPitchContainer == null)
+            {
+                return;
+            }
+
+            for (int i = matchdayPrepPitchContainer.childCount - 1; i >= 0; i--)
+            {
+                Transform child = matchdayPrepPitchContainer.GetChild(i);
+
+                if (child.name.StartsWith("OpponentPin_"))
+                {
+                    Destroy(child.gameObject);
+                }
+            }
+
+            IReadOnlyList<Vector2> pins = TacticsBoardLayout.GetPins(opponentTeam.Formation);
+            List<PlayerPosition> slots = squadGenerator.GetStartingPositions(opponentTeam.Formation);
+
+            for (int i = 0; i < opponentTeam.StartingEleven.Count && i < pins.Count; i++)
+            {
+                PlayerAgent player = opponentTeam.StartingEleven[i];
+                PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
+                Vector2 anchor = new Vector2(pins[i].x, 1f - pins[i].y);
+
+                ManagerUITheme.BuildPitchPinVisual(
+                    matchdayPrepPitchContainer,
+                    $"OpponentPin_{player.Name}",
+                    anchor,
+                    circleSize: 48f,
+                    borderColor: ManagerUITheme.Danger,
+                    ratingText: GetDisplayRating(player.GetOverallRating()).ToString(),
+                    ratingFontSize: 12,
+                    labelText: $"{player.Name} · {slot}",
+                    labelFontSize: 10);
+            }
         }
 
         public void OnMatchdayPrepBackClicked()
@@ -2438,17 +2714,17 @@ namespace Manager
             // live). This frees up room right below the divider for the scorer row.
             if (scoreText != null)
             {
-                ManagerUITheme.SetPointAnchor(scoreText.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -56f), new Vector2(220f, 44f));
-                scoreText.fontSize = 32;
+                ManagerUITheme.SetPointAnchor(scoreText.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -56f), new Vector2(260f, 60f));
+                scoreText.fontSize = 52;
                 scoreText.alignment = TextAlignmentOptions.Center;
                 scoreText.textWrappingMode = TextWrappingModes.NoWrap;
             }
 
             if (clockText != null)
             {
-                ManagerUITheme.SetPointAnchor(clockText.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -108f), new Vector2(220f, 20f));
+                ManagerUITheme.SetPointAnchor(clockText.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -122f), new Vector2(220f, 20f));
                 clockText.alignment = TextAlignmentOptions.Center;
-                clockText.fontSize = 13;
+                clockText.fontSize = 14;
             }
 
             GameObject homeNameObj = new GameObject("HomeTeamName", typeof(RectTransform));
@@ -2457,9 +2733,9 @@ namespace Manager
             homeNameRect.anchorMin = new Vector2(0.5f, 1f);
             homeNameRect.anchorMax = new Vector2(0.5f, 1f);
             homeNameRect.pivot = new Vector2(1f, 1f);
-            homeNameRect.anchoredPosition = new Vector2(-120f, -64f);
-            homeNameRect.sizeDelta = new Vector2(260f, 32f);
-            matchHomeNameLabel = ManagerUITheme.BuildLabel(homeNameObj.transform, "", 18, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+            homeNameRect.anchoredPosition = new Vector2(-150f, -68f);
+            homeNameRect.sizeDelta = new Vector2(300f, 36f);
+            matchHomeNameLabel = ManagerUITheme.BuildLabel(homeNameObj.transform, "", 24, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
 
             GameObject awayNameObj = new GameObject("AwayTeamName", typeof(RectTransform));
             awayNameObj.transform.SetParent(matchdayPanel.transform, false);
@@ -2467,14 +2743,14 @@ namespace Manager
             awayNameRect.anchorMin = new Vector2(0.5f, 1f);
             awayNameRect.anchorMax = new Vector2(0.5f, 1f);
             awayNameRect.pivot = new Vector2(0f, 1f);
-            awayNameRect.anchoredPosition = new Vector2(120f, -64f);
-            awayNameRect.sizeDelta = new Vector2(260f, 32f);
-            matchAwayNameLabel = ManagerUITheme.BuildLabel(awayNameObj.transform, "", 18, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            awayNameRect.anchoredPosition = new Vector2(150f, -68f);
+            awayNameRect.sizeDelta = new Vector2(300f, 36f);
+            matchAwayNameLabel = ManagerUITheme.BuildLabel(awayNameObj.transform, "", 24, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject fullTimeCaptionObj = new GameObject("FullTimeCaption", typeof(RectTransform));
             fullTimeCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             ManagerUITheme.SetPointAnchor(fullTimeCaptionObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -24f), new Vector2(300f, 20f));
-            matchFullTimeCaptionLabel = ManagerUITheme.BuildLabel(fullTimeCaptionObj.transform, "FULL TIME", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.Center, FontStyles.Bold);
+            matchFullTimeCaptionLabel = ManagerUITheme.BuildLabel(fullTimeCaptionObj.transform, "FULL TIME", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.Center, FontStyles.Bold);
             matchFullTimeCaptionGroup = fullTimeCaptionObj;
             matchFullTimeCaptionGroup.SetActive(false);
 
@@ -2564,55 +2840,54 @@ namespace Manager
             // what looked like everything "floating in the middle"/illegible overlap).
             // Explicit pivot.x=0 after each call fixes it: anchor point stays at the
             // column's left edge, and the element now actually starts there.
-            GameObject subsCaptionObj = new GameObject("SubstitutionsCaption", typeof(RectTransform));
+            GameObject subsCaptionObj = new GameObject("SubsMadeCaption", typeof(RectTransform));
             subsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             RectTransform subsCaptionRect = subsCaptionObj.GetComponent<RectTransform>();
             ManagerUITheme.SetPointAnchor(subsCaptionRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 28f)), new Vector2(360f, 20f));
             subsCaptionRect.pivot = new Vector2(0f, 1f);
-            ManagerUITheme.BuildLabel(subsCaptionObj.transform, "SUBSTITUTIONS", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(subsCaptionObj.transform, "SUBS MADE  ·  MANAGE VIA TACTICS BOARD", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
-            GameObject subsStatusObj = new GameObject("SubsStatus", typeof(RectTransform));
-            subsStatusObj.transform.SetParent(matchdayPanel.transform, false);
-            RectTransform subsStatusRect = subsStatusObj.GetComponent<RectTransform>();
-            ManagerUITheme.SetPointAnchor(subsStatusRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 54f)), new Vector2(360f, 22f));
-            subsStatusRect.pivot = new Vector2(0f, 1f);
-            matchSubsStatusLabel = ManagerUITheme.BuildLabel(subsStatusObj.transform, "", 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
+            // Read-only log of subs made this match (see matchSubsLog) - populated by
+            // RefreshMatchSubsMadeList, one row per entry. Subs themselves happen on the
+            // Tactics Board via "Make Changes" below, not here - no picker on this screen.
+            GameObject subsLogObj = new GameObject("SubsLog", typeof(RectTransform));
+            subsLogObj.transform.SetParent(matchdayPanel.transform, false);
+            RectTransform subsLogRect = subsLogObj.GetComponent<RectTransform>();
+            ManagerUITheme.SetPointAnchor(subsLogRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 54f)), new Vector2(360f, 76f));
+            subsLogRect.pivot = new Vector2(0f, 1f);
+            matchSubsLogContainer = subsLogRect;
 
-            // Reuses the existing, already-working in-match sub picker (OnMakeSubDuringMatchClicked)
-            // as its click handler - restyled/repositioned/shown here instead of floating
-            // unstyled mid-screen over the match log, which is what it did before.
-            if (makeSubButton != null)
-            {
-                makeSubButton.gameObject.SetActive(true);
-                RectTransform makeSubRect = makeSubButton.GetComponent<RectTransform>();
-                ManagerUITheme.SetPointAnchor(makeSubRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 88f)), new Vector2(300f, 42f));
-                makeSubRect.pivot = new Vector2(0f, 1f);
-                if (makeSubButton.TryGetComponent(out Image subButtonImage))
-                {
-                    subButtonImage.color = ManagerUITheme.CardNeutral;
-                }
+            VerticalLayoutGroup subsLogLayout = subsLogObj.AddComponent<VerticalLayoutGroup>();
+            subsLogLayout.childForceExpandWidth = true;
+            subsLogLayout.childForceExpandHeight = false;
+            subsLogLayout.childControlWidth = true;
+            subsLogLayout.childControlHeight = true;
+            subsLogLayout.spacing = 6f;
 
-                ManagerUITheme.NormalizeButtonLabel(makeSubButton, "+ ADD SUBSTITUTION", ManagerUITheme.TextBody, 13);
-            }
+            ContentSizeFitter subsLogFitter = subsLogObj.AddComponent<ContentSizeFitter>();
+            subsLogFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            // Substitutions are a live-match-only concept (see also OnMakeSubDuringMatchClicked)
-            // - the design's Full-Time Summary has no Substitutions section at all, so this
-            // whole column needs to disappear at full-time exactly like the tactic pills do.
+            Button makeChangesButton = ManagerUITheme.BuildButton(matchdayPanel.transform, "MAKE CHANGES", ManagerUITheme.CardNeutral, ManagerUITheme.TextPrimary, 13);
+            RectTransform makeChangesRect = makeChangesButton.GetComponent<RectTransform>();
+            ManagerUITheme.SetPointAnchor(makeChangesRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 148f)), new Vector2(300f, 42f));
+            makeChangesRect.pivot = new Vector2(0f, 1f);
+            makeChangesButton.onClick.AddListener(OnOpenTacticsBoardDuringMatchClicked);
+
+            // Subs Made is a live-match-only concept - the design's Full-Time Summary has
+            // no equivalent section at all, so this whole column needs to disappear at
+            // full-time exactly like the tactic pills do.
             System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
             matchLiveOnlyElements[^1] = subsCaptionObj;
             System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
-            matchLiveOnlyElements[^1] = subsStatusObj;
-            if (makeSubButton != null)
-            {
-                System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
-                matchLiveOnlyElements[^1] = makeSubButton.gameObject;
-            }
+            matchLiveOnlyElements[^1] = subsLogObj;
+            System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
+            matchLiveOnlyElements[^1] = makeChangesButton.gameObject;
 
             GameObject statsCaptionObj = new GameObject("MatchStatsCaption", typeof(RectTransform));
             statsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             RectTransform statsCaptionRect2 = statsCaptionObj.GetComponent<RectTransform>();
             matchStatsCaptionRect = statsCaptionRect2;
-            ManagerUITheme.SetPointAnchor(statsCaptionRect2, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 152f)), new Vector2(360f, 20f));
+            ManagerUITheme.SetPointAnchor(statsCaptionRect2, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 210f)), new Vector2(360f, 20f));
             statsCaptionRect2.pivot = new Vector2(0f, 1f);
             matchStatsCaptionLabel = ManagerUITheme.BuildLabel(statsCaptionObj.transform, "MATCH STATS", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
@@ -2622,7 +2897,7 @@ namespace Manager
             matchStatsBarsContainer.anchorMin = new Vector2(0.55f, 1f);
             matchStatsBarsContainer.anchorMax = new Vector2(0.55f, 1f);
             matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
-            matchStatsBarsContainer.anchoredPosition = new Vector2(20f, -(headerHeight + 180f));
+            matchStatsBarsContainer.anchoredPosition = new Vector2(20f, -(headerHeight + 238f));
             matchStatsBarsContainer.sizeDelta = new Vector2(360f, 140f);
 
             // --- Footer: live Tactic pills (left, real - reused from Matchday Prep, which
@@ -2700,12 +2975,68 @@ namespace Manager
             }
         }
 
-        private void RefreshMatchSubsStatus()
+        // Rebuilds the "Subs Made" list from matchSubsLog - one row per entry, oldest
+        // first. Called after ReplayMatchCoroutine starts (empty log) and again whenever
+        // a sub lands via the Tactics Board mid-match (see
+        // OnOpenTacticsBoardDuringMatchClicked/OnBenchPlayerDroppedOnPin).
+        private void RefreshMatchSubsMadeList()
         {
-            if (matchSubsStatusLabel != null)
+            if (matchSubsLogContainer == null)
             {
-                matchSubsStatusLabel.text = $"Subs used: {subsUsedThisMatch}/{MaxSubsPerMatch}";
+                return;
             }
+
+            foreach (Transform child in matchSubsLogContainer)
+            {
+                Destroy(child.gameObject);
+            }
+
+            foreach (var entry in matchSubsLog)
+            {
+                GameObject row = new GameObject("SubRow", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+                row.transform.SetParent(matchSubsLogContainer, false);
+
+                LayoutElement layoutElement = row.GetComponent<LayoutElement>();
+                layoutElement.preferredHeight = 32f;
+                layoutElement.flexibleWidth = 1f;
+
+                row.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+                string rowText = $"OUT {entry.offName} ({entry.offPosition})  →  IN {entry.onName} ({entry.onPosition})  {entry.minute}'";
+                GameObject labelObj = new GameObject("Label", typeof(RectTransform));
+                labelObj.transform.SetParent(row.transform, false);
+                RectTransform labelRect = labelObj.GetComponent<RectTransform>();
+                labelRect.anchorMin = Vector2.zero;
+                labelRect.anchorMax = Vector2.one;
+                labelRect.offsetMin = new Vector2(10f, 0f);
+                labelRect.offsetMax = new Vector2(-10f, 0f);
+                ManagerUITheme.BuildLabel(labelObj.transform, rowText, 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
+            }
+        }
+
+        // Opens the Tactics Board mid-match so subs can be made via the same drag-drop
+        // path used pre-match, uncapped (no MaxSubsPerMatch-style limit here, matching
+        // pre-match behaviour) - replaces the old separate off-then-on picker flow.
+        // Auto-pauses via the existing Pause toggle rather than a new mechanism.
+        public void OnOpenTacticsBoardDuringMatchClicked()
+        {
+            if (!matchPaused)
+            {
+                OnPauseClicked();
+            }
+
+            if (!tacticsBoardChromeBuilt)
+            {
+                BuildTacticsBoardChrome();
+                tacticsBoardChromeBuilt = true;
+            }
+
+            if (matchdayPanel != null) matchdayPanel.SetActive(false);
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
+
+            tacticsBoardOpenedMidMatch = true;
+
+            RefreshTacticsBoardUI();
         }
 
         // Single proportional bar showing the home team's share of total shots (no
@@ -2787,7 +3118,7 @@ namespace Manager
             tacticLineRect.sizeDelta = new Vector2(0f, 22f);
             // Centered, matching the design's Full-Time Summary board (it centers this
             // line under the stat bars rather than left-aligning it).
-            ManagerUITheme.BuildLabel(tacticLineObj.transform, $"Tactic used: {tacticUsedForCurrentMatch}", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
+            ManagerUITheme.BuildLabel(tacticLineObj.transform, $"Tactic used: {tacticUsedForCurrentMatch}", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
         }
 
         private float BuildFullTimeStatRow(string label, int homeValue, int awayValue, float y)
@@ -2810,7 +3141,7 @@ namespace Manager
             labelRect.offsetMax = Vector2.zero;
             TextMeshProUGUI text = labelObj.AddComponent<TextMeshProUGUI>();
             text.text = $"{homeValue}   {label}   {awayValue}";
-            text.fontSize = 14;
+            text.fontSize = 18;
             text.color = ManagerUITheme.TextBody;
             text.alignment = TextAlignmentOptions.MidlineLeft;
             text.textWrappingMode = TextWrappingModes.NoWrap;
@@ -2850,10 +3181,17 @@ namespace Manager
             matchPaused = false;
             Time.timeScale = 1f;
 
-            if (matchHomeNameLabel != null) matchHomeNameLabel.text = currentFixture.HomeTeam.ToUpperInvariant();
-            if (matchAwayNameLabel != null) matchAwayNameLabel.text = currentFixture.AwayTeam.ToUpperInvariant();
+            if (matchHomeNameLabel != null) { matchHomeNameLabel.text = currentFixture.HomeTeam.ToUpperInvariant(); matchHomeNameLabel.fontSize = 24; }
+            if (matchAwayNameLabel != null) { matchAwayNameLabel.text = currentFixture.AwayTeam.ToUpperInvariant(); matchAwayNameLabel.fontSize = 24; }
+            // scoreText.fontSize isn't reset by ResetMatchStatsPanelToLiveLayout below (that
+            // only touches the stats panel's position/size) - without resetting it here too,
+            // matchday 2+ would inherit the full-time-sized 56pt score from the previous
+            // match instead of the live view's 52pt, same class of bug that motivated
+            // ResetMatchStatsPanelToLiveLayout in the first place.
+            if (scoreText != null) scoreText.fontSize = 52;
             SetTactic(selectedTactic); // re-highlights the correct footer pill for this screen
-            RefreshMatchSubsStatus();
+            matchSubsLog.Clear();
+            RefreshMatchSubsMadeList();
             if (matchFullTimeCaptionGroup != null) matchFullTimeCaptionGroup.SetActive(false);
 
             // Undo everything ShowFullTimeResults did to these shared elements for the
@@ -2962,16 +3300,68 @@ namespace Manager
 
         private void ApplyFixtureResult(OpenFootballMatch fixture, AgentMatchSimulator.AgentMatchResult result)
         {
+            int homeTeamId = teamRegistry.GetTeamId(fixture.HomeTeam);
+            int awayTeamId = teamRegistry.GetTeamId(fixture.AwayTeam);
+
             MatchRecord record = new MatchRecord
             {
                 Matchday = fixture.Matchday,
-                HomeTeamId = teamRegistry.GetTeamId(fixture.HomeTeam),
-                AwayTeamId = teamRegistry.GetTeamId(fixture.AwayTeam),
+                HomeTeamId = homeTeamId,
+                AwayTeamId = awayTeamId,
                 HomeGoals = result.HomeGoals,
                 AwayGoals = result.AwayGoals
             };
 
             playableTable.Apply(record);
+
+            if (result.HomeGoals > result.AwayGoals)
+            {
+                RecordFormResult(homeTeamId, 'W');
+                RecordFormResult(awayTeamId, 'L');
+            }
+            else if (result.HomeGoals < result.AwayGoals)
+            {
+                RecordFormResult(homeTeamId, 'L');
+                RecordFormResult(awayTeamId, 'W');
+            }
+            else
+            {
+                RecordFormResult(homeTeamId, 'D');
+                RecordFormResult(awayTeamId, 'D');
+            }
+        }
+
+        // Manager-Mode-only last-5-results tracker backing the Hub league table's Form
+        // column (e.g. "W D W W D") - deliberately NOT part of LeagueTable.Entry, which
+        // stays untouched and is still what Research Mode's evaluation output reads.
+        // Oldest result first, newest last (capped at 5), matching how "form" reads
+        // left-to-right in real football coverage.
+        private readonly Dictionary<int, List<char>> recentFormByTeamId = new();
+
+        private void RecordFormResult(int teamId, char result)
+        {
+            if (!recentFormByTeamId.TryGetValue(teamId, out List<char> history))
+            {
+                history = new List<char>();
+                recentFormByTeamId[teamId] = history;
+            }
+
+            history.Add(result);
+
+            if (history.Count > 5)
+            {
+                history.RemoveAt(0);
+            }
+        }
+
+        private string GetRecentFormString(int teamId)
+        {
+            if (!recentFormByTeamId.TryGetValue(teamId, out List<char> history) || history.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return string.Join(" ", history);
         }
 
         // Applies the tactic modifier only when the managed club is actually playing
@@ -3019,11 +3409,12 @@ namespace Manager
             Queue<string> recentEventLines = new();
 
             skipToResultsRequested = false;
-            inMatchSubRequested = false;
-            subFlowIsInMatch = false;
-            pendingSubApplied = false;
-
-            if (makeSubButton != null) makeSubButton.interactable = subsUsedThisMatch < MaxSubsPerMatch;
+            tacticsBoardOpenedMidMatch = false;
+            currentMatchMinute = 0;
+            liveHomeGoalsSoFar = 0;
+            liveAwayGoalsSoFar = 0;
+            matchSubsLog.Clear();
+            RefreshMatchSubsMadeList();
 
             if (eventFeedText != null) eventFeedText.text = "";
             if (scoreText != null) scoreText.text = "0 - 0";
@@ -3033,40 +3424,34 @@ namespace Manager
 
             float secondsPerMinute = matchReplayDurationSeconds / 90f;
 
-            AgentTeam homeTeamAgent = GetOrCreateAgentTeam(currentFixture.HomeTeam);
-            AgentTeam awayTeamAgent = GetOrCreateAgentTeam(currentFixture.AwayTeam);
-            AgentTeam managedAgentTeam = currentFixture.HomeTeam == managedTeamName ? homeTeamAgent : awayTeamAgent;
-
-            int homeGoals = 0;
-            int awayGoals = 0;
             int homeShots = 0;
             int awayShots = 0;
             int eventIndex = 0;
 
             for (int minute = 1; minute <= 90; minute++)
             {
+                // Tracked on a field (not just the loop variable) so a mid-match
+                // substitution made via the Tactics Board - which happens entirely
+                // outside this coroutine while it's frozen at Time.timeScale=0 - knows
+                // which minute to resimulate from and log against.
+                currentMatchMinute = minute;
+
                 if (!skipToResultsRequested)
                 {
-                    // Was a single blocking WaitForSeconds(secondsPerMinute) - since that's
-                    // scaled-time, it (correctly) freezes solid while paused (timeScale=0),
-                    // but that also meant a sub requested while paused couldn't be noticed
-                    // until this wait naturally elapsed, which can only happen after
-                    // resuming - the picker only ever popped open right when you hit
-                    // Resume, not when you actually pressed the sub button (confirmed
-                    // live). Polling per-frame with an early-exit lets a paused sub
-                    // request be handled immediately without changing the normal
-                    // (unpaused) per-minute pacing at all.
+                    // Was a single blocking WaitForSeconds(secondsPerMinute) - since
+                    // that's scaled-time, it (correctly) freezes solid while paused
+                    // (timeScale=0). Polling per-frame instead lets Skip to Results
+                    // interrupt immediately even while paused, without changing the
+                    // normal (unpaused) per-minute pacing at all. The Tactics Board
+                    // itself needs no special handling here - opening it mid-match just
+                    // pauses (Time.timeScale=0), which freezes this wait solid exactly
+                    // like a manual Pause does, and it resumes correctly on its own once
+                    // timeScale goes back to 1.
                     float elapsed = 0f;
 
                     while (elapsed < secondsPerMinute)
                     {
-                        // skipToResultsRequested alone (not gated on matchPaused like the
-                        // sub check) - same frozen-wait trap while paused (confirmed live:
-                        // Skip to Results silently did nothing until Resume), and breaking
-                        // early here costs nothing in the unpaused case either, since the
-                        // very next loop iteration's "if (!skipToResultsRequested)" would
-                        // have skipped the wait anyway.
-                        if ((inMatchSubRequested && matchPaused) || skipToResultsRequested)
+                        if (skipToResultsRequested)
                         {
                             break;
                         }
@@ -3085,11 +3470,11 @@ namespace Manager
 
                     if (matchEvent.IsGoal)
                     {
-                        if (matchEvent.HomeTeamScored) homeGoals++; else awayGoals++;
+                        if (matchEvent.HomeTeamScored) liveHomeGoalsSoFar++; else liveAwayGoalsSoFar++;
 
                         if (scoreText != null)
                         {
-                            scoreText.text = $"{homeGoals} - {awayGoals}";
+                            scoreText.text = $"{liveHomeGoalsSoFar} - {liveAwayGoalsSoFar}";
                         }
                     }
 
@@ -3119,40 +3504,6 @@ namespace Manager
                         eventFeedText.text = string.Join("\n", recentEventLines);
                     }
                 }
-
-                // Skipping to results ignores any pending sub request rather than
-                // popping a picker mid-fast-forward - the request is simply dropped.
-                if (inMatchSubRequested && !skipToResultsRequested)
-                {
-                    subSelectionConfirmed = false;
-                    pendingSubApplied = false;
-                    subFlowIsInMatch = true;
-
-                    if (matchdayPanel != null) matchdayPanel.SetActive(false);
-
-                    ShowPlayerListPanel("Substitute OFF (pick a starter)", new List<PlayerAgent>(managedAgentTeam.StartingEleven), OnSubOffPicked);
-
-                    yield return new WaitUntil(() => subSelectionConfirmed);
-
-                    inMatchSubRequested = false;
-
-                    if (pendingSubApplied)
-                    {
-                        AgentMatchSimulator.AgentMatchResult tail = matchSimulator.SimulateFromMinute(
-                            homeTeamAgent,
-                            awayTeamAgent,
-                            lastExpectedHomeGoals,
-                            lastExpectedAwayGoals,
-                            minute + 1,
-                            homeGoals,
-                            awayGoals);
-
-                        result.Events.RemoveAll(e => e.Minute > minute);
-                        result.Events.AddRange(tail.Events);
-                        result.HomeGoals = tail.HomeGoals;
-                        result.AwayGoals = tail.AwayGoals;
-                    }
-                }
             }
 
             // Switch from the live layout to the full-time one: hide the toolbar/clock/
@@ -3167,9 +3518,12 @@ namespace Manager
 
             if (scoreText != null)
             {
-                scoreText.fontSize = 44;
+                scoreText.fontSize = 56;
                 scoreText.text = $"{result.HomeGoals} - {result.AwayGoals}";
             }
+
+            if (matchHomeNameLabel != null) matchHomeNameLabel.fontSize = 30;
+            if (matchAwayNameLabel != null) matchAwayNameLabel.fontSize = 30;
 
             // Match Log is removed entirely at full-time (moved to its own "Match
             // Events" screen, see OnViewMatchEventsClicked) rather than staying visible
@@ -3273,7 +3627,6 @@ namespace Manager
             ApplyFixtureResult(currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
-            subsUsedThisMatch = 0;
 
             matchPaused = false;
             Time.timeScale = 1f;
@@ -3344,12 +3697,14 @@ namespace Manager
             GameObject captionObj = new GameObject("FullTimeCaption", typeof(RectTransform));
             captionObj.transform.SetParent(header.transform, false);
             ManagerUITheme.SetPointAnchor(captionObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -16f), new Vector2(300f, 18f));
-            ManagerUITheme.BuildLabel(captionObj.transform, "FULL TIME", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.Center, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(captionObj.transform, "FULL TIME", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.Center, FontStyles.Bold);
 
+            // Score/team-name sizes match the Full-Time Summary header exactly - the
+            // mockup uses the identical header block for both screens.
             GameObject scoreObj = new GameObject("Score", typeof(RectTransform));
             scoreObj.transform.SetParent(header.transform, false);
-            ManagerUITheme.SetPointAnchor(scoreObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -44f), new Vector2(160f, 32f));
-            matchEventsScoreText = ManagerUITheme.BuildLabel(scoreObj.transform, "", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+            ManagerUITheme.SetPointAnchor(scoreObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -50f), new Vector2(200f, 60f));
+            matchEventsScoreText = ManagerUITheme.BuildLabel(scoreObj.transform, "", 56, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
 
             GameObject homeObj = new GameObject("HomeTeamName", typeof(RectTransform));
             homeObj.transform.SetParent(header.transform, false);
@@ -3357,9 +3712,9 @@ namespace Manager
             homeRect.anchorMin = new Vector2(0.5f, 1f);
             homeRect.anchorMax = new Vector2(0.5f, 1f);
             homeRect.pivot = new Vector2(1f, 1f);
-            homeRect.anchoredPosition = new Vector2(-90f, -50f);
-            homeRect.sizeDelta = new Vector2(220f, 24f);
-            matchEventsHomeNameLabel = ManagerUITheme.BuildLabel(homeObj.transform, "", 14, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+            homeRect.anchoredPosition = new Vector2(-110f, -58f);
+            homeRect.sizeDelta = new Vector2(260f, 32f);
+            matchEventsHomeNameLabel = ManagerUITheme.BuildLabel(homeObj.transform, "", 30, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
 
             GameObject awayObj = new GameObject("AwayTeamName", typeof(RectTransform));
             awayObj.transform.SetParent(header.transform, false);
@@ -3367,9 +3722,9 @@ namespace Manager
             awayRect.anchorMin = new Vector2(0.5f, 1f);
             awayRect.anchorMax = new Vector2(0.5f, 1f);
             awayRect.pivot = new Vector2(0f, 1f);
-            awayRect.anchoredPosition = new Vector2(90f, -50f);
-            awayRect.sizeDelta = new Vector2(220f, 24f);
-            matchEventsAwayNameLabel = ManagerUITheme.BuildLabel(awayObj.transform, "", 14, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            awayRect.anchoredPosition = new Vector2(110f, -58f);
+            awayRect.sizeDelta = new Vector2(260f, 32f);
+            matchEventsAwayNameLabel = ManagerUITheme.BuildLabel(awayObj.transform, "", 30, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject eventsCaptionObj = new GameObject("MatchEventsCaption", typeof(RectTransform));
             eventsCaptionObj.transform.SetParent(matchEventsPanel.transform, false);
@@ -3499,14 +3854,14 @@ namespace Manager
                 row.transform.SetParent(matchEventsListContainer, false);
 
                 LayoutElement layoutElement = row.GetComponent<LayoutElement>();
-                layoutElement.preferredHeight = 30f;
+                layoutElement.preferredHeight = 38f;
                 layoutElement.flexibleWidth = 1f;
 
                 string text = evt.IsGoal
                     ? $"<b><color=#3ddc84>{evt.Minute}'</color></b>   <b><color=#3ddc84>{evt.Description}</color></b>"
                     : $"{evt.Minute}'   {evt.Description}";
 
-                ManagerUITheme.BuildLabel(row.transform, text, 14, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+                ManagerUITheme.BuildLabel(row.transform, text, 19, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
             }
         }
 

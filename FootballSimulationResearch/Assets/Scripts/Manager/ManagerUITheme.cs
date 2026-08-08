@@ -27,6 +27,11 @@ namespace Manager
         public static readonly Color Disabled = HexColor("#3a4658");
         public static readonly Color DisabledText = HexColor("#5a6572");
 
+        // Far end of the Title/Hub background gradient wash (mockup's
+        // linear-gradient(..., #0b1120 40%, #132118 100%)) - a dark green the gradient
+        // fades toward, never used as a flat/solid color anywhere else.
+        public static readonly Color GradientEnd = HexColor("#132118");
+
         // Traffic-light coloring for a 0-100 stat: green when strong, amber when
         // mediocre, red when weak.
         public static Color RatingColor(float value)
@@ -250,6 +255,130 @@ namespace Manager
             }
 
             NormalizeButtonLabel(button, $"{label} (Soon)", DisabledText, fontSize);
+        }
+
+        // Shared pitch-pin visual: a bordered circular badge (rating number inside) with a
+        // name/position label beneath it. Used by both the interactive Tactics Board pins
+        // (accent border, draggable/droppable - caller adds TacticsBoardPlayerCard on the
+        // returned object) and Matchday Prep's read-only opponent pitch (danger-red border,
+        // no interaction) - the two only differ in size/color/interactivity, not in how the
+        // badge itself is built, so this is a pure extraction with no visual change to the
+        // existing interactive board.
+        public static GameObject BuildPitchPinVisual(
+            Transform pitch,
+            string objectName,
+            Vector2 anchor,
+            float circleSize,
+            Color borderColor,
+            string ratingText,
+            int ratingFontSize,
+            string labelText,
+            int labelFontSize)
+        {
+            float labelHeight = labelFontSize + 8f;
+            float labelWidth = circleSize + 70f;
+
+            GameObject pinObj = new GameObject(objectName, typeof(RectTransform), typeof(Image));
+            pinObj.transform.SetParent(pitch, false);
+
+            RectTransform pinRect = pinObj.GetComponent<RectTransform>();
+            pinRect.anchorMin = anchor;
+            pinRect.anchorMax = anchor;
+            pinRect.pivot = new Vector2(0.5f, 0.5f);
+            pinRect.anchoredPosition = Vector2.zero;
+            pinRect.sizeDelta = new Vector2(labelWidth, circleSize + labelHeight + 6f);
+
+            // Transparent - exists only so interactive pins have a Graphic to raycast
+            // against (IDropHandler needs one); read-only pins never raycast at all.
+            Image pinImage = pinObj.GetComponent<Image>();
+            pinImage.color = new Color(0f, 0f, 0f, 0f);
+            pinImage.raycastTarget = false;
+
+            // Two-layer "border" (colored square behind, dark square inset on top) - a
+            // stand-in for the mockup's colored circle ring, since true circles need a
+            // sprite this project doesn't have (same flat-rectangles-only constraint as
+            // the pitch markings).
+            GameObject badgeBorderObj = new GameObject("BadgeBorder", typeof(RectTransform), typeof(Image));
+            badgeBorderObj.transform.SetParent(pinObj.transform, false);
+            RectTransform badgeBorderRect = badgeBorderObj.GetComponent<RectTransform>();
+            badgeBorderRect.anchorMin = new Vector2(0.5f, 1f);
+            badgeBorderRect.anchorMax = new Vector2(0.5f, 1f);
+            badgeBorderRect.pivot = new Vector2(0.5f, 1f);
+            badgeBorderRect.anchoredPosition = Vector2.zero;
+            badgeBorderRect.sizeDelta = new Vector2(circleSize, circleSize);
+            badgeBorderObj.GetComponent<Image>().color = borderColor;
+
+            GameObject badgeObj = new GameObject("Badge", typeof(RectTransform), typeof(Image));
+            badgeObj.transform.SetParent(badgeBorderObj.transform, false);
+            RectTransform badgeRect = badgeObj.GetComponent<RectTransform>();
+            badgeRect.anchorMin = Vector2.zero;
+            badgeRect.anchorMax = Vector2.one;
+            badgeRect.offsetMin = new Vector2(2f, 2f);
+            badgeRect.offsetMax = new Vector2(-2f, -2f);
+            badgeObj.GetComponent<Image>().color = CardNeutralAlt;
+            BuildLabel(badgeObj.transform, ratingText, ratingFontSize, TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            GameObject labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(pinObj.transform, false);
+            RectTransform labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0.5f, 0f);
+            labelRect.anchorMax = new Vector2(0.5f, 0f);
+            labelRect.pivot = new Vector2(0.5f, 0f);
+            labelRect.anchoredPosition = Vector2.zero;
+            labelRect.sizeDelta = new Vector2(labelWidth, labelHeight);
+            BuildLabel(labelObj.transform, labelText, labelFontSize, TextPrimary, TextAlignmentOptions.Center);
+
+            return pinObj;
+        }
+
+        // Unity UI has no native CSS-style linear-gradient - this bakes a small diagonal
+        // two-color gradient into a texture once (cached, reused everywhere) and stretches
+        // it behind a panel's content as the very first sibling, matching the mockup's
+        // `linear-gradient(...)` wash on Title/Hub closely enough for a decorative
+        // background (not pixel-exact angle math - nobody will measure it, it just needs
+        // to read as "less monotonous than a flat color").
+        private static Texture2D cachedGradientTexture;
+
+        public static void ApplyDiagonalGradientBackground(GameObject panel, Color colorA, Color colorB)
+        {
+            if (panel == null)
+            {
+                return;
+            }
+
+            if (cachedGradientTexture == null)
+            {
+                const int size = 64;
+                cachedGradientTexture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+                cachedGradientTexture.wrapMode = TextureWrapMode.Clamp;
+                cachedGradientTexture.filterMode = FilterMode.Bilinear;
+
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        float t = Mathf.Clamp01(((x / (float)(size - 1)) + (1f - y / (float)(size - 1))) * 0.5f);
+                        cachedGradientTexture.SetPixel(x, y, Color.Lerp(colorA, colorB, t));
+                    }
+                }
+
+                cachedGradientTexture.Apply();
+            }
+
+            GameObject gradientObj = new GameObject("GradientBackground", typeof(RectTransform), typeof(Image));
+            gradientObj.transform.SetParent(panel.transform, false);
+            gradientObj.transform.SetAsFirstSibling();
+
+            RectTransform rect = gradientObj.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+
+            Image image = gradientObj.GetComponent<Image>();
+            image.sprite = Sprite.Create(cachedGradientTexture, new Rect(0f, 0f, cachedGradientTexture.width, cachedGradientTexture.height), new Vector2(0.5f, 0.5f));
+            image.type = Image.Type.Simple;
+            image.raycastTarget = false;
         }
 
         // Fresh Editor-created buttons ("Button - TextMeshPro") default to a large TMP font

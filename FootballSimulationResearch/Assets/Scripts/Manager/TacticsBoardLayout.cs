@@ -15,14 +15,16 @@ namespace Manager
     // bottom, GK's own goal). BuildPitchPin converts that to Unity's bottom-up anchor
     // fraction (anchorY = 1 - topPercent) rather than storing pre-converted values, so
     // this table stays a direct, auditable copy of the source design's own numbers -
-    // ONE deliberate deviation: every formation's GK is nudged from the source's 0.90
-    // to 0.95. The mockup's own pitch region was authored ~600px tall; ours tops out
-    // around 350-400px once the header/bench bands are accounted for (960x540 canvas,
-    // landscape, much wider/flatter than the mockup's own panel), so the source's 10%
-    // GK-to-back-line gap compresses into a real label overlap here (confirmed live)
-    // that BuildTacticsBoardPin's vertical compression factor alone couldn't fully
-    // resolve. Pushing GK toward the pitch's bottom edge buys back separation without
-    // touching every other position's already-working spacing.
+    // ONE deliberate deviation carried over from the original 960x540 canvas: every
+    // formation's GK is nudged from the source's 0.90 to 0.95. That canvas's pitch
+    // region topped out around 350-400px tall (vs the mockup's own ~600-700px), which
+    // compressed the source's 10% GK-to-back-line gap into a real label overlap
+    // (confirmed live). Now that the canvas is a native 1920x1080 (pitch genuinely
+    // ~900px tall, close to the source design's own proportions), this nudge and
+    // BuildTacticsBoardPin's separate vertical-compression factor (now removed
+    // entirely) may no longer be needed - re-verify live per formation, including the
+    // un-mocked 4-3-3, before assuming 0.95 is still the right value over the
+    // source's own 0.90.
     public static class TacticsBoardLayout
     {
         private static readonly Dictionary<Formation, Vector2[]> Pins = new()
