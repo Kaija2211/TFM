@@ -226,6 +226,7 @@ namespace Manager
         private bool tacticsScreenChromeBuilt;
         private GameObject tacticsScreenPanel;
         private readonly List<GameObject> spawnedTacticsScreenElements = new();
+        private readonly List<GameObject> tacticsScreenOpenDropdowns = new();
 
         // Which screen "Back to Squad" on Player Inspect actually returns to - three
         // possible entry points now that the Squad list screen exists alongside the
@@ -2050,26 +2051,30 @@ namespace Manager
             }
 
             spawnedTacticsScreenElements.Clear();
+            tacticsScreenOpenDropdowns.Clear();
 
-            const float sideMargin = 60f;
             const float columnTopMargin = 30f;
-            const float leftColumnWidth = 700f;
-            const float rightColumnWidth = 760f;
 
             ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
             List<PlayerAgent> squadPlayers = new List<PlayerAgent>(team.StartingEleven);
             squadPlayers.AddRange(team.Bench);
 
-            // Left column: SHAPE & APPROACH, anchored from the left edge.
+            // Both columns use fraction anchors (0-1 of the panel's real width) rather
+            // than a fixed pixel width anchored from one edge - the earlier version put
+            // each column at a fixed width independently anchored from its own edge,
+            // which was individually drift-safe but left a huge, oddly-proportioned gap
+            // between them on a real 1920-wide canvas (confirmed live: Thomas reported
+            // the columns reading as "far apart"). Fractions solve both problems at once:
+            // immune to aspect-ratio drift AND keeps the two columns a sensible, fixed
+            // proportion of the screen apart regardless of resolution.
             GameObject leftColumn = new GameObject("ShapeApproachColumn", typeof(RectTransform));
             leftColumn.transform.SetParent(tacticsScreenPanel.transform, false);
             RectTransform leftColumnRect = leftColumn.GetComponent<RectTransform>();
-            leftColumnRect.anchorMin = new Vector2(0f, 0f);
-            leftColumnRect.anchorMax = new Vector2(0f, 1f);
-            leftColumnRect.pivot = new Vector2(0f, 1f);
-            leftColumnRect.offsetMin = new Vector2(sideMargin, TacticsScreenFooterHeight);
-            leftColumnRect.offsetMax = new Vector2(sideMargin + leftColumnWidth, -(TacticsScreenHeaderHeight + columnTopMargin));
+            leftColumnRect.anchorMin = new Vector2(0.03f, 0f);
+            leftColumnRect.anchorMax = new Vector2(0.42f, 1f);
+            leftColumnRect.offsetMin = new Vector2(0f, TacticsScreenFooterHeight);
+            leftColumnRect.offsetMax = new Vector2(0f, -(TacticsScreenHeaderHeight + columnTopMargin));
             spawnedTacticsScreenElements.Add(leftColumn);
 
             GameObject shapeCaption = new GameObject("Caption", typeof(RectTransform));
@@ -2090,18 +2095,13 @@ namespace Manager
                 new[] { "SLOW", "BALANCED", "FAST" }, (int)tacticalSliders.Tempo,
                 index => { tacticalSliders.Tempo = (TempoSetting)index; RefreshTacticsScreenUI(); });
 
-            // Right column: LEADERSHIP + SET PIECES, anchored from the right edge - each
-            // side anchored from its own natural edge rather than computing one from a
-            // fixed total-width assumption, so the gap between them adapts automatically
-            // to the real canvas width instead of drifting on a non-16:9 window.
             GameObject rightColumn = new GameObject("RoleAssignmentColumn", typeof(RectTransform));
             rightColumn.transform.SetParent(tacticsScreenPanel.transform, false);
             RectTransform rightColumnRect = rightColumn.GetComponent<RectTransform>();
-            rightColumnRect.anchorMin = new Vector2(1f, 0f);
-            rightColumnRect.anchorMax = new Vector2(1f, 1f);
-            rightColumnRect.pivot = new Vector2(1f, 1f);
-            rightColumnRect.offsetMin = new Vector2(-(sideMargin + rightColumnWidth), TacticsScreenFooterHeight);
-            rightColumnRect.offsetMax = new Vector2(-sideMargin, -(TacticsScreenHeaderHeight + columnTopMargin));
+            rightColumnRect.anchorMin = new Vector2(0.55f, 0f);
+            rightColumnRect.anchorMax = new Vector2(0.97f, 1f);
+            rightColumnRect.offsetMin = new Vector2(0f, TacticsScreenFooterHeight);
+            rightColumnRect.offsetMax = new Vector2(0f, -(TacticsScreenHeaderHeight + columnTopMargin));
             spawnedTacticsScreenElements.Add(rightColumn);
 
             GameObject leadershipCaption = new GameObject("Caption", typeof(RectTransform));
@@ -2109,11 +2109,23 @@ namespace Manager
             ManagerUITheme.AnchorTopStretch(leadershipCaption, 0f, 20f, 0f);
             ManagerUITheme.BuildLabel(leadershipCaption.transform, "LEADERSHIP", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
+            // Each role shows whichever stats actually matter for it - Leadership/
+            // Composure/Age for captaincy (the exact inputs ManagerCaptaincyModifier's
+            // suitability score reads), Crossing/Creativity for corners (the exact
+            // PickCreatorForChance formula a designated corner taker's stats drive),
+            // Free Kicks/Finishing+Composure for the other two, organizational for now
+            // but still the honest "this is what a real free-kick/penalty taker needs"
+            // proxy - rather than picking blind by name alone.
+            static string CaptaincySummary(PlayerAgent p) => $"LDR {p.Leadership:F0}  COMP {p.Composure:F0}  AGE {p.Age}";
+            static string PenaltySummary(PlayerAgent p) => $"FIN {p.Finishing:F0}  COMP {p.Composure:F0}";
+            static string FreeKickSummary(PlayerAgent p) => $"FK {p.FreeKicks:F0}";
+            static string CornerSummary(PlayerAgent p) => $"CRS {p.Crossing:F0}  CRE {p.Creativity:F0}";
+
             float roleTop = 40f;
             roleTop = BuildRoleDropdownRow(rightColumn.transform, "CAPTAIN", roleTop, roles.Captain, squadPlayers,
-                player => AssignRole(SquadRoleSlot.Captain, player));
+                player => AssignRole(SquadRoleSlot.Captain, player), CaptaincySummary);
             roleTop = BuildRoleDropdownRow(rightColumn.transform, "VICE-CAPTAIN", roleTop, roles.ViceCaptain, squadPlayers,
-                player => AssignRole(SquadRoleSlot.ViceCaptain, player));
+                player => AssignRole(SquadRoleSlot.ViceCaptain, player), CaptaincySummary);
 
             roleTop += 30f;
 
@@ -2124,13 +2136,13 @@ namespace Manager
             roleTop += 30f;
 
             roleTop = BuildRoleDropdownRow(rightColumn.transform, "PENALTY TAKER", roleTop, roles.PenaltyTaker, squadPlayers,
-                player => AssignRole(SquadRoleSlot.PenaltyTaker, player));
+                player => AssignRole(SquadRoleSlot.PenaltyTaker, player), PenaltySummary);
             roleTop = BuildRoleDropdownRow(rightColumn.transform, "FREE-KICK TAKER", roleTop, roles.FreeKickTaker, squadPlayers,
-                player => AssignRole(SquadRoleSlot.FreeKickTaker, player));
+                player => AssignRole(SquadRoleSlot.FreeKickTaker, player), FreeKickSummary);
             roleTop = BuildRoleDropdownRow(rightColumn.transform, "LEFT CORNER TAKER", roleTop, roles.LeftCornerTaker, squadPlayers,
-                player => AssignRole(SquadRoleSlot.LeftCornerTaker, player));
+                player => AssignRole(SquadRoleSlot.LeftCornerTaker, player), CornerSummary);
             BuildRoleDropdownRow(rightColumn.transform, "RIGHT CORNER TAKER", roleTop, roles.RightCornerTaker, squadPlayers,
-                player => AssignRole(SquadRoleSlot.RightCornerTaker, player));
+                player => AssignRole(SquadRoleSlot.RightCornerTaker, player), CornerSummary);
 
             StartCoroutine(RecoverBlankLabelsNextFrame(tacticsScreenPanel.transform));
         }
@@ -2170,8 +2182,13 @@ namespace Manager
 
         // One row: a left-aligned label, a button showing the current holder's name (or
         // "- None -") that toggles a scrollable list of every squad player to pick from.
-        // Returns the top offset the next row should start at.
-        private float BuildRoleDropdownRow(Transform parent, string label, float top, PlayerAgent currentValue, List<PlayerAgent> options, Action<PlayerAgent> onSelect)
+        // statSummary formats whichever stats actually matter for this specific role
+        // (e.g. Leadership/Composure/Age for captaincy, Crossing/Creativity for corners -
+        // the same attributes the real formula/mechanism for that role reads, where one
+        // exists) - Thomas's point: picking blind by name alone doesn't work for
+        // generated players nobody already knows by heart. Returns the top offset the
+        // next row should start at.
+        private float BuildRoleDropdownRow(Transform parent, string label, float top, PlayerAgent currentValue, List<PlayerAgent> options, Action<PlayerAgent> onSelect, Func<PlayerAgent, string> statSummary)
         {
             const float rowHeight = 44f;
             const float rowGap = 14f;
@@ -2204,19 +2221,59 @@ namespace Manager
             string currentLabel = (currentValue != null ? currentValue.Name : "— None —") + "  ▾";
             ManagerUITheme.BuildLabel(dropdownButtonObj.transform, currentLabel, 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
 
-            GameObject dropdownPanel = BuildRoleDropdownOptions(dropdownButtonObj.transform, options, onSelect);
-            dropdownButton.onClick.AddListener(() => dropdownPanel.SetActive(!dropdownPanel.activeSelf));
+            // Two real bugs, found live and fixed together: (1) the dropdown used to be
+            // nested inside its own row's button - Unity draws UI children in sibling
+            // order, so it always rendered BEHIND every later row regardless of being
+            // "open" (the garbled overlapping list Thomas saw). Building it as a sibling
+            // of the row instead (parented to the column) and calling SetAsLastSibling()
+            // on open fixes this by construction. (2) the option buttons used to be
+            // built eagerly while the panel was still inactive - TMP labels built inside
+            // an inactive hierarchy can permanently fail mesh generation (see
+            // feedback_tmp_cached_label_reference_gotcha), which is why some rows showed
+            // no names at all. Populating them only at the moment the panel actually
+            // becomes active sidesteps the bug rather than trying to detect/repair it.
+            GameObject dropdownPanel = BuildEmptyDropdownScaffold(parent, options.Count);
+            RectTransform dropdownPanelRect = dropdownPanel.GetComponent<RectTransform>();
+            dropdownPanelRect.anchorMin = new Vector2(0.44f, 1f);
+            dropdownPanelRect.anchorMax = new Vector2(1f, 1f);
+            dropdownPanelRect.pivot = new Vector2(0.5f, 1f);
+            dropdownPanelRect.anchoredPosition = new Vector2(0f, -(top + rowHeight + 4f));
+
+            Transform dropdownContent = dropdownPanel.transform.Find("Viewport/Content");
+            tacticsScreenOpenDropdowns.Add(dropdownPanel);
+
+            dropdownButton.onClick.AddListener(() =>
+            {
+                bool wasOpen = dropdownPanel.activeSelf;
+                CloseAllTacticsDropdowns();
+
+                if (!wasOpen)
+                {
+                    PopulateDropdownOptions(dropdownContent, options, onSelect, statSummary);
+                    dropdownPanel.transform.SetAsLastSibling();
+                    dropdownPanel.SetActive(true);
+                }
+            });
 
             return top + rowHeight + rowGap;
         }
 
-        // Scrollable option list (ScrollRect+Viewport+RectMask2D+Content, same shape as
-        // the Tactics Board's own bench rail) rather than a plain unclipped
+        private void CloseAllTacticsDropdowns()
+        {
+            foreach (GameObject dropdown in tacticsScreenOpenDropdowns)
+            {
+                if (dropdown != null) dropdown.SetActive(false);
+            }
+        }
+
+        // Scrollable option list scaffold (ScrollRect+Viewport+RectMask2D+Content, same
+        // shape as the Tactics Board's own bench rail) rather than a plain unclipped
         // VerticalLayoutGroup - with up to 20 squad players plus "- None -" to choose
         // from, an unclipped list could easily run past the bottom of the screen for
         // whichever role row happens to sit lowest, the same class of overflow bug
-        // fixed earlier this session on Matchday Prep's pitch.
-        private GameObject BuildRoleDropdownOptions(Transform parent, List<PlayerAgent> options, Action<PlayerAgent> onSelect)
+        // fixed earlier this session on Matchday Prep's pitch. Deliberately empty - see
+        // PopulateDropdownOptions, called only once this actually becomes active.
+        private GameObject BuildEmptyDropdownScaffold(Transform parent, int optionCount)
         {
             const float optionHeight = 30f;
             const float maxVisibleHeight = 220f;
@@ -2224,11 +2281,7 @@ namespace Manager
             GameObject dropdownPanel = new GameObject("DropdownOptions", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
             dropdownPanel.transform.SetParent(parent, false);
             RectTransform dropdownPanelRect = dropdownPanel.GetComponent<RectTransform>();
-            dropdownPanelRect.anchorMin = new Vector2(0f, 0f);
-            dropdownPanelRect.anchorMax = new Vector2(1f, 0f);
-            dropdownPanelRect.pivot = new Vector2(0.5f, 1f);
-            dropdownPanelRect.anchoredPosition = new Vector2(0f, -4f);
-            dropdownPanelRect.sizeDelta = new Vector2(0f, Mathf.Min(maxVisibleHeight, (options.Count + 1) * optionHeight));
+            dropdownPanelRect.sizeDelta = new Vector2(0f, Mathf.Min(maxVisibleHeight, (optionCount + 1) * optionHeight));
             dropdownPanel.GetComponent<Image>().color = ManagerUITheme.PanelDark;
 
             GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
@@ -2264,19 +2317,40 @@ namespace Manager
             scrollRect.content = contentRect;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
 
-            Button noneOption = ManagerUITheme.BuildButton(contentObj.transform, "— None —", ManagerUITheme.CardNeutral, ManagerUITheme.TextDim, 12);
+            dropdownPanel.SetActive(false);
+            return dropdownPanel;
+        }
+
+        // Called only once the dropdown panel is actually active (see
+        // BuildRoleDropdownRow's click handler) - building these TMP-labeled buttons
+        // while active avoids the inactive-hierarchy mesh generation bug entirely.
+        // Clears any previously-populated options first, since a dropdown can be opened
+        // more than once across a single Tactics screen visit.
+        private static void PopulateDropdownOptions(Transform content, List<PlayerAgent> options, Action<PlayerAgent> onSelect, Func<PlayerAgent, string> statSummary)
+        {
+            const float optionHeight = 30f;
+
+            foreach (Transform child in content)
+            {
+                Destroy(child.gameObject);
+            }
+
+            Button noneOption = ManagerUITheme.BuildButton(content, "— None —", ManagerUITheme.CardNeutral, ManagerUITheme.TextDim, 12);
             noneOption.gameObject.AddComponent<LayoutElement>().preferredHeight = optionHeight;
             noneOption.onClick.AddListener(() => onSelect(null));
 
             foreach (PlayerAgent option in options)
             {
-                Button optionButton = ManagerUITheme.BuildButton(contentObj.transform, option.Name, ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
+                string optionLabel = option.Name + "   " + statSummary(option);
+                Button optionButton = ManagerUITheme.BuildButton(content, optionLabel, ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
+                TextMeshProUGUI optionText = optionButton.GetComponentInChildren<TextMeshProUGUI>();
+                if (optionText != null)
+                {
+                    optionText.alignment = TextAlignmentOptions.MidlineLeft;
+                }
                 optionButton.gameObject.AddComponent<LayoutElement>().preferredHeight = optionHeight;
                 optionButton.onClick.AddListener(() => onSelect(option));
             }
-
-            dropdownPanel.SetActive(false);
-            return dropdownPanel;
         }
 
         // Greedy best-fit reassignment: for each slot in the new formation (in order),
@@ -3215,7 +3289,7 @@ namespace Manager
 
                 BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
                 {
-                    ("Positioning", player.Positioning), ("Composure", player.Composure)
+                    ("Positioning", player.Positioning), ("Composure", player.Composure), ("Leadership", player.Leadership)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 2, 4, "Distribution", new (string, float)[]
