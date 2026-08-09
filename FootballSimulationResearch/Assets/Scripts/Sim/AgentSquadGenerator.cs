@@ -435,6 +435,17 @@ namespace Sim
             (float freeKicksMin, float freeKicksMax) = GetFreeKicksRange(position);
             player.FreeKicks = RollAttribute(freeKicksMin, freeKicksMax) * attackMultiplier;
 
+            // Leadership (session 7, captaincy pass) - deliberately flat across positions
+            // and NOT scaled by attackMultiplier/defenceMultiplier, unlike every other stat
+            // above: it's a personality trait, not a footballing skill tied to a role or to
+            // team strength. Age is the one thing that should shift it - real captains skew
+            // veteran - reusing the exact same youth/veteran factor shape ApplyAgeAndHeight
+            // already applies to Composure/Positioning, rather than inventing a new curve.
+            player.Leadership = RollAttribute(30f, 65f);
+            float youthFactor = Mathf.Clamp01((24f - player.Age) / 6f);
+            float veteranFactor = Mathf.Clamp01((player.Age - 29f) / 8f);
+            player.Leadership += (veteranFactor * 12f) - (youthFactor * 10f);
+
             Random.state = savedState;
         }
 
@@ -1006,6 +1017,7 @@ namespace Sim
             player.Positioning = Clamp(player.Positioning);
             player.Composure = Clamp(player.Composure);
             player.OffTheBall = Clamp(player.OffTheBall);
+            player.Leadership = Clamp(player.Leadership);
 
             player.Defending = Clamp(player.Defending);
             player.Tackling = Clamp(player.Tackling);

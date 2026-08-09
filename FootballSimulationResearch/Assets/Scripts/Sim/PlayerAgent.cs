@@ -28,6 +28,7 @@ namespace Sim
         public float Positioning;
         public float Composure;
         public float OffTheBall;
+        public float Leadership;
 
         // Defensive
         public float Defending;

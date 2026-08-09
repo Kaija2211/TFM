@@ -2901,7 +2901,7 @@ namespace Manager
                 BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
                 {
                     ("Creativity", player.Creativity), ("Positioning", player.Positioning), ("Composure", player.Composure),
-                    ("Off The Ball", player.OffTheBall)
+                    ("Off The Ball", player.OffTheBall), ("Leadership", player.Leadership)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 2, 4, "Defensive", new (string, float)[]
@@ -4381,6 +4381,12 @@ namespace Manager
             {
                 ManagerMentalityModifier.Apply(selectedMentality, ref expectedAwayGoals, ref expectedHomeGoals);
             }
+
+            // Naturally a no-op for AI-controlled teams - only the managed team's squad
+            // roles are ever populated via Player Detail, so an opponent's Captain is
+            // always null here.
+            ManagerCaptaincyModifier.Apply(GetOrCreateSquadRoles(fixture.HomeTeam).Captain, ref expectedHomeGoals);
+            ManagerCaptaincyModifier.Apply(GetOrCreateSquadRoles(fixture.AwayTeam).Captain, ref expectedAwayGoals);
 
             lastExpectedHomeGoals = expectedHomeGoals;
             lastExpectedAwayGoals = expectedAwayGoals;
