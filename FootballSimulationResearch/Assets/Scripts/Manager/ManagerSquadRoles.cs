@@ -19,18 +19,28 @@ namespace Manager
     // session (see GetOrCreateAgentTeam), so direct PlayerAgent references here stay
     // valid across screens and substitutions exactly like squadsByTeamName itself.
     //
-    // Organizational only for now, except CornerTaker - see the ManagerSim fork of
-    // AgentMatchSimulator (PickCreatorForChance) for the one place this actually feeds
-    // into match resolution. Captain/ViceCaptain/PenaltyTaker/FreeKickTaker/attack-defend
-    // role are stored and displayed but don't change sim math yet - there's no distinct
-    // free-kick/penalty event in the sim to hook into today.
+    // Organizational only for now, except LeftCornerTaker/RightCornerTaker - see the
+    // ManagerSim fork of AgentMatchSimulator (PickCreatorForChance) for the one place
+    // this actually feeds into match resolution. Captain/ViceCaptain/PenaltyTaker/
+    // FreeKickTaker/attack-defend role are stored and displayed but don't change sim
+    // math yet - there's no distinct free-kick/penalty event in the sim to hook into
+    // today.
+    //
+    // Split into Left/Right corner taker (session 7, Tactics screen pass) rather than a
+    // single CornerTaker - the sim has no actual concept of which side a corner comes
+    // from, so this isn't true left/right modeling, but the match sim alternates 50/50
+    // between whichever of the two is on the pitch (see AgentMatchSimulator.
+    // CornerTakerNamesByTeamName), which is a genuinely better approximation than a
+    // single designated taker and matches the real-football pattern of two corner
+    // specialists rather than one.
     public class ManagerSquadRoles
     {
         public PlayerAgent Captain;
         public PlayerAgent ViceCaptain;
         public PlayerAgent PenaltyTaker;
         public PlayerAgent FreeKickTaker;
-        public PlayerAgent CornerTaker;
+        public PlayerAgent LeftCornerTaker;
+        public PlayerAgent RightCornerTaker;
 
         private readonly Dictionary<PlayerAgent, AttackDefendRole> attackDefendRoles = new();
 

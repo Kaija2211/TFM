@@ -156,6 +156,7 @@ namespace Manager
         private List<OpenFootballMatch> managedTeamFixtures = new();
         private int currentFixtureIndex;
         private ManagerMentality selectedMentality = ManagerMentality.Balanced;
+        private readonly ManagerTacticalSliders tacticalSliders = new();
 
         // TMP Sprite Assets (Assets/Resources/Manager/*.asset) - loaded once here rather
         // than per-build-call. star-filled has star-empty wired as its fallback sprite
@@ -218,6 +219,13 @@ namespace Manager
         private RectTransform tacticsBoardBenchContent;
         private Button tacticsBoardFormationButton;
         private GameObject tacticsBoardFormationDropdown;
+
+        // Tactics screen (session 7) - reached from the Tactics Board via a new TACTICS
+        // button beside FORMATION. Centralizes captaincy/set-piece-taker assignment
+        // (moved off Player Detail) alongside the new tactical sliders.
+        private bool tacticsScreenChromeBuilt;
+        private GameObject tacticsScreenPanel;
+        private readonly List<GameObject> spawnedTacticsScreenElements = new();
 
         // Which screen "Back to Squad" on Player Inspect actually returns to - three
         // possible entry points now that the Squad list screen exists alongside the
@@ -1670,6 +1678,12 @@ namespace Manager
             ManagerUITheme.SetPointAnchor(listViewButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-442f, -27f), new Vector2(150f, 36f));
             listViewButton.onClick.AddListener(OnOpenSquadListClicked);
 
+            // Session 7 - sliders + captaincy/set-piece-taker assignment, centralized
+            // here instead of scattered across each player's own detail page.
+            Button tacticsScreenButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "TACTICS", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(tacticsScreenButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-598f, -27f), new Vector2(150f, 36f));
+            tacticsScreenButton.onClick.AddListener(OnOpenTacticsScreenClicked);
+
             // Body row: pitch (flex, capped at 1320px wide) beside a 300px vertical bench
             // rail, both filling the row band between the header and the panel's own
             // bottom margin - replaces the old bottom-anchored horizontal bench strip
@@ -1952,6 +1966,317 @@ namespace Manager
         private void CloseTacticsBoardFormationDropdown()
         {
             if (tacticsBoardFormationDropdown != null) tacticsBoardFormationDropdown.SetActive(false);
+        }
+
+        // --- Tactics screen (session 7): sliders + captaincy/set-piece-taker assignment,
+        // reached from the Tactics Board. Two independently right/left-edge-anchored
+        // columns (not a fixed-width-assumption layout) - see
+        // feedback_snapshot_anchor_drift_pattern for why that distinction matters after
+        // the Matchday Prep pitch bug found earlier this session.
+
+        public void OnOpenTacticsScreenClicked()
+        {
+            if (!tacticsScreenChromeBuilt)
+            {
+                BuildTacticsScreenChrome();
+                tacticsScreenChromeBuilt = true;
+            }
+
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
+            if (tacticsScreenPanel != null) tacticsScreenPanel.SetActive(true);
+
+            RefreshTacticsScreenUI();
+        }
+
+        public void OnTacticsScreenBackClicked()
+        {
+            if (tacticsScreenPanel != null) tacticsScreenPanel.SetActive(false);
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
+        }
+
+        private void BuildTacticsScreenChrome()
+        {
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
+            {
+                return;
+            }
+
+            tacticsScreenPanel = new GameObject("TacticsScreenPanel", typeof(RectTransform));
+            tacticsScreenPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = tacticsScreenPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(tacticsScreenPanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(tacticsScreenPanel.transform, topBand: true, height: TacticsScreenHeaderHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -28f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "TACTICS", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            Button backButton = ManagerUITheme.BuildButton(tacticsScreenPanel.transform, "BACK TO TACTICS BOARD", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(240f, 36f));
+            backButton.onClick.AddListener(OnTacticsScreenBackClicked);
+
+            ManagerUITheme.BuildAccentBand(tacticsScreenPanel.transform, topBand: false, height: TacticsScreenFooterHeight);
+
+            // Everything here is already live the moment you pick it (same immediate-
+            // apply pattern as every other assignment this session) - SAVE has nothing
+            // to actually commit, it's just a clearly-labeled way back matching the
+            // mockup's own footer.
+            Button saveButton = ManagerUITheme.BuildButton(tacticsScreenPanel.transform, "SAVE", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 15);
+            ManagerUITheme.SetPointAnchor(saveButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-60f, 22f), new Vector2(180f, 46f));
+            saveButton.onClick.AddListener(OnTacticsScreenBackClicked);
+
+            tacticsScreenPanel.SetActive(false);
+        }
+
+        private const float TacticsScreenHeaderHeight = 90f;
+        private const float TacticsScreenFooterHeight = 90f;
+
+        private void RefreshTacticsScreenUI()
+        {
+            if (tacticsScreenPanel == null)
+            {
+                return;
+            }
+
+            foreach (GameObject element in spawnedTacticsScreenElements)
+            {
+                if (element != null) Destroy(element);
+            }
+
+            spawnedTacticsScreenElements.Clear();
+
+            const float sideMargin = 60f;
+            const float columnTopMargin = 30f;
+            const float leftColumnWidth = 700f;
+            const float rightColumnWidth = 760f;
+
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            List<PlayerAgent> squadPlayers = new List<PlayerAgent>(team.StartingEleven);
+            squadPlayers.AddRange(team.Bench);
+
+            // Left column: SHAPE & APPROACH, anchored from the left edge.
+            GameObject leftColumn = new GameObject("ShapeApproachColumn", typeof(RectTransform));
+            leftColumn.transform.SetParent(tacticsScreenPanel.transform, false);
+            RectTransform leftColumnRect = leftColumn.GetComponent<RectTransform>();
+            leftColumnRect.anchorMin = new Vector2(0f, 0f);
+            leftColumnRect.anchorMax = new Vector2(0f, 1f);
+            leftColumnRect.pivot = new Vector2(0f, 1f);
+            leftColumnRect.offsetMin = new Vector2(sideMargin, TacticsScreenFooterHeight);
+            leftColumnRect.offsetMax = new Vector2(sideMargin + leftColumnWidth, -(TacticsScreenHeaderHeight + columnTopMargin));
+            spawnedTacticsScreenElements.Add(leftColumn);
+
+            GameObject shapeCaption = new GameObject("Caption", typeof(RectTransform));
+            shapeCaption.transform.SetParent(leftColumn.transform, false);
+            ManagerUITheme.AnchorTopStretch(shapeCaption, 0f, 20f, 0f);
+            ManagerUITheme.BuildLabel(shapeCaption.transform, "SHAPE & APPROACH", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            float sliderTop = 40f;
+            sliderTop = BuildSliderRow(leftColumn.transform, "WIDTH", sliderTop,
+                new[] { "NARROW", "BALANCED", "WIDE" }, (int)tacticalSliders.Width,
+                index => { tacticalSliders.Width = (WidthSetting)index; RefreshTacticsScreenUI(); });
+
+            sliderTop = BuildSliderRow(leftColumn.transform, "DEFENSIVE DEPTH", sliderTop,
+                new[] { "DEEP", "BALANCED", "HIGH LINE" }, (int)tacticalSliders.DefensiveDepth,
+                index => { tacticalSliders.DefensiveDepth = (DefensiveDepthSetting)index; RefreshTacticsScreenUI(); });
+
+            BuildSliderRow(leftColumn.transform, "TEMPO", sliderTop,
+                new[] { "SLOW", "BALANCED", "FAST" }, (int)tacticalSliders.Tempo,
+                index => { tacticalSliders.Tempo = (TempoSetting)index; RefreshTacticsScreenUI(); });
+
+            // Right column: LEADERSHIP + SET PIECES, anchored from the right edge - each
+            // side anchored from its own natural edge rather than computing one from a
+            // fixed total-width assumption, so the gap between them adapts automatically
+            // to the real canvas width instead of drifting on a non-16:9 window.
+            GameObject rightColumn = new GameObject("RoleAssignmentColumn", typeof(RectTransform));
+            rightColumn.transform.SetParent(tacticsScreenPanel.transform, false);
+            RectTransform rightColumnRect = rightColumn.GetComponent<RectTransform>();
+            rightColumnRect.anchorMin = new Vector2(1f, 0f);
+            rightColumnRect.anchorMax = new Vector2(1f, 1f);
+            rightColumnRect.pivot = new Vector2(1f, 1f);
+            rightColumnRect.offsetMin = new Vector2(-(sideMargin + rightColumnWidth), TacticsScreenFooterHeight);
+            rightColumnRect.offsetMax = new Vector2(-sideMargin, -(TacticsScreenHeaderHeight + columnTopMargin));
+            spawnedTacticsScreenElements.Add(rightColumn);
+
+            GameObject leadershipCaption = new GameObject("Caption", typeof(RectTransform));
+            leadershipCaption.transform.SetParent(rightColumn.transform, false);
+            ManagerUITheme.AnchorTopStretch(leadershipCaption, 0f, 20f, 0f);
+            ManagerUITheme.BuildLabel(leadershipCaption.transform, "LEADERSHIP", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            float roleTop = 40f;
+            roleTop = BuildRoleDropdownRow(rightColumn.transform, "CAPTAIN", roleTop, roles.Captain, squadPlayers,
+                player => AssignRole(SquadRoleSlot.Captain, player));
+            roleTop = BuildRoleDropdownRow(rightColumn.transform, "VICE-CAPTAIN", roleTop, roles.ViceCaptain, squadPlayers,
+                player => AssignRole(SquadRoleSlot.ViceCaptain, player));
+
+            roleTop += 30f;
+
+            GameObject setPiecesCaption = new GameObject("Caption", typeof(RectTransform));
+            setPiecesCaption.transform.SetParent(rightColumn.transform, false);
+            ManagerUITheme.AnchorTopStretch(setPiecesCaption, roleTop, 20f, 0f);
+            ManagerUITheme.BuildLabel(setPiecesCaption.transform, "SET PIECES", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            roleTop += 30f;
+
+            roleTop = BuildRoleDropdownRow(rightColumn.transform, "PENALTY TAKER", roleTop, roles.PenaltyTaker, squadPlayers,
+                player => AssignRole(SquadRoleSlot.PenaltyTaker, player));
+            roleTop = BuildRoleDropdownRow(rightColumn.transform, "FREE-KICK TAKER", roleTop, roles.FreeKickTaker, squadPlayers,
+                player => AssignRole(SquadRoleSlot.FreeKickTaker, player));
+            roleTop = BuildRoleDropdownRow(rightColumn.transform, "LEFT CORNER TAKER", roleTop, roles.LeftCornerTaker, squadPlayers,
+                player => AssignRole(SquadRoleSlot.LeftCornerTaker, player));
+            BuildRoleDropdownRow(rightColumn.transform, "RIGHT CORNER TAKER", roleTop, roles.RightCornerTaker, squadPlayers,
+                player => AssignRole(SquadRoleSlot.RightCornerTaker, player));
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(tacticsScreenPanel.transform));
+        }
+
+        // One row: a left-aligned label plus a 3-way toggle-button group, same
+        // BuildRoleToggleButton control used for the attack/defend leaning on Player
+        // Detail - deliberately not a literal drag Slider widget (the mockup that
+        // inspired this screen was a layout suggestion, not a pixel spec) since the
+        // backend is three discrete settings either way. Returns the top offset the next
+        // row should start at.
+        private float BuildSliderRow(Transform parent, string label, float top, string[] optionLabels, int currentIndex, Action<int> onSelect)
+        {
+            const float labelHeight = 22f;
+            const float labelGap = 10f;
+            const float buttonHeight = 40f;
+            const float rowGap = 30f;
+
+            GameObject labelObj = new GameObject("SliderLabel", typeof(RectTransform));
+            labelObj.transform.SetParent(parent, false);
+            ManagerUITheme.AnchorTopStretch(labelObj, top, labelHeight, 0f);
+            ManagerUITheme.BuildLabel(labelObj.transform, label, 16, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject buttonRow = new GameObject("SliderButtons", typeof(RectTransform));
+            buttonRow.transform.SetParent(parent, false);
+            ManagerUITheme.AnchorTopStretch(buttonRow, top + labelHeight + labelGap, buttonHeight, 0f);
+
+            float x = 0f;
+
+            for (int i = 0; i < optionLabels.Length; i++)
+            {
+                int capturedIndex = i;
+                x = BuildRoleToggleButton(buttonRow.transform, optionLabels[i], x, currentIndex == i, () => onSelect(capturedIndex));
+            }
+
+            return top + labelHeight + labelGap + buttonHeight + rowGap;
+        }
+
+        // One row: a left-aligned label, a button showing the current holder's name (or
+        // "- None -") that toggles a scrollable list of every squad player to pick from.
+        // Returns the top offset the next row should start at.
+        private float BuildRoleDropdownRow(Transform parent, string label, float top, PlayerAgent currentValue, List<PlayerAgent> options, Action<PlayerAgent> onSelect)
+        {
+            const float rowHeight = 44f;
+            const float rowGap = 14f;
+
+            GameObject rowObj = new GameObject("RoleRow", typeof(RectTransform));
+            rowObj.transform.SetParent(parent, false);
+            ManagerUITheme.AnchorTopStretch(rowObj, top, rowHeight, 0f);
+
+            GameObject labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(rowObj.transform, false);
+            RectTransform labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0f, 0f);
+            labelRect.anchorMax = new Vector2(0.42f, 1f);
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.BuildLabel(labelObj.transform, label, 14, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject dropdownButtonObj = new GameObject("DropdownButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            dropdownButtonObj.transform.SetParent(rowObj.transform, false);
+            RectTransform dropdownButtonRect = dropdownButtonObj.GetComponent<RectTransform>();
+            dropdownButtonRect.anchorMin = new Vector2(0.44f, 0f);
+            dropdownButtonRect.anchorMax = new Vector2(1f, 1f);
+            dropdownButtonRect.offsetMin = Vector2.zero;
+            dropdownButtonRect.offsetMax = Vector2.zero;
+            Image dropdownButtonImage = dropdownButtonObj.GetComponent<Image>();
+            dropdownButtonImage.color = ManagerUITheme.CardNeutral;
+            Button dropdownButton = dropdownButtonObj.GetComponent<Button>();
+            dropdownButton.targetGraphic = dropdownButtonImage;
+
+            string currentLabel = (currentValue != null ? currentValue.Name : "— None —") + "  ▾";
+            ManagerUITheme.BuildLabel(dropdownButtonObj.transform, currentLabel, 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
+
+            GameObject dropdownPanel = BuildRoleDropdownOptions(dropdownButtonObj.transform, options, onSelect);
+            dropdownButton.onClick.AddListener(() => dropdownPanel.SetActive(!dropdownPanel.activeSelf));
+
+            return top + rowHeight + rowGap;
+        }
+
+        // Scrollable option list (ScrollRect+Viewport+RectMask2D+Content, same shape as
+        // the Tactics Board's own bench rail) rather than a plain unclipped
+        // VerticalLayoutGroup - with up to 20 squad players plus "- None -" to choose
+        // from, an unclipped list could easily run past the bottom of the screen for
+        // whichever role row happens to sit lowest, the same class of overflow bug
+        // fixed earlier this session on Matchday Prep's pitch.
+        private GameObject BuildRoleDropdownOptions(Transform parent, List<PlayerAgent> options, Action<PlayerAgent> onSelect)
+        {
+            const float optionHeight = 30f;
+            const float maxVisibleHeight = 220f;
+
+            GameObject dropdownPanel = new GameObject("DropdownOptions", typeof(RectTransform), typeof(Image), typeof(ScrollRect));
+            dropdownPanel.transform.SetParent(parent, false);
+            RectTransform dropdownPanelRect = dropdownPanel.GetComponent<RectTransform>();
+            dropdownPanelRect.anchorMin = new Vector2(0f, 0f);
+            dropdownPanelRect.anchorMax = new Vector2(1f, 0f);
+            dropdownPanelRect.pivot = new Vector2(0.5f, 1f);
+            dropdownPanelRect.anchoredPosition = new Vector2(0f, -4f);
+            dropdownPanelRect.sizeDelta = new Vector2(0f, Mathf.Min(maxVisibleHeight, (options.Count + 1) * optionHeight));
+            dropdownPanel.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(dropdownPanel.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            RectTransform contentRect = contentObj.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.anchoredPosition = Vector2.zero;
+            contentRect.sizeDelta = new Vector2(0f, optionHeight);
+
+            VerticalLayoutGroup layoutGroup = contentObj.AddComponent<VerticalLayoutGroup>();
+            layoutGroup.childForceExpandWidth = true;
+            layoutGroup.childForceExpandHeight = false;
+            layoutGroup.childControlHeight = true;
+            layoutGroup.childControlWidth = true;
+
+            ContentSizeFitter fitter = contentObj.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            ScrollRect scrollRect = dropdownPanel.GetComponent<ScrollRect>();
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.viewport = viewportRect;
+            scrollRect.content = contentRect;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+
+            Button noneOption = ManagerUITheme.BuildButton(contentObj.transform, "— None —", ManagerUITheme.CardNeutral, ManagerUITheme.TextDim, 12);
+            noneOption.gameObject.AddComponent<LayoutElement>().preferredHeight = optionHeight;
+            noneOption.onClick.AddListener(() => onSelect(null));
+
+            foreach (PlayerAgent option in options)
+            {
+                Button optionButton = ManagerUITheme.BuildButton(contentObj.transform, option.Name, ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
+                optionButton.gameObject.AddComponent<LayoutElement>().preferredHeight = optionHeight;
+                optionButton.onClick.AddListener(() => onSelect(option));
+            }
+
+            dropdownPanel.SetActive(false);
+            return dropdownPanel;
         }
 
         // Greedy best-fit reassignment: for each slot in the new formation (in order),
@@ -2514,7 +2839,7 @@ namespace Manager
 
         // Compact role indicators for the Squad screen's PLAYER cell - "C"/"VC" for
         // captaincy, "PK"/"FK"/"CK" for set-piece takers. Assignment itself happens on
-        // Player Detail (see RefreshPlayerInspectUI's RolesBand); this is read-only.
+        // The Tactics screen (see BuildTacticsScreenChrome); this is read-only.
         private static string BuildRoleBadgeSuffix(PlayerAgent player, ManagerSquadRoles roles)
         {
             List<string> badges = new();
@@ -2523,7 +2848,8 @@ namespace Manager
             if (roles.ViceCaptain == player) badges.Add("VC");
             if (roles.PenaltyTaker == player) badges.Add("PK");
             if (roles.FreeKickTaker == player) badges.Add("FK");
-            if (roles.CornerTaker == player) badges.Add("CK");
+            if (roles.LeftCornerTaker == player) badges.Add("CK-L");
+            if (roles.RightCornerTaker == player) badges.Add("CK-R");
 
             if (badges.Count == 0)
             {
@@ -2834,13 +3160,13 @@ namespace Manager
             ovrCaptionRect.anchoredPosition = new Vector2(-36f, -106f);
             ManagerUITheme.BuildLabel(ovrCaption.transform, $"OVERALL ({player.PrimaryPosition})", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
 
-            // Roles: captain/vice-captain, penalty/free-kick/corner taker (single holder
-            // per team - clicking a different player supersedes the previous one, see
-            // ToggleSquadRole), plus a per-player attack/defend leaning (see
-            // SetAttackDefendRole). Organizational for now except CornerTaker, which the
-            // ManagerSim fork's PickCreatorForChance actually reads - see
-            // ManagerSquadRoles for the full breakdown of what's mechanical vs display.
-            GameObject rolesBand = new GameObject("RolesBand", typeof(RectTransform));
+            // Captain/vice-captain/penalty/free-kick/corner-taker assignment moved to the
+            // Tactics screen (see BuildTacticsScreenChrome) - a centralized dropdown-
+            // picker layout reads better than clicking into each individual player's own
+            // page to toggle their role. Per-player attack/defend leaning stays here
+            // though, since it's inherently about this one specific player rather than a
+            // single-holder-per-team assignment, and wasn't part of that redesign.
+            GameObject rolesBand = new GameObject("AttackDefendBand", typeof(RectTransform));
             rolesBand.transform.SetParent(playerInspectContentContainer, false);
             ManagerUITheme.AnchorTopStretch(rolesBand, headerBandHeight, rolesBandHeight, contentMargin);
             spawnedInspectElements.Add(rolesBand);
@@ -2848,27 +3174,17 @@ namespace Manager
             ManagerSquadRoles squadRoles = GetOrCreateSquadRoles(managedTeamName);
             AttackDefendRole currentAttackDefendRole = squadRoles.GetRole(player);
 
-            float roleX = 0f;
-            roleX = BuildRoleToggleButton(rolesBand.transform, "CAPTAIN", roleX, squadRoles.Captain == player, () => ToggleSquadRole(player, SquadRoleSlot.Captain));
-            roleX = BuildRoleToggleButton(rolesBand.transform, "VICE CAPT", roleX, squadRoles.ViceCaptain == player, () => ToggleSquadRole(player, SquadRoleSlot.ViceCaptain));
-            roleX = BuildRoleToggleButton(rolesBand.transform, "PENALTY", roleX, squadRoles.PenaltyTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.PenaltyTaker));
-            roleX = BuildRoleToggleButton(rolesBand.transform, "FREE KICK", roleX, squadRoles.FreeKickTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.FreeKickTaker));
-            roleX = BuildRoleToggleButton(rolesBand.transform, "CORNER", roleX, squadRoles.CornerTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.CornerTaker));
-
             // Which leanings even make tactical sense varies by position - a winger
             // "defending" or a centre-back "attacking" isn't a real football instruction
             // the way it is for a fullback or a central midfielder. Restricted per
             // position rather than offering all three everywhere; goalkeepers don't get
             // the control at all, since it doesn't apply to them.
             AttackDefendRole[] allowedRoles = GetAllowedAttackDefendRoles(player.PrimaryPosition);
-            if (allowedRoles.Length > 0)
-            {
-                roleX += 32f;
+            float roleX = 0f;
 
-                foreach (AttackDefendRole allowedRole in allowedRoles)
-                {
-                    roleX = BuildRoleToggleButton(rolesBand.transform, allowedRole.ToString().ToUpperInvariant(), roleX, currentAttackDefendRole == allowedRole, () => SetAttackDefendRole(player, allowedRole));
-                }
+            foreach (AttackDefendRole allowedRole in allowedRoles)
+            {
+                roleX = BuildRoleToggleButton(rolesBand.transform, allowedRole.ToString().ToUpperInvariant(), roleX, currentAttackDefendRole == allowedRole, () => SetAttackDefendRole(player, allowedRole));
             }
 
             GameObject attributeGrid = new GameObject("AttributeGrid", typeof(RectTransform));
@@ -2974,59 +3290,52 @@ namespace Manager
         }
 
         // Which single-holder-per-team slot a RolesBand button toggles - see
-        // ToggleSquadRole. Attack/defend role isn't here since it's per-player rather
-        // than single-holder (see SetAttackDefendRole).
+        // AssignRole. Attack/defend role isn't here since it's per-player rather than
+        // single-holder (see SetAttackDefendRole).
         private enum SquadRoleSlot
         {
             Captain,
             ViceCaptain,
             PenaltyTaker,
             FreeKickTaker,
-            CornerTaker
+            LeftCornerTaker,
+            RightCornerTaker
         }
 
-        // Clicking a player's own role button again clears it; clicking it for a
-        // different player supersedes whoever held it before (there's only ever one
-        // ManagerSquadRoles field per slot). Captain and vice-captain are also kept
-        // mutually exclusive - assigning one clears the other if the same player held it.
-        private void ToggleSquadRole(PlayerAgent player, SquadRoleSlot slot)
+        // Directly assigns (or clears, if player is null) whoever holds a given role -
+        // the Tactics screen's dropdown pickers call this after a selection, rather than
+        // the old Player Detail "click a player to toggle their own role" interaction
+        // this replaced. Captain and vice-captain stay mutually exclusive - assigning one
+        // clears the other if the same player held it.
+        private void AssignRole(SquadRoleSlot slot, PlayerAgent player)
         {
             ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
-
-            PlayerAgent current = slot switch
-            {
-                SquadRoleSlot.Captain => roles.Captain,
-                SquadRoleSlot.ViceCaptain => roles.ViceCaptain,
-                SquadRoleSlot.PenaltyTaker => roles.PenaltyTaker,
-                SquadRoleSlot.FreeKickTaker => roles.FreeKickTaker,
-                SquadRoleSlot.CornerTaker => roles.CornerTaker,
-                _ => null
-            };
-
-            PlayerAgent next = current == player ? null : player;
 
             switch (slot)
             {
                 case SquadRoleSlot.Captain:
-                    roles.Captain = next;
-                    if (next != null && roles.ViceCaptain == next) roles.ViceCaptain = null;
+                    roles.Captain = player;
+                    if (player != null && roles.ViceCaptain == player) roles.ViceCaptain = null;
                     break;
                 case SquadRoleSlot.ViceCaptain:
-                    roles.ViceCaptain = next;
-                    if (next != null && roles.Captain == next) roles.Captain = null;
+                    roles.ViceCaptain = player;
+                    if (player != null && roles.Captain == player) roles.Captain = null;
                     break;
                 case SquadRoleSlot.PenaltyTaker:
-                    roles.PenaltyTaker = next;
+                    roles.PenaltyTaker = player;
                     break;
                 case SquadRoleSlot.FreeKickTaker:
-                    roles.FreeKickTaker = next;
+                    roles.FreeKickTaker = player;
                     break;
-                case SquadRoleSlot.CornerTaker:
-                    roles.CornerTaker = next;
+                case SquadRoleSlot.LeftCornerTaker:
+                    roles.LeftCornerTaker = player;
+                    break;
+                case SquadRoleSlot.RightCornerTaker:
+                    roles.RightCornerTaker = player;
                     break;
             }
 
-            RefreshPlayerInspectUI();
+            RefreshTacticsScreenUI();
         }
 
         private void SetAttackDefendRole(PlayerAgent player, AttackDefendRole role)
@@ -4459,8 +4768,13 @@ namespace Manager
             lastExpectedHomeGoals = expectedHomeGoals;
             lastExpectedAwayGoals = expectedAwayGoals;
 
-            matchSimulator.CornerTakerNameByTeamName[fixture.HomeTeam] = GetOrCreateSquadRoles(fixture.HomeTeam).CornerTaker?.Name;
-            matchSimulator.CornerTakerNameByTeamName[fixture.AwayTeam] = GetOrCreateSquadRoles(fixture.AwayTeam).CornerTaker?.Name;
+            ManagerSquadRoles homeRoles = GetOrCreateSquadRoles(fixture.HomeTeam);
+            ManagerSquadRoles awayRoles = GetOrCreateSquadRoles(fixture.AwayTeam);
+            matchSimulator.CornerTakerNamesByTeamName[fixture.HomeTeam] = (homeRoles.LeftCornerTaker?.Name, homeRoles.RightCornerTaker?.Name);
+            matchSimulator.CornerTakerNamesByTeamName[fixture.AwayTeam] = (awayRoles.LeftCornerTaker?.Name, awayRoles.RightCornerTaker?.Name);
+
+            matchSimulator.ManagedTeamName = managedTeamName;
+            matchSimulator.ManagedTeamTacticalSliders = tacticalSliders;
 
             return matchSimulator.SimulateMatch(fitAdjustedHomeTeam, fitAdjustedAwayTeam, expectedHomeGoals, expectedAwayGoals);
         }

@@ -34,15 +34,18 @@ namespace Manager
             CounterAttack
         }
 
-        // Manager Mode-only: team name -> designated corner taker's name (see
-        // ManagerSquadRoles), set by ManagerPrototypeController before each SimulateMatch
-        // call. Keyed and matched by name rather than PlayerAgent reference because the
-        // team actually handed to SimulateMatch is a throwaway fit-adjusted clone (see
-        // ManagerFormationFit) with all-new PlayerAgent instances - Name is the one thing
-        // ClonePenalized copies through unchanged. Empty/unset by default, so a team with
-        // no corner taker assigned takes the exact original weighted-random pick with zero
-        // extra Random calls - see PickCreatorForChance.
-        public readonly Dictionary<string, string> CornerTakerNameByTeamName = new();
+        // Manager Mode-only: team name -> (left, right) designated corner takers' names
+        // (see ManagerSquadRoles), set by ManagerPrototypeController before each
+        // SimulateMatch call. Keyed and matched by name rather than PlayerAgent reference
+        // because the team actually handed to SimulateMatch is a throwaway fit-adjusted
+        // clone (see ManagerFormationFit) with all-new PlayerAgent instances - Name is the
+        // one thing ClonePenalized copies through unchanged. Not true left/right modeling
+        // - there's no concept of which side a corner comes from in this sim - just an
+        // alternation between two designated takers (see PickCreatorForChance) rather than
+        // one, matching the real-football pattern of two corner specialists. Empty/unset
+        // by default, so a team with neither corner taker assigned takes the exact
+        // original weighted-random pick with zero extra Random calls.
+        public readonly Dictionary<string, (string Left, string Right)> CornerTakerNamesByTeamName = new();
 
         public class AgentMatchEvent
         {
@@ -329,7 +332,8 @@ namespace Manager
     float defendingMentalityMultiplier,
     AgentMatchResult result)
         {
-            ChanceType chanceType = PickChanceType(attackingExpectedGoals);
+            Dictionary<ChanceType, float> chanceTypeBias = BuildChanceTypeBias(attackingTeam.TeamName, defendingTeam.TeamName);
+            ChanceType chanceType = PickChanceType(attackingExpectedGoals, chanceTypeBias);
 
             PlayerAgent creator = PickCreatorForChance(attackingTeam, chanceType);
             PlayerAgent shooter = PickShooterForChance(attackingTeam, chanceType);
@@ -497,36 +501,210 @@ namespace Manager
             }
         }
 
-        private ChanceType PickChanceType(float attackingExpectedGoals)
+        // Session 7 (tactical sliders) - the six fixed if/else thresholds this used to be
+        // (still visible in git history) are now an explicit weighted table so
+        // ManagerTacticalSliders can multiplicatively bias individual chance types
+        // instead of just shifting the overall xG a match is built from (what Mentality
+        // already does). With biasMultipliers null, this reproduces the exact original
+        // odds: the same six weights summing to 1.0 per bracket, one Random.value draw
+        // scaled by the (now 1.0) total weight - same call count, same distribution.
+        // Iteration order differs from the original if/else chain, which reassigns which
+        // specific roll *value* maps to which outcome - statistically inert, since the
+        // probability mass per outcome (which is what goals/match, BTTS%, etc. actually
+        // depend on) is unchanged and this isn't seeded for reproducibility the way
+        // AgentSquadGenerator is.
+        private static readonly ChanceType[] AllChanceTypes =
         {
-            float roll = Random.value;
+            ChanceType.ThroughBall, ChanceType.Cross, ChanceType.Dribble,
+            ChanceType.LongShot, ChanceType.SetPiece, ChanceType.CounterAttack
+        };
 
+        private static Dictionary<ChanceType, float> GetBaseChanceTypeWeights(float attackingExpectedGoals)
+        {
             if (attackingExpectedGoals >= 2.0f)
             {
-                if (roll < 0.28f) return ChanceType.ThroughBall;
-                if (roll < 0.50f) return ChanceType.Cross;
-                if (roll < 0.68f) return ChanceType.Dribble;
-                if (roll < 0.80f) return ChanceType.CounterAttack;
-                if (roll < 0.92f) return ChanceType.LongShot;
-                return ChanceType.SetPiece;
+                return new Dictionary<ChanceType, float>
+                {
+                    [ChanceType.ThroughBall] = 0.28f,
+                    [ChanceType.Cross] = 0.22f,
+                    [ChanceType.Dribble] = 0.18f,
+                    [ChanceType.CounterAttack] = 0.12f,
+                    [ChanceType.LongShot] = 0.12f,
+                    [ChanceType.SetPiece] = 0.08f
+                };
             }
 
             if (attackingExpectedGoals <= 1.0f)
             {
-                if (roll < 0.20f) return ChanceType.CounterAttack;
-                if (roll < 0.38f) return ChanceType.Cross;
-                if (roll < 0.55f) return ChanceType.SetPiece;
-                if (roll < 0.72f) return ChanceType.LongShot;
-                if (roll < 0.88f) return ChanceType.ThroughBall;
-                return ChanceType.Dribble;
+                return new Dictionary<ChanceType, float>
+                {
+                    [ChanceType.CounterAttack] = 0.20f,
+                    [ChanceType.Cross] = 0.18f,
+                    [ChanceType.SetPiece] = 0.17f,
+                    [ChanceType.LongShot] = 0.17f,
+                    [ChanceType.ThroughBall] = 0.16f,
+                    [ChanceType.Dribble] = 0.12f
+                };
             }
 
-            if (roll < 0.24f) return ChanceType.ThroughBall;
-            if (roll < 0.45f) return ChanceType.Cross;
-            if (roll < 0.62f) return ChanceType.Dribble;
-            if (roll < 0.77f) return ChanceType.CounterAttack;
-            if (roll < 0.90f) return ChanceType.LongShot;
+            return new Dictionary<ChanceType, float>
+            {
+                [ChanceType.ThroughBall] = 0.24f,
+                [ChanceType.Cross] = 0.21f,
+                [ChanceType.Dribble] = 0.17f,
+                [ChanceType.CounterAttack] = 0.15f,
+                [ChanceType.LongShot] = 0.13f,
+                [ChanceType.SetPiece] = 0.10f
+            };
+        }
+
+        private ChanceType PickChanceType(float attackingExpectedGoals, Dictionary<ChanceType, float> biasMultipliers = null)
+        {
+            Dictionary<ChanceType, float> weights = GetBaseChanceTypeWeights(attackingExpectedGoals);
+
+            if (biasMultipliers != null)
+            {
+                foreach (KeyValuePair<ChanceType, float> entry in biasMultipliers)
+                {
+                    if (weights.ContainsKey(entry.Key))
+                    {
+                        weights[entry.Key] *= entry.Value;
+                    }
+                }
+            }
+
+            float totalWeight = 0f;
+
+            foreach (float weight in weights.Values)
+            {
+                totalWeight += weight;
+            }
+
+            float roll = Random.value * totalWeight;
+            float cumulative = 0f;
+
+            foreach (ChanceType type in AllChanceTypes)
+            {
+                if (!weights.TryGetValue(type, out float weight))
+                {
+                    continue;
+                }
+
+                cumulative += weight;
+
+                if (roll < cumulative)
+                {
+                    return type;
+                }
+            }
+
             return ChanceType.SetPiece;
+        }
+
+        // Manager Mode-only: the managed team's current tactical slider settings, set by
+        // ManagerPrototypeController before each SimulateMatch call - persists through any
+        // later mid-match resimulation (subs, mentality changes) within the same match,
+        // same lifetime as CornerTakerNamesByTeamName. Null/unset means every team plays
+        // with the original, unbiased odds - a pure no-op for every AI opponent, which
+        // never gets slider settings at all.
+        public ManagerTacticalSliders ManagedTeamTacticalSliders;
+        public string ManagedTeamName;
+
+        private Dictionary<ChanceType, float> BuildChanceTypeBias(string attackingTeamName, string defendingTeamName)
+        {
+            if (ManagedTeamTacticalSliders == null || ManagedTeamName == null)
+            {
+                return null;
+            }
+
+            Dictionary<ChanceType, float> bias = null;
+
+            if (attackingTeamName == ManagedTeamName)
+            {
+                bias = new Dictionary<ChanceType, float>();
+                ApplyTempoBias(bias, ManagedTeamTacticalSliders.Tempo);
+                ApplyWidthBias(bias, ManagedTeamTacticalSliders.Width);
+            }
+
+            if (defendingTeamName == ManagedTeamName)
+            {
+                if (bias == null)
+                {
+                    bias = new Dictionary<ChanceType, float>();
+                }
+
+                ApplyDefensiveDepthBias(bias, ManagedTeamTacticalSliders.DefensiveDepth);
+            }
+
+            return bias;
+        }
+
+        // Fast favors quick transitions (CounterAttack/Dribble) over patient buildup
+        // (ThroughBall/SetPiece); Slow is the mirror image.
+        private static void ApplyTempoBias(Dictionary<ChanceType, float> bias, TempoSetting tempo)
+        {
+            switch (tempo)
+            {
+                case TempoSetting.Fast:
+                    MultiplyBias(bias, ChanceType.CounterAttack, 1.4f);
+                    MultiplyBias(bias, ChanceType.Dribble, 1.25f);
+                    MultiplyBias(bias, ChanceType.ThroughBall, 0.85f);
+                    MultiplyBias(bias, ChanceType.SetPiece, 0.85f);
+                    break;
+
+                case TempoSetting.Slow:
+                    MultiplyBias(bias, ChanceType.ThroughBall, 1.3f);
+                    MultiplyBias(bias, ChanceType.SetPiece, 1.2f);
+                    MultiplyBias(bias, ChanceType.CounterAttack, 0.7f);
+                    MultiplyBias(bias, ChanceType.Dribble, 0.85f);
+                    break;
+            }
+        }
+
+        // Wide favors crosses/set pieces over central play (ThroughBall/Dribble); Narrow
+        // is the mirror image.
+        private static void ApplyWidthBias(Dictionary<ChanceType, float> bias, WidthSetting width)
+        {
+            switch (width)
+            {
+                case WidthSetting.Wide:
+                    MultiplyBias(bias, ChanceType.Cross, 1.4f);
+                    MultiplyBias(bias, ChanceType.SetPiece, 1.15f);
+                    MultiplyBias(bias, ChanceType.ThroughBall, 0.8f);
+                    MultiplyBias(bias, ChanceType.Dribble, 0.85f);
+                    break;
+
+                case WidthSetting.Narrow:
+                    MultiplyBias(bias, ChanceType.ThroughBall, 1.3f);
+                    MultiplyBias(bias, ChanceType.Dribble, 1.2f);
+                    MultiplyBias(bias, ChanceType.Cross, 0.7f);
+                    MultiplyBias(bias, ChanceType.SetPiece, 0.9f);
+                    break;
+            }
+        }
+
+        // Applied to the OPPONENT's chance-type mix when they attack the managed team -
+        // a High line gives them more room in behind (CounterAttack) but less time to
+        // pick a spot from range (LongShot); Deep is the mirror image.
+        private static void ApplyDefensiveDepthBias(Dictionary<ChanceType, float> bias, DefensiveDepthSetting depth)
+        {
+            switch (depth)
+            {
+                case DefensiveDepthSetting.High:
+                    MultiplyBias(bias, ChanceType.CounterAttack, 1.35f);
+                    MultiplyBias(bias, ChanceType.LongShot, 0.8f);
+                    break;
+
+                case DefensiveDepthSetting.Deep:
+                    MultiplyBias(bias, ChanceType.LongShot, 1.3f);
+                    MultiplyBias(bias, ChanceType.CounterAttack, 0.7f);
+                    break;
+            }
+        }
+
+        private static void MultiplyBias(Dictionary<ChanceType, float> bias, ChanceType type, float factor)
+        {
+            bias[type] = bias.TryGetValue(type, out float existing) ? existing * factor : factor;
         }
 
         private float GetChanceCreationScore(
@@ -778,14 +956,23 @@ namespace Manager
                     // always - reflects that other players occasionally take them too -
                     // and their real Crossing/Creativity then drives the outcome through
                     // the normal GetChanceCreationScore/GetGoalQualityScore math below,
-                    // same as any other creator.
-                    if (CornerTakerNameByTeamName.TryGetValue(team.TeamName, out string designatedCornerTakerName)
-                        && designatedCornerTakerName != null)
+                    // same as any other creator. With two designated takers (session 7),
+                    // alternate 50/50 between whichever of the two are set - not true
+                    // left/right modeling (this sim has no concept of which side a corner
+                    // comes from), just two specialists sharing the duty instead of one.
+                    if (CornerTakerNamesByTeamName.TryGetValue(team.TeamName, out (string Left, string Right) cornerTakerNames))
                     {
-                        PlayerAgent designatedCornerTaker = team.StartingEleven.Find(p => p.Name == designatedCornerTakerName);
-                        if (designatedCornerTaker != null && Random.value < 0.85f)
+                        string chosenCornerTakerName = Random.value < 0.5f
+                            ? (cornerTakerNames.Left ?? cornerTakerNames.Right)
+                            : (cornerTakerNames.Right ?? cornerTakerNames.Left);
+
+                        if (chosenCornerTakerName != null)
                         {
-                            return designatedCornerTaker;
+                            PlayerAgent designatedCornerTaker = team.StartingEleven.Find(p => p.Name == chosenCornerTakerName);
+                            if (designatedCornerTaker != null && Random.value < 0.85f)
+                            {
+                                return designatedCornerTaker;
+                            }
                         }
                     }
 
