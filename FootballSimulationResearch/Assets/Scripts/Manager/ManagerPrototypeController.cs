@@ -2832,11 +2832,21 @@ namespace Manager
             roleX = BuildRoleToggleButton(rolesBand.transform, "FREE KICK", roleX, squadRoles.FreeKickTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.FreeKickTaker));
             roleX = BuildRoleToggleButton(rolesBand.transform, "CORNER", roleX, squadRoles.CornerTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.CornerTaker));
 
-            roleX += 32f;
+            // Which leanings even make tactical sense varies by position - a winger
+            // "defending" or a centre-back "attacking" isn't a real football instruction
+            // the way it is for a fullback or a central midfielder. Restricted per
+            // position rather than offering all three everywhere; goalkeepers don't get
+            // the control at all, since it doesn't apply to them.
+            AttackDefendRole[] allowedRoles = GetAllowedAttackDefendRoles(player.PrimaryPosition);
+            if (allowedRoles.Length > 0)
+            {
+                roleX += 32f;
 
-            roleX = BuildRoleToggleButton(rolesBand.transform, "DEFENSIVE", roleX, currentAttackDefendRole == AttackDefendRole.Defensive, () => SetAttackDefendRole(player, AttackDefendRole.Defensive));
-            roleX = BuildRoleToggleButton(rolesBand.transform, "BALANCED", roleX, currentAttackDefendRole == AttackDefendRole.Balanced, () => SetAttackDefendRole(player, AttackDefendRole.Balanced));
-            BuildRoleToggleButton(rolesBand.transform, "ATTACKING", roleX, currentAttackDefendRole == AttackDefendRole.Attacking, () => SetAttackDefendRole(player, AttackDefendRole.Attacking));
+                foreach (AttackDefendRole allowedRole in allowedRoles)
+                {
+                    roleX = BuildRoleToggleButton(rolesBand.transform, allowedRole.ToString().ToUpperInvariant(), roleX, currentAttackDefendRole == allowedRole, () => SetAttackDefendRole(player, allowedRole));
+                }
+            }
 
             GameObject attributeGrid = new GameObject("AttributeGrid", typeof(RectTransform));
             attributeGrid.transform.SetParent(playerInspectContentContainer, false);
@@ -2998,6 +3008,33 @@ namespace Manager
         {
             GetOrCreateSquadRoles(managedTeamName).SetRole(player, role);
             RefreshPlayerInspectUI();
+        }
+
+        // Which AttackDefendRole values are even offered for a given position - a real
+        // manager wouldn't tell a winger to "defend" or a centre-back to "attack" the way
+        // they would a fullback or central midfielder, whose whole job varies by
+        // instruction. Empty for GK - the leaning doesn't apply to a goalkeeper at all.
+        private static AttackDefendRole[] GetAllowedAttackDefendRoles(PlayerPosition position)
+        {
+            switch (position)
+            {
+                case PlayerPosition.GK:
+                    return Array.Empty<AttackDefendRole>();
+
+                case PlayerPosition.CB:
+                case PlayerPosition.DM:
+                    return new[] { AttackDefendRole.Defensive, AttackDefendRole.Balanced };
+
+                case PlayerPosition.RB:
+                case PlayerPosition.LB:
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB:
+                case PlayerPosition.CM:
+                    return new[] { AttackDefendRole.Defensive, AttackDefendRole.Balanced, AttackDefendRole.Attacking };
+
+                default: // AM, RW, LW, RM, LM, ST
+                    return new[] { AttackDefendRole.Balanced, AttackDefendRole.Attacking };
+            }
         }
 
         // Small pill-style toggle button for RolesBand - active state mirrors
