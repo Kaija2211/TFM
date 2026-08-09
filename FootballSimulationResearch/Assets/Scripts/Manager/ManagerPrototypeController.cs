@@ -2060,22 +2060,48 @@ namespace Manager
             List<PlayerAgent> squadPlayers = new List<PlayerAgent>(team.StartingEleven);
             squadPlayers.AddRange(team.Bench);
 
-            // Both columns use fraction anchors (0-1 of the panel's real width) rather
-            // than a fixed pixel width anchored from one edge - the earlier version put
-            // each column at a fixed width independently anchored from its own edge,
-            // which was individually drift-safe but left a huge, oddly-proportioned gap
-            // between them on a real 1920-wide canvas (confirmed live: Thomas reported
-            // the columns reading as "far apart"). Fractions solve both problems at once:
-            // immune to aspect-ratio drift AND keeps the two columns a sensible, fixed
-            // proportion of the screen apart regardless of resolution.
+            // Matches the actual design mockup (DesignSync, "Football Manager UI
+            // Concepts.dc.html", TACTICS frame) exactly: a centered fixed-width row -
+            // 520px left column + 80px gap + 2px partition + 80px gap + 820px right
+            // column = 1502px total - rather than the earlier version's two
+            // independently-edge-anchored fraction-width columns, which was drift-safe
+            // but left the columns reading as "far apart" on a real 1920-wide canvas.
+            // Anchored from the CENTER (0.5) with fixed pixel offsets on either side of
+            // it, not from an edge assuming a literal total canvas width - the center
+            // point itself is always correct regardless of true canvas width/aspect
+            // ratio, so this is just as immune to the drift bug as the fraction version
+            // was, without the oversized gap.
+            const float leftColumnWidth = 520f;
+            const float rightColumnWidth = 820f;
+            const float columnRowGap = 80f;
+            const float partitionWidth = 2f;
+            const float partitionVerticalInset = 60f;
+
+            float halfTotalWidth = (leftColumnWidth + columnRowGap + partitionWidth + columnRowGap + rightColumnWidth) / 2f;
+            float leftColumnLeft = -halfTotalWidth;
+            float leftColumnRight = leftColumnLeft + leftColumnWidth;
+            float partitionLeft = leftColumnRight + columnRowGap;
+            float partitionRight = partitionLeft + partitionWidth;
+            float rightColumnLeft = partitionRight + columnRowGap;
+
             GameObject leftColumn = new GameObject("ShapeApproachColumn", typeof(RectTransform));
             leftColumn.transform.SetParent(tacticsScreenPanel.transform, false);
             RectTransform leftColumnRect = leftColumn.GetComponent<RectTransform>();
-            leftColumnRect.anchorMin = new Vector2(0.03f, 0f);
-            leftColumnRect.anchorMax = new Vector2(0.42f, 1f);
-            leftColumnRect.offsetMin = new Vector2(0f, TacticsScreenFooterHeight);
-            leftColumnRect.offsetMax = new Vector2(0f, -(TacticsScreenHeaderHeight + columnTopMargin));
+            leftColumnRect.anchorMin = new Vector2(0.5f, 0f);
+            leftColumnRect.anchorMax = new Vector2(0.5f, 1f);
+            leftColumnRect.offsetMin = new Vector2(leftColumnLeft, TacticsScreenFooterHeight);
+            leftColumnRect.offsetMax = new Vector2(leftColumnRight, -(TacticsScreenHeaderHeight + columnTopMargin));
             spawnedTacticsScreenElements.Add(leftColumn);
+
+            GameObject partition = new GameObject("Partition", typeof(RectTransform), typeof(Image));
+            partition.transform.SetParent(tacticsScreenPanel.transform, false);
+            RectTransform partitionRect = partition.GetComponent<RectTransform>();
+            partitionRect.anchorMin = new Vector2(0.5f, 0f);
+            partitionRect.anchorMax = new Vector2(0.5f, 1f);
+            partitionRect.offsetMin = new Vector2(partitionLeft, TacticsScreenFooterHeight + partitionVerticalInset);
+            partitionRect.offsetMax = new Vector2(partitionRight, -(TacticsScreenHeaderHeight + columnTopMargin + partitionVerticalInset));
+            partition.GetComponent<Image>().color = ManagerUITheme.BarTrack;
+            spawnedTacticsScreenElements.Add(partition);
 
             GameObject shapeCaption = new GameObject("Caption", typeof(RectTransform));
             shapeCaption.transform.SetParent(leftColumn.transform, false);
@@ -2098,10 +2124,10 @@ namespace Manager
             GameObject rightColumn = new GameObject("RoleAssignmentColumn", typeof(RectTransform));
             rightColumn.transform.SetParent(tacticsScreenPanel.transform, false);
             RectTransform rightColumnRect = rightColumn.GetComponent<RectTransform>();
-            rightColumnRect.anchorMin = new Vector2(0.55f, 0f);
-            rightColumnRect.anchorMax = new Vector2(0.97f, 1f);
-            rightColumnRect.offsetMin = new Vector2(0f, TacticsScreenFooterHeight);
-            rightColumnRect.offsetMax = new Vector2(0f, -(TacticsScreenHeaderHeight + columnTopMargin));
+            rightColumnRect.anchorMin = new Vector2(0.5f, 0f);
+            rightColumnRect.anchorMax = new Vector2(0.5f, 1f);
+            rightColumnRect.offsetMin = new Vector2(rightColumnLeft, TacticsScreenFooterHeight);
+            rightColumnRect.offsetMax = new Vector2(rightColumnLeft + rightColumnWidth, -(TacticsScreenHeaderHeight + columnTopMargin));
             spawnedTacticsScreenElements.Add(rightColumn);
 
             GameObject leadershipCaption = new GameObject("Caption", typeof(RectTransform));
