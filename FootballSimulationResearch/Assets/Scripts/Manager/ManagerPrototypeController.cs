@@ -2894,17 +2894,19 @@ namespace Manager
                 BuildAttributeColumn(attributeGridRect, 0, 4, "Technical", new (string, float)[]
                 {
                     ("Finishing", player.Finishing), ("Passing", player.Passing), ("Dribbling", player.Dribbling),
-                    ("Crossing", player.Crossing), ("Heading", player.Heading)
+                    ("Crossing", player.Crossing), ("Heading", player.Heading), ("Long Shots", player.LongShots),
+                    ("Through Balls", player.ThroughBalls), ("Free Kicks", player.FreeKicks)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
                 {
-                    ("Creativity", player.Creativity), ("Positioning", player.Positioning), ("Composure", player.Composure)
+                    ("Creativity", player.Creativity), ("Positioning", player.Positioning), ("Composure", player.Composure),
+                    ("Off The Ball", player.OffTheBall)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 2, 4, "Defensive", new (string, float)[]
                 {
-                    ("Defending", player.Defending), ("Tackling", player.Tackling)
+                    ("Defending", player.Defending), ("Tackling", player.Tackling), ("Marking", player.Marking)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 3, 4, "Physical", new (string, float)[]

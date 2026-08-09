@@ -19,15 +19,20 @@ namespace Sim
         public float Dribbling;
         public float Crossing;
         public float Heading;
+        public float LongShots;
+        public float ThroughBalls;
+        public float FreeKicks;
 
         // Creative / mental
         public float Creativity;
         public float Positioning;
         public float Composure;
+        public float OffTheBall;
 
         // Defensive
         public float Defending;
         public float Tackling;
+        public float Marking;
 
         // Physical
         public float Pace;

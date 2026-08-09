@@ -395,11 +395,168 @@ namespace Sim
             }
 
             ApplyAgeAndHeight(player);
+            GenerateNewerAttributes(player, position, attackMultiplier, defenceMultiplier);
 
             ClampAttributes(player);
             AddSecondaryPositions(player);
 
             return player;
+        }
+
+        // Session 7 additions (LongShots/ThroughBalls/OffTheBall/Marking/FreeKicks) -
+        // deliberately a single self-contained pass wrapped in a Random.State save/
+        // restore, rather than rolled inline inside each position-specific generator
+        // above. Every RollAttribute call consumes from the same shared UnityEngine.
+        // Random stream that every other stat (and therefore every existing squad and
+        // simulated match, under a given seed) depends on - inserting new rolls inline
+        // would shift the sequence for everything generated afterward. Saving and
+        // restoring Random.state around this method means it can still use the same
+        // procedural Gaussian roll as everything else, but consumes zero budget from
+        // the sequence - byte-for-byte identical existing-stat output before and after
+        // this method existed, confirmed by same-seed regeneration (see HANDOFF).
+        // FreeKicks isn't read by the match sim yet (no free-kick event exists there) -
+        // generated anyway so the data's ready whenever that lands.
+        private void GenerateNewerAttributes(PlayerAgent player, PlayerPosition position, float attackMultiplier, float defenceMultiplier)
+        {
+            Random.State savedState = Random.state;
+
+            (float longShotsMin, float longShotsMax) = GetLongShotsRange(position);
+            player.LongShots = RollAttribute(longShotsMin, longShotsMax) * attackMultiplier;
+
+            (float throughBallsMin, float throughBallsMax) = GetThroughBallsRange(position);
+            player.ThroughBalls = RollAttribute(throughBallsMin, throughBallsMax) * attackMultiplier;
+
+            (float offTheBallMin, float offTheBallMax) = GetOffTheBallRange(position);
+            player.OffTheBall = RollAttribute(offTheBallMin, offTheBallMax) * attackMultiplier;
+
+            (float markingMin, float markingMax) = GetMarkingRange(position);
+            player.Marking = RollAttribute(markingMin, markingMax) * defenceMultiplier;
+
+            (float freeKicksMin, float freeKicksMax) = GetFreeKicksRange(position);
+            player.FreeKicks = RollAttribute(freeKicksMin, freeKicksMax) * attackMultiplier;
+
+            Random.state = savedState;
+        }
+
+        // Best shooting-from-distance profile: creative central positions and strikers,
+        // weakest for GK/CB who rarely test it.
+        private (float min, float max) GetLongShotsRange(PlayerPosition position)
+        {
+            switch (position)
+            {
+                case PlayerPosition.GK: return (15f, 30f);
+                case PlayerPosition.CB: return (20f, 40f);
+                case PlayerPosition.RB:
+                case PlayerPosition.LB: return (25f, 48f);
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB: return (28f, 52f);
+                case PlayerPosition.DM: return (30f, 55f);
+                case PlayerPosition.CM: return (40f, 70f);
+                case PlayerPosition.AM: return (48f, 78f);
+                case PlayerPosition.RM:
+                case PlayerPosition.LM: return (32f, 60f);
+                case PlayerPosition.RW:
+                case PlayerPosition.LW: return (35f, 65f);
+                case PlayerPosition.ST: return (48f, 80f);
+                default: return (30f, 55f);
+            }
+        }
+
+        // Vision/incisive-passing profile: peaks in central midfield/AM, weakest for
+        // wide defenders and out-and-out strikers who aren't asked to thread passes.
+        private (float min, float max) GetThroughBallsRange(PlayerPosition position)
+        {
+            switch (position)
+            {
+                case PlayerPosition.GK: return (15f, 30f);
+                case PlayerPosition.CB: return (22f, 42f);
+                case PlayerPosition.RB:
+                case PlayerPosition.LB: return (35f, 60f);
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB: return (38f, 64f);
+                case PlayerPosition.DM: return (45f, 72f);
+                case PlayerPosition.CM: return (52f, 80f);
+                case PlayerPosition.AM: return (60f, 88f);
+                case PlayerPosition.RM:
+                case PlayerPosition.LM: return (38f, 66f);
+                case PlayerPosition.RW:
+                case PlayerPosition.LW: return (40f, 68f);
+                case PlayerPosition.ST: return (30f, 58f);
+                default: return (35f, 60f);
+            }
+        }
+
+        // Movement-into-space profile: peaks for attackers/AM whose job is finding the
+        // right pocket of space, weakest for defenders/GK.
+        private (float min, float max) GetOffTheBallRange(PlayerPosition position)
+        {
+            switch (position)
+            {
+                case PlayerPosition.GK: return (15f, 30f);
+                case PlayerPosition.CB: return (25f, 45f);
+                case PlayerPosition.RB:
+                case PlayerPosition.LB: return (30f, 55f);
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB: return (32f, 58f);
+                case PlayerPosition.DM: return (30f, 55f);
+                case PlayerPosition.CM: return (40f, 68f);
+                case PlayerPosition.AM: return (55f, 85f);
+                case PlayerPosition.RM:
+                case PlayerPosition.LM: return (45f, 72f);
+                case PlayerPosition.RW:
+                case PlayerPosition.LW: return (50f, 78f);
+                case PlayerPosition.ST: return (60f, 90f);
+                default: return (35f, 60f);
+            }
+        }
+
+        // Positional defensive discipline profile: peaks for CB/DM whose whole job is
+        // this, weakest for attackers who aren't asked to defend structurally.
+        private (float min, float max) GetMarkingRange(PlayerPosition position)
+        {
+            switch (position)
+            {
+                case PlayerPosition.GK: return (20f, 40f);
+                case PlayerPosition.CB: return (60f, 88f);
+                case PlayerPosition.RB:
+                case PlayerPosition.LB: return (50f, 78f);
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB: return (45f, 72f);
+                case PlayerPosition.DM: return (55f, 82f);
+                case PlayerPosition.CM: return (35f, 65f);
+                case PlayerPosition.AM: return (20f, 45f);
+                case PlayerPosition.RM:
+                case PlayerPosition.LM: return (32f, 60f);
+                case PlayerPosition.RW:
+                case PlayerPosition.LW: return (20f, 42f);
+                case PlayerPosition.ST: return (18f, 38f);
+                default: return (30f, 55f);
+            }
+        }
+
+        // Dead-ball specialist profile: technical/creative positions and free-kick-
+        // taking fullbacks/wingers skew highest, weakest for pure penalty-box strikers
+        // and defenders who rarely take them.
+        private (float min, float max) GetFreeKicksRange(PlayerPosition position)
+        {
+            switch (position)
+            {
+                case PlayerPosition.GK: return (10f, 20f);
+                case PlayerPosition.CB: return (20f, 40f);
+                case PlayerPosition.RB:
+                case PlayerPosition.LB: return (30f, 55f);
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB: return (32f, 58f);
+                case PlayerPosition.DM: return (30f, 55f);
+                case PlayerPosition.CM: return (40f, 68f);
+                case PlayerPosition.AM: return (50f, 80f);
+                case PlayerPosition.RM:
+                case PlayerPosition.LM: return (35f, 62f);
+                case PlayerPosition.RW:
+                case PlayerPosition.LW: return (38f, 65f);
+                case PlayerPosition.ST: return (35f, 62f);
+                default: return (30f, 55f);
+            }
         }
 
         // Age/height are rolled independently of team strength (attackMultiplier/
@@ -841,13 +998,18 @@ namespace Sim
             player.Dribbling = Clamp(player.Dribbling);
             player.Crossing = Clamp(player.Crossing);
             player.Heading = Clamp(player.Heading);
+            player.LongShots = Clamp(player.LongShots);
+            player.ThroughBalls = Clamp(player.ThroughBalls);
+            player.FreeKicks = Clamp(player.FreeKicks);
 
             player.Creativity = Clamp(player.Creativity);
             player.Positioning = Clamp(player.Positioning);
             player.Composure = Clamp(player.Composure);
+            player.OffTheBall = Clamp(player.OffTheBall);
 
             player.Defending = Clamp(player.Defending);
             player.Tackling = Clamp(player.Tackling);
+            player.Marking = Clamp(player.Marking);
 
             player.Pace = Clamp(player.Pace);
             player.Strength = Clamp(player.Strength);

@@ -537,8 +537,12 @@ namespace Manager
             switch (chanceType)
             {
                 case ChanceType.ThroughBall:
+                    // Passing's original 0.35 split with ThroughBalls (session 7) - the
+                    // dedicated vision/incisive-passing stat, more specific than generic
+                    // Passing for exactly this chance type. Still sums to 1.0.
                     return
-                        creator.Passing * 0.35f +
+                        creator.Passing * 0.175f +
+                        creator.ThroughBalls * 0.175f +
                         creator.Creativity * 0.35f +
                         shooter.Positioning * 0.20f +
                         shooter.Pace * 0.10f;
@@ -558,8 +562,11 @@ namespace Manager
                         shooter.Finishing * 0.20f;
 
                 case ChanceType.LongShot:
+                    // Finishing's original 0.30 split with LongShots (session 7) - the
+                    // dedicated shooting-from-distance stat. Still sums to 1.0.
                     return
-                        shooter.Finishing * 0.30f +
+                        shooter.Finishing * 0.15f +
+                        shooter.LongShots * 0.15f +
                         shooter.Composure * 0.30f +
                         creator.Passing * 0.20f +
                         creator.Creativity * 0.20f;
@@ -591,9 +598,12 @@ namespace Manager
             switch (chanceType)
             {
                 case ChanceType.ThroughBall:
+                    // Defending's original 0.35 split with Marking (session 7) - the
+                    // dedicated positional-discipline stat. Still sums to 1.0.
                     return
                         defender.Positioning * 0.35f +
-                        defender.Defending * 0.35f +
+                        defender.Defending * 0.175f +
+                        defender.Marking * 0.175f +
                         goalkeeper.Goalkeeping * 0.30f;
 
                 case ChanceType.Cross:
@@ -672,9 +682,13 @@ namespace Manager
 
                 case ChanceType.ThroughBall:
                 default:
+                    // Positioning's original 0.20 split with OffTheBall (session 7) - the
+                    // dedicated movement-into-space stat, most relevant for exactly this
+                    // "gets in behind and finishes" scenario. Still sums to 1.0.
                     return
                         shooter.Finishing * 0.45f +
-                        shooter.Positioning * 0.20f +
+                        shooter.Positioning * 0.10f +
+                        shooter.OffTheBall * 0.10f +
                         shooter.Composure * 0.20f +
                         creator.Creativity * 0.15f;
             }
@@ -807,7 +821,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.LW ||
                         p.PrimaryPosition == PlayerPosition.ST
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Finishing + p.Composure);
+                    return PickWeightedByAttribute(candidates, p => p.Finishing + p.LongShots + p.Composure);
 
                 case ChanceType.CounterAttack:
                 case ChanceType.ThroughBall:
@@ -819,7 +833,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.LW ||
                         p.PrimaryPosition == PlayerPosition.AM
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Finishing + p.Positioning + p.Pace * 0.3f);
+                    return PickWeightedByAttribute(candidates, p => p.Finishing + p.Positioning + p.OffTheBall + p.Pace * 0.3f);
             }
         }
 
@@ -859,7 +873,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.DM ||
                         p.PrimaryPosition == PlayerPosition.CM
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Positioning + p.Defending + p.Tackling);
+                    return PickWeightedByAttribute(candidates, p => p.Positioning + p.Defending + p.Marking + p.Tackling);
             }
         }
 
