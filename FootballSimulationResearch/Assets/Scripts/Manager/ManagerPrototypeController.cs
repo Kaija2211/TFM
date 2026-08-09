@@ -143,6 +143,7 @@ namespace Manager
         private readonly TeamRegistry teamRegistry = new();
         private readonly LeagueTable playableTable = new();
         private readonly Dictionary<string, AgentTeam> squadsByTeamName = new();
+        private readonly Dictionary<string, ManagerSquadRoles> squadRolesByTeamName = new();
         private readonly AgentSquadGenerator squadGenerator = new();
         private readonly AgentMatchSimulator matchSimulator = new();
 
@@ -2463,6 +2464,8 @@ namespace Manager
                 }
             }
 
+            ManagerSquadRoles squadRoles = GetOrCreateSquadRoles(managedTeamName);
+
             squadBrowseListView.Clear();
             squadBrowseListView.AddGridHeaderRow();
             squadBrowseListView.AddSectionHeader("Starting XI");
@@ -2473,14 +2476,14 @@ namespace Manager
             {
                 PlayerAgent player = team.StartingEleven[i];
                 PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
-                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked);
+                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles));
             }
 
             squadBrowseListView.AddSectionHeader($"Bench ({team.Bench.Count})");
 
             foreach (PlayerAgent player in team.Bench)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked);
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles));
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
@@ -2507,6 +2510,28 @@ namespace Manager
             float displayed = midpoint + (trueRating - midpoint) * stretch;
 
             return Mathf.RoundToInt(Mathf.Clamp(displayed, 1f, 99f));
+        }
+
+        // Compact role indicators for the Squad screen's PLAYER cell - "C"/"VC" for
+        // captaincy, "PK"/"FK"/"CK" for set-piece takers. Assignment itself happens on
+        // Player Detail (see RefreshPlayerInspectUI's RolesBand); this is read-only.
+        private static string BuildRoleBadgeSuffix(PlayerAgent player, ManagerSquadRoles roles)
+        {
+            List<string> badges = new();
+
+            if (roles.Captain == player) badges.Add("C");
+            if (roles.ViceCaptain == player) badges.Add("VC");
+            if (roles.PenaltyTaker == player) badges.Add("PK");
+            if (roles.FreeKickTaker == player) badges.Add("FK");
+            if (roles.CornerTaker == player) badges.Add("CK");
+
+            if (badges.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            string accentHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Accent);
+            return $"  <size=80%><color=#{accentHex}>{string.Join(" ", badges)}</color></size>";
         }
 
         // --- Player Inspect (Prev/Next once inside; entry point jumps straight to a
@@ -2689,6 +2714,12 @@ namespace Manager
             // actually").
             const float headerBandHeight = 300f;
 
+            // A new strip between the header band and the attribute grid for role
+            // assignment (captaincy, set-piece takers, attack/defend leaning) - see
+            // RolesBand below. Kept as its own band rather than crammed into the header,
+            // which already took two rounds of tuning to fit the bigger photo.
+            const float rolesBandHeight = 56f;
+
             // Full-width (no contentMargin) unlike the centered stat grid below it - the
             // margined header looked like it wasn't filling the screen, with visible
             // background peeking on both sides (confirmed live). The name/meta/badges
@@ -2780,6 +2811,33 @@ namespace Manager
             ovrCaptionRect.anchoredPosition = new Vector2(-36f, -106f);
             ManagerUITheme.BuildLabel(ovrCaption.transform, $"OVERALL ({player.PrimaryPosition})", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
 
+            // Roles: captain/vice-captain, penalty/free-kick/corner taker (single holder
+            // per team - clicking a different player supersedes the previous one, see
+            // ToggleSquadRole), plus a per-player attack/defend leaning (see
+            // SetAttackDefendRole). Organizational for now except CornerTaker, which the
+            // ManagerSim fork's PickCreatorForChance actually reads - see
+            // ManagerSquadRoles for the full breakdown of what's mechanical vs display.
+            GameObject rolesBand = new GameObject("RolesBand", typeof(RectTransform));
+            rolesBand.transform.SetParent(playerInspectContentContainer, false);
+            ManagerUITheme.AnchorTopStretch(rolesBand, headerBandHeight, rolesBandHeight, contentMargin);
+            spawnedInspectElements.Add(rolesBand);
+
+            ManagerSquadRoles squadRoles = GetOrCreateSquadRoles(managedTeamName);
+            AttackDefendRole currentAttackDefendRole = squadRoles.GetRole(player);
+
+            float roleX = 0f;
+            roleX = BuildRoleToggleButton(rolesBand.transform, "CAPTAIN", roleX, squadRoles.Captain == player, () => ToggleSquadRole(player, SquadRoleSlot.Captain));
+            roleX = BuildRoleToggleButton(rolesBand.transform, "VICE CAPT", roleX, squadRoles.ViceCaptain == player, () => ToggleSquadRole(player, SquadRoleSlot.ViceCaptain));
+            roleX = BuildRoleToggleButton(rolesBand.transform, "PENALTY", roleX, squadRoles.PenaltyTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.PenaltyTaker));
+            roleX = BuildRoleToggleButton(rolesBand.transform, "FREE KICK", roleX, squadRoles.FreeKickTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.FreeKickTaker));
+            roleX = BuildRoleToggleButton(rolesBand.transform, "CORNER", roleX, squadRoles.CornerTaker == player, () => ToggleSquadRole(player, SquadRoleSlot.CornerTaker));
+
+            roleX += 32f;
+
+            roleX = BuildRoleToggleButton(rolesBand.transform, "DEFENSIVE", roleX, currentAttackDefendRole == AttackDefendRole.Defensive, () => SetAttackDefendRole(player, AttackDefendRole.Defensive));
+            roleX = BuildRoleToggleButton(rolesBand.transform, "BALANCED", roleX, currentAttackDefendRole == AttackDefendRole.Balanced, () => SetAttackDefendRole(player, AttackDefendRole.Balanced));
+            BuildRoleToggleButton(rolesBand.transform, "ATTACKING", roleX, currentAttackDefendRole == AttackDefendRole.Attacking, () => SetAttackDefendRole(player, AttackDefendRole.Attacking));
+
             GameObject attributeGrid = new GameObject("AttributeGrid", typeof(RectTransform));
             attributeGrid.transform.SetParent(playerInspectContentContainer, false);
             spawnedInspectElements.Add(attributeGrid);
@@ -2791,7 +2849,7 @@ namespace Manager
             attributeGridRect.anchorMin = new Vector2(0f, 0f);
             attributeGridRect.anchorMax = new Vector2(1f, 1f);
             attributeGridRect.offsetMin = new Vector2(contentMargin + 20f, 110f);
-            attributeGridRect.offsetMax = new Vector2(-(contentMargin + 20f), -(headerBandHeight + 20f));
+            attributeGridRect.offsetMax = new Vector2(-(contentMargin + 20f), -(headerBandHeight + rolesBandHeight + 20f));
 
             if (player.PrimaryPosition == PlayerPosition.GK)
             {
@@ -2878,6 +2936,106 @@ namespace Manager
                 primary ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody,
                 TextAlignmentOptions.Center,
                 FontStyles.Bold);
+        }
+
+        // Which single-holder-per-team slot a RolesBand button toggles - see
+        // ToggleSquadRole. Attack/defend role isn't here since it's per-player rather
+        // than single-holder (see SetAttackDefendRole).
+        private enum SquadRoleSlot
+        {
+            Captain,
+            ViceCaptain,
+            PenaltyTaker,
+            FreeKickTaker,
+            CornerTaker
+        }
+
+        // Clicking a player's own role button again clears it; clicking it for a
+        // different player supersedes whoever held it before (there's only ever one
+        // ManagerSquadRoles field per slot). Captain and vice-captain are also kept
+        // mutually exclusive - assigning one clears the other if the same player held it.
+        private void ToggleSquadRole(PlayerAgent player, SquadRoleSlot slot)
+        {
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+
+            PlayerAgent current = slot switch
+            {
+                SquadRoleSlot.Captain => roles.Captain,
+                SquadRoleSlot.ViceCaptain => roles.ViceCaptain,
+                SquadRoleSlot.PenaltyTaker => roles.PenaltyTaker,
+                SquadRoleSlot.FreeKickTaker => roles.FreeKickTaker,
+                SquadRoleSlot.CornerTaker => roles.CornerTaker,
+                _ => null
+            };
+
+            PlayerAgent next = current == player ? null : player;
+
+            switch (slot)
+            {
+                case SquadRoleSlot.Captain:
+                    roles.Captain = next;
+                    if (next != null && roles.ViceCaptain == next) roles.ViceCaptain = null;
+                    break;
+                case SquadRoleSlot.ViceCaptain:
+                    roles.ViceCaptain = next;
+                    if (next != null && roles.Captain == next) roles.Captain = null;
+                    break;
+                case SquadRoleSlot.PenaltyTaker:
+                    roles.PenaltyTaker = next;
+                    break;
+                case SquadRoleSlot.FreeKickTaker:
+                    roles.FreeKickTaker = next;
+                    break;
+                case SquadRoleSlot.CornerTaker:
+                    roles.CornerTaker = next;
+                    break;
+            }
+
+            RefreshPlayerInspectUI();
+        }
+
+        private void SetAttackDefendRole(PlayerAgent player, AttackDefendRole role)
+        {
+            GetOrCreateSquadRoles(managedTeamName).SetRole(player, role);
+            RefreshPlayerInspectUI();
+        }
+
+        // Small pill-style toggle button for RolesBand - active state mirrors
+        // HighlightSelectedMentalityButton's Accent/CardNeutral treatment for the
+        // existing mentality selector, so the two read as the same kind of control.
+        // Returns the x position the next button in the row should start at.
+        private float BuildRoleToggleButton(Transform parent, string label, float x, bool active, Action onClick)
+        {
+            const float buttonWidth = 130f;
+            const float buttonHeight = 40f;
+            const float gap = 8f;
+
+            GameObject buttonObject = new GameObject($"RoleButton_{label}", typeof(RectTransform), typeof(Image), typeof(Button));
+            buttonObject.transform.SetParent(parent, false);
+
+            RectTransform rect = buttonObject.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0f, 0.5f);
+            rect.anchorMax = new Vector2(0f, 0.5f);
+            rect.pivot = new Vector2(0f, 0.5f);
+            rect.sizeDelta = new Vector2(buttonWidth, buttonHeight);
+            rect.anchoredPosition = new Vector2(x, 0f);
+
+            Image image = buttonObject.GetComponent<Image>();
+            image.color = active ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+
+            Button button = buttonObject.GetComponent<Button>();
+            button.targetGraphic = image;
+            button.onClick.AddListener(() => onClick());
+
+            ManagerUITheme.BuildLabel(
+                buttonObject.transform,
+                label,
+                13,
+                active ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody,
+                TextAlignmentOptions.Center,
+                FontStyles.Bold);
+
+            return x + buttonWidth + gap;
         }
 
         private static void BuildAttributeColumn(RectTransform parent, int columnIndex, int totalColumns, string title, (string label, float value)[] attributes)
@@ -4188,6 +4346,9 @@ namespace Manager
             lastExpectedHomeGoals = expectedHomeGoals;
             lastExpectedAwayGoals = expectedAwayGoals;
 
+            matchSimulator.CornerTakerNameByTeamName[fixture.HomeTeam] = GetOrCreateSquadRoles(fixture.HomeTeam).CornerTaker?.Name;
+            matchSimulator.CornerTakerNameByTeamName[fixture.AwayTeam] = GetOrCreateSquadRoles(fixture.AwayTeam).CornerTaker?.Name;
+
             return matchSimulator.SimulateMatch(fitAdjustedHomeTeam, fitAdjustedAwayTeam, expectedHomeGoals, expectedAwayGoals);
         }
 
@@ -4900,6 +5061,21 @@ namespace Manager
             squadsByTeamName[teamName] = newTeam;
 
             return newTeam;
+        }
+
+        // Manager Mode-only side table (captaincy, set-piece takers, attack/defend role) -
+        // see ManagerSquadRoles. Keyed by team name alongside squadsByTeamName; a team's
+        // ManagerSquadRoles is created empty on first access and persists for the rest of
+        // the play session, same lifetime as the AgentTeam it applies to.
+        private ManagerSquadRoles GetOrCreateSquadRoles(string teamName)
+        {
+            if (!squadRolesByTeamName.TryGetValue(teamName, out ManagerSquadRoles roles))
+            {
+                roles = new ManagerSquadRoles();
+                squadRolesByTeamName[teamName] = roles;
+            }
+
+            return roles;
         }
 
         // Developer easter egg (Manager Mode only, purely cosmetic) - deliberately kept

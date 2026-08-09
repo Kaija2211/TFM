@@ -34,6 +34,16 @@ namespace Manager
             CounterAttack
         }
 
+        // Manager Mode-only: team name -> designated corner taker's name (see
+        // ManagerSquadRoles), set by ManagerPrototypeController before each SimulateMatch
+        // call. Keyed and matched by name rather than PlayerAgent reference because the
+        // team actually handed to SimulateMatch is a throwaway fit-adjusted clone (see
+        // ManagerFormationFit) with all-new PlayerAgent instances - Name is the one thing
+        // ClonePenalized copies through unchanged. Empty/unset by default, so a team with
+        // no corner taker assigned takes the exact original weighted-random pick with zero
+        // extra Random calls - see PickCreatorForChance.
+        public readonly Dictionary<string, string> CornerTakerNameByTeamName = new();
+
         public class AgentMatchEvent
         {
             public int Minute;
@@ -748,6 +758,23 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.RB ||
                         p.PrimaryPosition == PlayerPosition.LB
                     );
+
+                    // A designated corner taker (any position, not just the usual
+                    // candidate pool above) takes the corner most of the time rather than
+                    // always - reflects that other players occasionally take them too -
+                    // and their real Crossing/Creativity then drives the outcome through
+                    // the normal GetChanceCreationScore/GetGoalQualityScore math below,
+                    // same as any other creator.
+                    if (CornerTakerNameByTeamName.TryGetValue(team.TeamName, out string designatedCornerTakerName)
+                        && designatedCornerTakerName != null)
+                    {
+                        PlayerAgent designatedCornerTaker = team.StartingEleven.Find(p => p.Name == designatedCornerTakerName);
+                        if (designatedCornerTaker != null && Random.value < 0.85f)
+                        {
+                            return designatedCornerTaker;
+                        }
+                    }
+
                     return PickWeightedByAttribute(candidates, p => p.Crossing + p.Creativity);
 
                 default:

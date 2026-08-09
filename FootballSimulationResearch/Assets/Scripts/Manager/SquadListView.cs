@@ -85,10 +85,14 @@ namespace Manager
             spawnedRows.Add(BuildGridHeaderRow());
         }
 
-        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked)
+        // badgeSuffix is appended straight to the player name cell as TMP rich text (e.g.
+        // role badges like " <color=...>C VC</color>" - see ManagerPrototypeController.
+        // BuildRoleBadgeSuffix) - empty by default so callers that don't care about roles
+        // are unaffected.
+        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "")
         {
             EnsureLayoutComponents();
-            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked));
+            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix));
         }
 
         private GameObject BuildGridHeaderRow()
@@ -121,7 +125,7 @@ namespace Manager
             return row;
         }
 
-        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked)
+        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "")
         {
             bool clickable = onRowClicked != null;
 
@@ -163,7 +167,7 @@ namespace Manager
             x += GridColumnFractions[0];
 
             // Player
-            BuildGridCell(row.transform, x, GridColumnFractions[1], player.Name, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            BuildGridCell(row.transform, x, GridColumnFractions[1], player.Name + badgeSuffix, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
             x += GridColumnFractions[1];
 
             // OVR
