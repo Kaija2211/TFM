@@ -2116,10 +2116,10 @@ namespace Manager
             // Free Kicks/Finishing+Composure for the other two, organizational for now
             // but still the honest "this is what a real free-kick/penalty taker needs"
             // proxy - rather than picking blind by name alone.
-            static string CaptaincySummary(PlayerAgent p) => $"LDR {p.Leadership:F0}  COMP {p.Composure:F0}  AGE {p.Age}";
-            static string PenaltySummary(PlayerAgent p) => $"FIN {p.Finishing:F0}  COMP {p.Composure:F0}";
-            static string FreeKickSummary(PlayerAgent p) => $"FK {p.FreeKicks:F0}";
-            static string CornerSummary(PlayerAgent p) => $"CRS {p.Crossing:F0}  CRE {p.Creativity:F0}";
+            static string[] CaptaincySummary(PlayerAgent p) => new[] { $"LDR {p.Leadership:F0}", $"COMP {p.Composure:F0}", $"AGE {p.Age}" };
+            static string[] PenaltySummary(PlayerAgent p) => new[] { $"FIN {p.Finishing:F0}", $"COMP {p.Composure:F0}" };
+            static string[] FreeKickSummary(PlayerAgent p) => new[] { $"FK {p.FreeKicks:F0}" };
+            static string[] CornerSummary(PlayerAgent p) => new[] { $"CRS {p.Crossing:F0}", $"CRE {p.Creativity:F0}" };
 
             float roleTop = 40f;
             roleTop = BuildRoleDropdownRow(rightColumn.transform, "CAPTAIN", roleTop, roles.Captain, squadPlayers,
@@ -2188,7 +2188,7 @@ namespace Manager
         // exists) - Thomas's point: picking blind by name alone doesn't work for
         // generated players nobody already knows by heart. Returns the top offset the
         // next row should start at.
-        private float BuildRoleDropdownRow(Transform parent, string label, float top, PlayerAgent currentValue, List<PlayerAgent> options, Action<PlayerAgent> onSelect, Func<PlayerAgent, string> statSummary)
+        private float BuildRoleDropdownRow(Transform parent, string label, float top, PlayerAgent currentValue, List<PlayerAgent> options, Action<PlayerAgent> onSelect, Func<PlayerAgent, string[]> statColumns)
         {
             const float rowHeight = 44f;
             const float rowGap = 14f;
@@ -2249,7 +2249,7 @@ namespace Manager
 
                 if (!wasOpen)
                 {
-                    PopulateDropdownOptions(dropdownContent, options, onSelect, statSummary);
+                    PopulateDropdownOptions(dropdownContent, options, onSelect, statColumns);
                     dropdownPanel.transform.SetAsLastSibling();
                     dropdownPanel.SetActive(true);
                 }
@@ -2326,7 +2326,7 @@ namespace Manager
         // while active avoids the inactive-hierarchy mesh generation bug entirely.
         // Clears any previously-populated options first, since a dropdown can be opened
         // more than once across a single Tactics screen visit.
-        private static void PopulateDropdownOptions(Transform content, List<PlayerAgent> options, Action<PlayerAgent> onSelect, Func<PlayerAgent, string> statSummary)
+        private static void PopulateDropdownOptions(Transform content, List<PlayerAgent> options, Action<PlayerAgent> onSelect, Func<PlayerAgent, string[]> statColumns)
         {
             const float optionHeight = 30f;
 
@@ -2341,16 +2341,54 @@ namespace Manager
 
             foreach (PlayerAgent option in options)
             {
-                string optionLabel = option.Name + "   " + statSummary(option);
-                Button optionButton = ManagerUITheme.BuildButton(content, optionLabel, ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
-                TextMeshProUGUI optionText = optionButton.GetComponentInChildren<TextMeshProUGUI>();
-                if (optionText != null)
-                {
-                    optionText.alignment = TextAlignmentOptions.MidlineLeft;
-                }
-                optionButton.gameObject.AddComponent<LayoutElement>().preferredHeight = optionHeight;
-                optionButton.onClick.AddListener(() => onSelect(option));
+                BuildOptionRow(content, option.Name, statColumns(option), optionHeight, () => onSelect(option));
             }
+        }
+
+        // A real grid row (name cell + up to 3 fixed-width stat cells, same column-
+        // fraction technique SquadListView.BuildPlayerGridRow already uses) rather than
+        // one concatenated label - Thomas's point: with a single label, the stat values
+        // start at a different X per row depending on how long each player's name is, so
+        // they never actually line up into columns.
+        private static readonly float[] OptionRowColumnFractions = { 0.46f, 0.18f, 0.18f, 0.18f };
+
+        private static void BuildOptionRow(Transform parent, string name, string[] statColumns, float rowHeight, Action onClick)
+        {
+            GameObject row = new GameObject($"Option_{name}", typeof(RectTransform), typeof(Image), typeof(Button));
+            row.transform.SetParent(parent, false);
+            row.AddComponent<LayoutElement>().preferredHeight = rowHeight;
+
+            Image background = row.GetComponent<Image>();
+            background.color = ManagerUITheme.CardNeutral;
+
+            Button button = row.GetComponent<Button>();
+            button.targetGraphic = background;
+            button.onClick.AddListener(() => onClick());
+
+            float x = 0f;
+            BuildOptionCell(row.transform, x, OptionRowColumnFractions[0], name, ManagerUITheme.TextBody, FontStyles.Normal);
+            x += OptionRowColumnFractions[0];
+
+            for (int i = 0; i < 3; i++)
+            {
+                string cellText = statColumns != null && i < statColumns.Length ? statColumns[i] : string.Empty;
+                BuildOptionCell(row.transform, x, OptionRowColumnFractions[i + 1], cellText, ManagerUITheme.TextMuted, FontStyles.Normal);
+                x += OptionRowColumnFractions[i + 1];
+            }
+        }
+
+        private static void BuildOptionCell(Transform parent, float x, float widthFraction, string text, Color color, FontStyles style)
+        {
+            GameObject cell = new GameObject("Cell", typeof(RectTransform));
+            cell.transform.SetParent(parent, false);
+
+            RectTransform cellRect = cell.GetComponent<RectTransform>();
+            cellRect.anchorMin = new Vector2(x, 0f);
+            cellRect.anchorMax = new Vector2(x + widthFraction, 1f);
+            cellRect.offsetMin = new Vector2(8f, 0f);
+            cellRect.offsetMax = new Vector2(-4f, 0f);
+
+            ManagerUITheme.BuildLabel(cell.transform, text, 12, color, TextAlignmentOptions.MidlineLeft, style);
         }
 
         // Greedy best-fit reassignment: for each slot in the new formation (in order),
