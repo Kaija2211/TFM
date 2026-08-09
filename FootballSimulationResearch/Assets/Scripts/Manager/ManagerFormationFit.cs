@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Sim;
 
@@ -18,9 +19,16 @@ namespace Manager
     // AgentMatchSimulator's event-candidate pools always filter by the player's true
     // PrimaryPosition, still won't get picked for RW-type events at all unless nobody
     // else on the pitch qualifies - the scaling matters for the cases where they do).
+    //
+    // Session 7 (fitness phase) extended this same clone with an optional Condition
+    // multiplier (see ManagerSquadRoles.GetConditionMultiplier) - a second, independent
+    // penalty stacked on top of position-fit, same mechanism, same safety guarantee (the
+    // clone is still the only thing SimulateMatch ever sees). conditionLookup is null for
+    // every AI-controlled team (they have no Condition tracking at all), so this is a
+    // pure no-op there - fit alone, exactly as before.
     public static class ManagerFormationFit
     {
-        public static AgentTeam BuildFitAdjustedTeam(AgentTeam team, List<PlayerPosition> formationSlots)
+        public static AgentTeam BuildFitAdjustedTeam(AgentTeam team, List<PlayerPosition> formationSlots, Func<PlayerAgent, float> conditionLookup = null)
         {
             AgentTeam adjusted = new AgentTeam(team.TeamName, team.Formation);
 
@@ -29,8 +37,9 @@ namespace Manager
                 PlayerAgent original = team.StartingEleven[i];
                 PlayerPosition slot = i < formationSlots.Count ? formationSlots[i] : original.PrimaryPosition;
                 float fit = original.GetPositionFit(slot);
+                float condition = conditionLookup?.Invoke(original) ?? 1f;
 
-                adjusted.AddStarter(ClonePenalized(original, fit));
+                adjusted.AddStarter(ClonePenalized(original, fit * condition));
             }
 
             return adjusted;
@@ -38,7 +47,7 @@ namespace Manager
 
         // Age/Height/WeakFoot are physical/biographical facts, not context-sensitive
         // footballing output, so they're copied as-is - every other attribute is a
-        // skill that should suffer when played out of position.
+        // skill that should suffer when played out of position or under-conditioned.
         private static PlayerAgent ClonePenalized(PlayerAgent original, float fit)
         {
             PlayerAgent clone = new PlayerAgent(original.Name, original.Role, original.PrimaryPosition)
@@ -53,13 +62,19 @@ namespace Manager
                 Dribbling = original.Dribbling * fit,
                 Crossing = original.Crossing * fit,
                 Heading = original.Heading * fit,
+                LongShots = original.LongShots * fit,
+                ThroughBalls = original.ThroughBalls * fit,
+                FreeKicks = original.FreeKicks * fit,
 
                 Creativity = original.Creativity * fit,
                 Positioning = original.Positioning * fit,
                 Composure = original.Composure * fit,
+                OffTheBall = original.OffTheBall * fit,
+                Leadership = original.Leadership * fit,
 
                 Defending = original.Defending * fit,
                 Tackling = original.Tackling * fit,
+                Marking = original.Marking * fit,
 
                 Pace = original.Pace * fit,
                 Strength = original.Strength * fit,
@@ -74,3 +89,4 @@ namespace Manager
         }
     }
 }
+

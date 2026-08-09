@@ -86,6 +86,17 @@ namespace Sim
         // name handed out so far, league-wide.
         private readonly HashSet<string> usedNames = new();
 
+        // Manager Mode reserve pool (session 7, injuries phase) - a thin public wrapper
+        // around the existing private GeneratePlayer, exposing single-player generation
+        // for a team's reserve depth beneath the real 20-man matchday squad. Reuses every
+        // existing position-based range table and the Random.State-wrapped newer-
+        // attributes pass unchanged - purely additive, no existing generation logic
+        // touched.
+        public PlayerAgent GenerateReservePlayer(PlayerPosition position, float attackStrength, float defenceStrength)
+        {
+            return GeneratePlayer(GenerateUniqueName(), position, attackStrength, defenceStrength);
+        }
+
         public AgentTeam GenerateSquad(
             string teamName,
             float attackStrength,

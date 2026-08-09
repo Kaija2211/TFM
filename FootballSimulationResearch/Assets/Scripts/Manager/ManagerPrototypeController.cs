@@ -2476,14 +2476,14 @@ namespace Manager
             {
                 PlayerAgent player = team.StartingEleven[i];
                 PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
-                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles));
+                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles));
             }
 
             squadBrowseListView.AddSectionHeader($"Bench ({team.Bench.Count})");
 
             foreach (PlayerAgent player in team.Bench)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles));
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles));
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
@@ -2532,6 +2532,29 @@ namespace Manager
 
             string accentHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Accent);
             return $"  <size=80%><color=#{accentHex}>{string.Join(" ", badges)}</color></size>";
+        }
+
+        // Injured takes priority over a plain low-Condition warning - no point showing
+        // "tired" next to a player who's actually out. Quiet by design for anyone fit and
+        // rested (empty string) - the badge is only worth showing when it's actionable.
+        private string BuildFitnessBadgeSuffix(PlayerAgent player, ManagerSquadRoles roles)
+        {
+            if (roles.IsInjured(player, currentFixtureIndex))
+            {
+                int returnMatchday = roles.GetInjuryReturnMatchday(player);
+                string dangerHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Danger);
+                return $"  <size=80%><color=#{dangerHex}>INJ (Ret. MD{returnMatchday + 1})</color></size>";
+            }
+
+            float condition = roles.GetCondition(player);
+
+            if (condition < 60f)
+            {
+                string warningHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Warning);
+                return $"  <size=80%><color=#{warningHex}>FIT {condition:F0}%</color></size>";
+            }
+
+            return string.Empty;
         }
 
         // --- Player Inspect (Prev/Next once inside; entry point jumps straight to a
@@ -4354,12 +4377,49 @@ namespace Manager
             AgentTeam homeTeam = GetOrCreateAgentTeam(fixture.HomeTeam);
             AgentTeam awayTeam = GetOrCreateAgentTeam(fixture.AwayTeam);
 
+            // Swap any still-injured starter for the best fit bench cover (or call up a
+            // reserve if the bench has none - see CallUpReservePlayer) before this match's
+            // XI is finalized. Managed team only - AI opponents have no injury tracking.
+            if (fixture.HomeTeam == managedTeamName)
+            {
+                EnsureNoInjuredStarters(homeTeam, fixture.HomeTeam);
+            }
+            else if (fixture.AwayTeam == managedTeamName)
+            {
+                EnsureNoInjuredStarters(awayTeam, fixture.AwayTeam);
+            }
+
             // Throwaway fit-adjusted clones, not the real squad data - see
             // ManagerFormationFit. A no-op for AI teams (never touched by the user, so
-            // every starter is already a perfect fit for their slot); only matters once
-            // the managed team's XI has anyone out of position.
-            AgentTeam fitAdjustedHomeTeam = ManagerFormationFit.BuildFitAdjustedTeam(homeTeam, squadGenerator.GetStartingPositions(homeTeam.Formation));
-            AgentTeam fitAdjustedAwayTeam = ManagerFormationFit.BuildFitAdjustedTeam(awayTeam, squadGenerator.GetStartingPositions(awayTeam.Formation));
+            // every starter is already a perfect fit for their slot, and conditionLookup
+            // stays null since AI teams have no Condition tracking); only matters once
+            // the managed team's XI has anyone out of position or under-conditioned.
+            Func<PlayerAgent, float> homeConditionLookup = fixture.HomeTeam == managedTeamName
+                ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p))
+                : null;
+            Func<PlayerAgent, float> awayConditionLookup = fixture.AwayTeam == managedTeamName
+                ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p))
+                : null;
+
+            AgentTeam fitAdjustedHomeTeam = ManagerFormationFit.BuildFitAdjustedTeam(homeTeam, squadGenerator.GetStartingPositions(homeTeam.Formation), homeConditionLookup);
+            AgentTeam fitAdjustedAwayTeam = ManagerFormationFit.BuildFitAdjustedTeam(awayTeam, squadGenerator.GetStartingPositions(awayTeam.Formation), awayConditionLookup);
+
+            // Condition decay/recovery + injury rolls - managed team only (see
+            // ManagerSquadRoles). Snapshotting team.StartingEleven here, before
+            // SimulateMatch/replay ever runs, captures exactly the pre-kickoff XI -
+            // substitutions during replay mutate StartingEleven/Bench in place, so
+            // capturing any later would blur "who actually started" with "who's on at
+            // full-time." Subs who come on mid-match aren't counted as "played" for
+            // fatigue purposes in this pass - a deliberate v1 simplification, not an
+            // oversight (see HANDOFF).
+            if (fixture.HomeTeam == managedTeamName)
+            {
+                ApplyMatchdayConditionAndInjuries(homeTeam);
+            }
+            else if (fixture.AwayTeam == managedTeamName)
+            {
+                ApplyMatchdayConditionAndInjuries(awayTeam);
+            }
 
             StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(fixture);
 
@@ -4395,6 +4455,104 @@ namespace Manager
             matchSimulator.CornerTakerNameByTeamName[fixture.AwayTeam] = GetOrCreateSquadRoles(fixture.AwayTeam).CornerTaker?.Name;
 
             return matchSimulator.SimulateMatch(fitAdjustedHomeTeam, fitAdjustedAwayTeam, expectedHomeGoals, expectedAwayGoals);
+        }
+
+        private void EnsureNoInjuredStarters(AgentTeam team, string teamName)
+        {
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(teamName);
+
+            // Snapshot before iterating - SubstitutePlayer mutates StartingEleven in
+            // place, so walking the live list while swapping into it would skip entries.
+            foreach (PlayerAgent starter in new List<PlayerAgent>(team.StartingEleven))
+            {
+                if (!roles.IsInjured(starter, currentFixtureIndex))
+                {
+                    continue;
+                }
+
+                PlayerAgent replacement = FindFitBenchReplacement(team, roles, starter.PrimaryPosition)
+                    ?? CallUpReservePlayer(teamName, starter.PrimaryPosition);
+
+                if (replacement != null)
+                {
+                    team.SubstitutePlayer(starter, replacement);
+                }
+
+                // If replacement is still null here, the bench and reserve pool are both
+                // out of fit cover for this position - a real, visible squad crisis
+                // rather than one silently papered over. The injured starter plays
+                // anyway (better than fielding ten men).
+            }
+        }
+
+        private PlayerAgent FindFitBenchReplacement(AgentTeam team, ManagerSquadRoles roles, PlayerPosition neededPosition)
+        {
+            PlayerAgent best = null;
+            float bestFit = -1f;
+
+            foreach (PlayerAgent candidate in team.Bench)
+            {
+                if (roles.IsInjured(candidate, currentFixtureIndex))
+                {
+                    continue;
+                }
+
+                float fit = candidate.GetPositionFit(neededPosition);
+
+                if (fit > bestFit)
+                {
+                    best = candidate;
+                    bestFit = fit;
+                }
+            }
+
+            return best;
+        }
+
+        private void ApplyMatchdayConditionAndInjuries(AgentTeam team)
+        {
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            HashSet<PlayerAgent> playedThisMatch = new HashSet<PlayerAgent>(team.StartingEleven);
+
+            List<PlayerAgent> fullSquad = new List<PlayerAgent>(team.StartingEleven);
+            fullSquad.AddRange(team.Bench);
+
+            foreach (PlayerAgent player in fullSquad)
+            {
+                bool played = playedThisMatch.Contains(player);
+                float preMatchCondition = roles.GetCondition(player);
+
+                roles.ApplyPostMatchCondition(player, played, player.Age, player.Stamina);
+
+                if (played)
+                {
+                    TryRollInjury(roles, player, preMatchCondition);
+                }
+            }
+        }
+
+        // Injury risk scales sharply as pre-match Condition drops - a manager who never
+        // rests a player is directly trading long-term injury risk for short-term
+        // selection convenience, which was the whole point of this system. Age adds a
+        // smaller, realistic aging-curve bump on top. Recovery duration is a rough bell
+        // curve (two averaged Random.Range rolls, same cheap-Gaussian-ish trick
+        // GenerateAge uses) - mostly short knocks, occasional longer absences, matching
+        // the "bell curve not hard range" preference used everywhere else stats/ages/
+        // heights are generated.
+        private void TryRollInjury(ManagerSquadRoles roles, PlayerAgent player, float preMatchCondition)
+        {
+            float fatigueRisk = Mathf.Clamp01((70f - preMatchCondition) / 70f);
+            float ageRisk = Mathf.Clamp01((player.Age - 30f) / 15f);
+
+            float injuryChance = 0.015f + (fatigueRisk * 0.09f) + (ageRisk * 0.02f);
+
+            if (UnityEngine.Random.value >= injuryChance)
+            {
+                return;
+            }
+
+            int duration = Mathf.Clamp(Mathf.RoundToInt((UnityEngine.Random.Range(1f, 6f) + UnityEngine.Random.Range(1f, 6f)) / 2f), 1, 8);
+            roles.SetInjured(player, currentFixtureIndex + duration + 1);
         }
 
         // Lets the running replay coroutine finish out its remaining minutes without
@@ -5106,6 +5264,84 @@ namespace Manager
             squadsByTeamName[teamName] = newTeam;
 
             return newTeam;
+        }
+
+        // Reserve pool depth (session 7, injuries phase) - a safety net beneath the real
+        // 20-man matchday squad (11 starters + 9 bench, the bench number deliberately
+        // matching the real Premier League matchday-squad rule - never inflated to make
+        // room for this). Only ever generated/consulted for managedTeamName - AI opponents
+        // never run out of a position since there's no injury tracking for them at all
+        // (see ManagerSquadRoles), so generating reserves for all 19 of them would be pure
+        // waste. Deliberately generated at a softened team strength (0.85x) - a reserve
+        // being a clear step down from the first team is the point, not a bug; there's
+        // still enough RollAttribute variance for an occasional promising one.
+        private readonly Dictionary<string, List<PlayerAgent>> reservePoolByTeamName = new();
+
+        private static readonly PlayerPosition[] ReservePoolPositions =
+        {
+            PlayerPosition.GK,
+            PlayerPosition.CB, PlayerPosition.CB,
+            PlayerPosition.RB, PlayerPosition.LB,
+            PlayerPosition.CM, PlayerPosition.CM,
+            PlayerPosition.AM,
+            PlayerPosition.RW, PlayerPosition.LW,
+            PlayerPosition.ST
+        };
+
+        private List<PlayerAgent> GetOrCreateReservePool(string teamName)
+        {
+            if (reservePoolByTeamName.TryGetValue(teamName, out List<PlayerAgent> pool))
+            {
+                return pool;
+            }
+
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+            pool = new List<PlayerAgent>();
+
+            foreach (PlayerPosition position in ReservePoolPositions)
+            {
+                pool.Add(squadGenerator.GenerateReservePlayer(position, strength.AttackStrength * 0.85f, strength.DefenceStrength * 0.85f));
+            }
+
+            reservePoolByTeamName[teamName] = pool;
+            return pool;
+        }
+
+        // Promotes the best-fitting available reserve straight onto the real matchday
+        // bench (AddBenchPlayer is already public on AgentTeam - no protected-file change
+        // needed to do this) so they immediately show up everywhere the rest of the squad
+        // does (Squad screen, Tactics Board substitute picker). Prefers an exact position
+        // match; falls back to the reserve with the best position fit for the needed slot
+        // (PlayerAgent.GetPositionFit, the same adjacency judgement formation-fit already
+        // uses) rather than leaving a position with zero cover. Returns null if the pool
+        // is completely exhausted - a real, visible squad crisis rather than silently
+        // conjuring an infinite bench.
+        private PlayerAgent CallUpReservePlayer(string teamName, PlayerPosition neededPosition)
+        {
+            List<PlayerAgent> pool = GetOrCreateReservePool(teamName);
+
+            if (pool.Count == 0)
+            {
+                return null;
+            }
+
+            PlayerAgent best = pool[0];
+            float bestFit = best.GetPositionFit(neededPosition);
+
+            foreach (PlayerAgent candidate in pool)
+            {
+                float fit = candidate.GetPositionFit(neededPosition);
+                if (fit > bestFit)
+                {
+                    best = candidate;
+                    bestFit = fit;
+                }
+            }
+
+            pool.Remove(best);
+            GetOrCreateAgentTeam(teamName).AddBenchPlayer(best);
+
+            return best;
         }
 
         // Manager Mode-only side table (captaincy, set-piece takers, attack/defend role) -
