@@ -3363,16 +3363,24 @@ namespace Manager
             GameObject pitchObj = new GameObject("OpponentPitch", typeof(RectTransform), typeof(Image));
             pitchObj.transform.SetParent(matchdayPrepContentContainer, false);
             matchdayPrepPitchContainer = pitchObj.GetComponent<RectTransform>();
-            matchdayPrepPitchContainer.anchorMin = new Vector2(1f, 1f);
+            // Vertically stretched (anchorMin/Max.y = 0/1) with top/bottom offsets,
+            // exactly like opponentListRect right above - NOT a point anchor with a
+            // manually-snapshotted sizeDelta.height (what this used to be). That snapshot
+            // was computed once, from matchdayPrepContentContainer.rect.height, at chrome-
+            // build time only - correct for whatever window size was active the very
+            // first time Matchday Prep was ever shown, but frozen forever after and wrong
+            // for any other window size, including the same window resized later in the
+            // same session (confirmed live, 2026-08-09 session 7: fine on Matchday 1,
+            // visibly elongated past the footer buttons by Matchday 2 after a window
+            // resize in between - real recurrence of the exact drift class already
+            // documented in the comment above for width/position, this time for height).
+            // Stretch anchors recompute automatically on every layout pass, so this can't
+            // go stale again regardless of when or how many times the window resizes.
+            matchdayPrepPitchContainer.anchorMin = new Vector2(1f, 0f);
             matchdayPrepPitchContainer.anchorMax = new Vector2(1f, 1f);
             matchdayPrepPitchContainer.pivot = new Vector2(1f, 1f);
-            matchdayPrepPitchContainer.anchoredPosition = new Vector2(-sideMargin, -(rowMargin + 30f));
-            // Same reasoning as the position above: derives from the container's actual
-            // measured height rather than a literal 1080, since that also drifts from
-            // the reference value whenever the window isn't exactly 16:9 (979 in the
-            // same live measurement that found the 2117-wide container).
-            float containerHeight = matchdayPrepContentContainer.rect.height;
-            matchdayPrepPitchContainer.sizeDelta = new Vector2(opponentPitchWidth, containerHeight - (rowMargin + 30f) - rowMargin);
+            matchdayPrepPitchContainer.offsetMax = new Vector2(-sideMargin, -(rowMargin + 30f));
+            matchdayPrepPitchContainer.offsetMin = new Vector2(-(sideMargin + opponentPitchWidth), rowMargin);
             pitchObj.GetComponent<Image>().color = ManagerUITheme.PanelDark;
 
             BuildPitchMarkings(matchdayPrepPitchContainer);
