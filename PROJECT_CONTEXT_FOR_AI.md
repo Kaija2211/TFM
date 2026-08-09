@@ -170,6 +170,14 @@ Current Manager Mode features include:
 
 Manager Mode is allowed to be more game-like and user-facing, but it must not contaminate Research Mode metrics or alter research evaluation behaviour.
 
+### The ManagerSim fork (added 2026-08-09)
+
+Manager Mode now has its own duplicate of the match simulator, free to edit: `Assets/Scripts/ManagerSim/AgentMatchSimulator.cs`. It started as a byte-for-byte copy of `Assets/Scripts/Sim/AgentMatchSimulator.cs` and is free to diverge from there - it exists specifically so Manager Mode can get real match-resolution changes (its first use: a genuine on/off-target shot distinction, for an honest Shots on Target stat) without ever touching the protected original.
+
+How it stays safe: the fork is declared `namespace Manager` (not a new namespace) with the exact same class/type names as the original. `ManagerPrototypeController.cs` is itself `namespace Manager` and already had `using Sim;`, so C#'s same-namespace type resolution makes the fork shadow `Sim.AgentMatchSimulator` there automatically - no call sites needed to change. `ResearchEvaluationRunner.cs` (`namespace Data`, no `using Manager;`) is completely unaffected and still resolves to the real, untouched `Sim.AgentMatchSimulator`. This was verified live, not just reasoned about - a temporary marker string proved the fork is genuinely what Manager Mode runs, then removed.
+
+**If a future Manager Mode feature needs a real match-logic change** (not just pre/post-processing around the sim, which `ManagerFormationFit`/`ManagerMentalityModifier` already do without needing a fork): check whether the ManagerSim fork already covers it before assuming the protected original needs touching - it usually doesn't need to. The same fork-by-namespace-shadowing pattern could apply to some other currently-protected `Sim`/`Data` file later if a concrete need arises; it hasn't been needed yet beyond this one file.
+
 ---
 
 ## 7. Current evaluation framing
@@ -344,6 +352,7 @@ When working on this repo, follow these constraints:
 9. **If implementation would affect research numbers, stop and ask.**
 10. **Preserve academic honesty over making the prototype look more impressive.**
 11. **Multithreading/parallelism is out of scope.** Do not suggest or implement it (e.g. `Task.Run`, `Thread`, `Parallel.For`) as a performance fix for Research Mode or Manager Mode — this is a deliberate scope-control decision, and it keeps the recorded SM-vs-ABM execution time / sims-per-minute comparison on a consistent single-threaded basis.
+12. **"Don't touch the match simulator" means the original, not Manager Mode's fork.** `Assets/Scripts/Sim/AgentMatchSimulator.cs` must stay untouched (guardrail #1 above). `Assets/Scripts/ManagerSim/AgentMatchSimulator.cs` is a deliberate, free-to-edit Manager Mode-only duplicate (see section 6) - editing it is normal Manager Mode work, not a Research Mode violation. Always verify with `git diff` on the `Sim/` original specifically (not just "no errors") before considering a match-logic change to be Research-Mode-safe.
 
 Useful rule:
 

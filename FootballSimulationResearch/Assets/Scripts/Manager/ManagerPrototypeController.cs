@@ -31,7 +31,22 @@ namespace Manager
         [SerializeField] private TMP_InputField managerNameInput;
         [SerializeField] private RectTransform teamGridContainer;
         [SerializeField] private Button teamSelectBackButton;
-        [SerializeField] private Button confirmTeamButton; // relabeled "Start Career"
+        [SerializeField] private Button confirmTeamButton; // relabeled "Start Career"/"Continue" depending on teamSelectStep
+
+        // 1 = manager name entry, 2 = club select. Split into two steps so the name
+        // field can be a real centered "type your name" screen instead of a squeezed
+        // side column, and so a name can actually be required before moving on (it
+        // wasn't enforced at all when this was a single combined screen).
+        private int teamSelectStep = 1;
+        // GameObject, not a cached TextMeshProUGUI - RecoverBlankLabelsNextFrame
+        // (see BuildTeamSelectChrome's call to it) can destroy+recreate the TMP
+        // component on TMP mesh-generation failure, which would silently orphan a
+        // cached component reference. Re-fetching via GetComponentInChildren on this
+        // parent GameObject each time sidesteps that, since the parent itself is never
+        // destroyed/recreated, only its TMP child component sometimes is.
+        private GameObject teamSelectSubtitleObj;
+        private GameObject teamSelectNameCaption;
+        private GameObject teamSelectClubCaption;
 
         // headerText/nextFixtureText/tacticText/leagueTableText from the original restyle
         // pass are retired - the Hub's visual layout now matches the newer mockup (crest,
@@ -47,7 +62,7 @@ namespace Manager
         [SerializeField] private Button exitToTitleButton;
         [SerializeField] private LeagueTableView leagueTableView;
 
-        // Tactic buttons are NOT declared here - they're the same
+        // Mentality buttons are NOT declared here - they're the same
         // attackingButton/balancedButton/defensiveButton fields further down,
         // reparented in the Editor from the Hub onto this screen. Same C# references,
         // they just live under a different panel now.
@@ -65,8 +80,9 @@ namespace Manager
         [SerializeField] private Button inspectNextButton;
         [SerializeField] private Button inspectBackButton;
 
-        // Tactic is chosen between matches on the Hub, not mid-match - no manager is
-        // rethinking their approach to the next opponent while the current game is live.
+        // Mentality can now be changed mid-match too (see SetMentality), not just
+        // between matches on the Hub - these same three buttons are reused on the live
+        // Match Day screen for that.
         [SerializeField] private Button attackingButton;
         [SerializeField] private Button balancedButton;
         [SerializeField] private Button defensiveButton;
@@ -127,7 +143,7 @@ namespace Manager
         private List<OpenFootballMatch> allSeasonFixtures = new();
         private List<OpenFootballMatch> managedTeamFixtures = new();
         private int currentFixtureIndex;
-        private ManagerTactic selectedTactic = ManagerTactic.Balanced;
+        private ManagerMentality selectedMentality = ManagerMentality.Balanced;
 
         // TMP Sprite Assets (Assets/Resources/Manager/*.asset) - loaded once here rather
         // than per-build-call. star-filled has star-empty wired as its fallback sprite
@@ -157,7 +173,7 @@ namespace Manager
         private readonly HashSet<int> simulatedMatchdays = new();
 
         private OpenFootballMatch currentFixture;
-        private ManagerTactic tacticUsedForCurrentMatch;
+        private ManagerMentality mentalityUsedForCurrentMatch;
         private bool skipToResultsRequested;
 
         private bool matchdayPrepChromeBuilt;
@@ -198,6 +214,14 @@ namespace Manager
         private float lastExpectedHomeGoals;
         private float lastExpectedAwayGoals;
 
+        // Pre-mentality prediction, kept separately from the two fields above (which
+        // already have the current mentality's multiplier baked in) so a mid-match
+        // mentality change can recompute cleanly from the original baseline instead of
+        // compounding a second modifier on top of the first one's already-adjusted
+        // numbers. See SetMentality.
+        private float lastRawExpectedHomeGoals;
+        private float lastRawExpectedAwayGoals;
+
         // Starting XI followed by Bench, built fresh each time the inspect screen opens.
         private List<PlayerAgent> inspectSquadPlayers = new();
         private int inspectPlayerIndex;
@@ -212,6 +236,13 @@ namespace Manager
         private int currentMatchMinute;
         private int liveHomeGoalsSoFar;
         private int liveAwayGoalsSoFar;
+
+        // True only for the actual duration of ReplayMatchCoroutine (kickoff to full-
+        // time) - see ApplyLiveMentalityChangeIfMatchInProgress, which needs an
+        // unambiguous "is a match genuinely in progress right now" signal rather than
+        // inferring it from panel active-states (which can be misleading mid-transition,
+        // e.g. during OnSimulateMatchClicked's own setup for the *next* match).
+        private bool isMatchCurrentlyLive;
 
         private void Start()
         {
@@ -229,15 +260,18 @@ namespace Manager
             if (inspectBackButton != null) inspectBackButton.onClick.AddListener(OnInspectBackClicked);
             if (skipToResultsButton != null) skipToResultsButton.onClick.AddListener(OnSkipToResultsClicked);
             if (fullTimeContinueButton != null) fullTimeContinueButton.onClick.AddListener(OnFullTimeContinueClicked);
-            if (attackingButton != null) attackingButton.onClick.AddListener(SelectAttackingTactic);
-            if (balancedButton != null) balancedButton.onClick.AddListener(SelectBalancedTactic);
-            if (defensiveButton != null) defensiveButton.onClick.AddListener(SelectDefensiveTactic);
+            if (attackingButton != null) attackingButton.onClick.AddListener(SelectAttackingMentality);
+            if (balancedButton != null) balancedButton.onClick.AddListener(SelectBalancedMentality);
+            if (defensiveButton != null) defensiveButton.onClick.AddListener(SelectDefensiveMentality);
             if (confirmTeamButton != null) confirmTeamButton.onClick.AddListener(OnConfirmTeamClicked);
             if (teamSelectBackButton != null) teamSelectBackButton.onClick.AddListener(OnTeamSelectBackClicked);
+            // Live-validates the Continue button as the manager types, rather than only
+            // checking on click - see RefreshTeamSelectStepUI.
+            if (managerNameInput != null) managerNameInput.onValueChanged.AddListener(_ => RefreshTeamSelectStepUI());
             if (exitToTitleButton != null) exitToTitleButton.onClick.AddListener(OnExitToTitleClicked);
 
             ApplyManagerUITheme();
-            SetTactic(selectedTactic);
+            SetMentality(selectedMentality);
 
             if (seasonFile == null)
             {
@@ -748,11 +782,14 @@ namespace Manager
                 teamGridBuilt = true;
             }
 
+            teamSelectStep = 1;
+
             if (teamSelectPanel != null) teamSelectPanel.SetActive(true);
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (matchdayPanel != null) matchdayPanel.SetActive(false);
 
             RefreshTeamSelectUI();
+            RefreshTeamSelectStepUI();
         }
 
         // Header/footer bands (see ManagerUITheme.BuildAccentBand) plus the two captions
@@ -776,8 +813,6 @@ namespace Manager
             const float contentLeft = (1920f - contentWidth) / 2f;
             const float contentRight = 1920f - contentLeft;
             const float nameColumnWidth = 340f;
-            const float columnGap = 56f;
-            const float clubColumnLeft = contentLeft + nameColumnWidth + columnGap;
 
             GameObject header = ManagerUITheme.BuildAccentBand(teamSelectPanel.transform, topBand: true, height: bandHeight);
 
@@ -799,7 +834,11 @@ namespace Manager
             subtitleRect.pivot = new Vector2(0f, 1f);
             subtitleRect.sizeDelta = new Vector2(-2f * contentLeft, 20f);
             subtitleRect.anchoredPosition = new Vector2(contentLeft, -58f);
-            ManagerUITheme.BuildLabel(subtitleObj.transform, "Step 1 of 1 · Manager & Club", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            // Placeholder text - RefreshTeamSelectStepUI overwrites this immediately
+            // (ShowTeamSelect calls it right after this method) with the real per-step
+            // "Step 1 of 2"/"Step 2 of 2" text.
+            ManagerUITheme.BuildLabel(subtitleObj.transform, "Step 1 of 2 · Manager Name", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            teamSelectSubtitleObj = subtitleObj;
 
             ManagerUITheme.BuildAccentBand(teamSelectPanel.transform, topBand: false, height: bandHeight);
 
@@ -812,6 +851,7 @@ namespace Manager
             nameCaptionRect.sizeDelta = new Vector2(nameColumnWidth, 18f);
             ManagerUITheme.BuildLabel(nameCaption.transform, "MANAGER NAME", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             nameCaption.transform.SetAsFirstSibling();
+            teamSelectNameCaption = nameCaption;
 
             GameObject clubCaption = new GameObject("SelectClubCaption", typeof(RectTransform));
             clubCaption.transform.SetParent(teamSelectPanel.transform, false);
@@ -819,9 +859,13 @@ namespace Manager
             clubCaptionRect.anchorMin = new Vector2(0f, 1f);
             clubCaptionRect.anchorMax = new Vector2(0f, 1f);
             clubCaptionRect.pivot = new Vector2(0f, 1f);
-            clubCaptionRect.sizeDelta = new Vector2(contentRight - clubColumnLeft, 18f);
+            // Full content width, not just the old clubColumnLeft..contentRight span -
+            // on step 2 the grid no longer shares the row with a name column, so the
+            // caption above it shouldn't either.
+            clubCaptionRect.sizeDelta = new Vector2(contentWidth, 18f);
             ManagerUITheme.BuildLabel(clubCaption.transform, "SELECT CLUB · PREMIER LEAGUE", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             clubCaption.transform.SetAsFirstSibling();
+            teamSelectClubCaption = clubCaption;
 
             // managerNameInput and teamGridContainer are Editor-placed objects (an
             // InputField and a Scroll/Grid layout aren't worth rebuilding from scratch
@@ -830,16 +874,15 @@ namespace Manager
             // deliberately avoid. Margins below match the design mockup's proportions
             // (header-to-caption and caption-to-content gaps, not just a token few px).
             const float captionTop = bandHeight + 40f;
-            const float captionHeight = 18f;
-            float contentTop = captionTop + captionHeight + 32f;
 
             nameCaptionRect.anchoredPosition = new Vector2(contentLeft, -captionTop);
-            clubCaptionRect.anchoredPosition = new Vector2(clubColumnLeft, -captionTop);
+            clubCaptionRect.anchoredPosition = new Vector2(contentLeft, -captionTop);
 
             if (managerNameInput != null)
             {
                 RectTransform inputRect = managerNameInput.GetComponent<RectTransform>();
-                ManagerUITheme.SetPointAnchor(inputRect, new Vector2(0f, 1f), new Vector2(contentLeft, -contentTop), new Vector2(nameColumnWidth, 56f));
+                // Positioned per-step by RefreshTeamSelectStepUI instead of fixed here -
+                // step 1 wants it big and centered, step 2 hides it entirely.
 
                 if (managerNameInput.TryGetComponent(out Image inputImage))
                 {
@@ -874,14 +917,9 @@ namespace Manager
                 inputAccent.GetComponent<Image>().color = ManagerUITheme.Accent;
             }
 
-            if (teamGridContainer != null)
-            {
-                RectTransform gridRect = teamGridContainer.GetComponent<RectTransform>();
-                gridRect.anchorMin = new Vector2(0f, 0f);
-                gridRect.anchorMax = new Vector2(1f, 1f);
-                gridRect.offsetMin = new Vector2(clubColumnLeft, bandHeight + 47f);
-                gridRect.offsetMax = new Vector2(-contentLeft, -contentTop);
-            }
+            // teamGridContainer's position is set per-step by RefreshTeamSelectStepUI
+            // instead of fixed here - step 2 stretches it to the full content width now
+            // that it no longer shares the row with the name column.
 
             // confirmTeamButton/teamSelectBackButton are Editor-placed and were never
             // explicitly positioned in code - their baked scene position was tuned
@@ -982,8 +1020,113 @@ namespace Manager
             }
         }
 
+        // Drives the two-step New Career wizard: step 1 is a big centered manager name
+        // field (blocks progression until non-empty - this is also what makes a manager
+        // name required, which the old single-screen version never enforced at all),
+        // step 2 is the club grid stretched to the full content width now that it isn't
+        // sharing the row with a name column. Called on every step change and on every
+        // keystroke in the name field (see the onValueChanged listener), so it has to
+        // stay cheap - just RectTransform/active-state/text updates, no rebuilding.
+        private void RefreshTeamSelectStepUI()
+        {
+            const float bandHeight = 90f;
+            const float contentWidth = 1700f;
+            const float contentLeft = (1920f - contentWidth) / 2f;
+            const float nameColumnWidth = 340f;
+            const float captionTop = bandHeight + 40f;
+            const float captionHeight = 18f;
+            const float contentTop = captionTop + captionHeight + 32f;
+
+            bool isNameStep = teamSelectStep == 1;
+
+            if (teamSelectSubtitleObj != null)
+            {
+                TextMeshProUGUI subtitleLabel = teamSelectSubtitleObj.GetComponentInChildren<TextMeshProUGUI>();
+                if (subtitleLabel != null)
+                {
+                    subtitleLabel.text = isNameStep
+                        ? "Step 1 of 2 · Manager Name"
+                        : "Step 2 of 2 · Select Club";
+                }
+            }
+
+            if (teamSelectClubCaption != null) teamSelectClubCaption.SetActive(!isNameStep);
+            if (teamGridContainer != null) teamGridContainer.gameObject.SetActive(!isNameStep);
+
+            if (teamSelectNameCaption != null)
+            {
+                teamSelectNameCaption.SetActive(isNameStep);
+
+                if (isNameStep)
+                {
+                    // Re-anchored to sit centered directly above the big centered input
+                    // box below, instead of its original top-left chrome position (which
+                    // reads as orphaned once the input it labels is no longer nearby).
+                    RectTransform captionRect = teamSelectNameCaption.GetComponent<RectTransform>();
+                    ManagerUITheme.SetPointAnchor(captionRect, new Vector2(0.5f, 0.5f), new Vector2(0f, 90f), new Vector2(640f, 24f));
+
+                    TextMeshProUGUI captionLabel = teamSelectNameCaption.GetComponentInChildren<TextMeshProUGUI>();
+                    if (captionLabel != null) captionLabel.alignment = TextAlignmentOptions.Center;
+                }
+            }
+
+            if (managerNameInput != null)
+            {
+                managerNameInput.gameObject.SetActive(isNameStep);
+
+                RectTransform inputRect = managerNameInput.GetComponent<RectTransform>();
+
+                if (isNameStep)
+                {
+                    // Big and centered in the body area between the header/footer bands -
+                    // "a big text input thing in the middle", not squeezed into the old
+                    // 340px side column that only existed to share space with the grid.
+                    const float bigInputWidth = 640f;
+                    const float bigInputHeight = 72f;
+                    ManagerUITheme.SetPointAnchor(
+                        inputRect, new Vector2(0.5f, 0.5f), new Vector2(0f, 20f), new Vector2(bigInputWidth, bigInputHeight));
+
+                    if (managerNameInput.textComponent != null) managerNameInput.textComponent.fontSize = 28;
+                    if (managerNameInput.placeholder is TextMeshProUGUI bigPlaceholder) bigPlaceholder.fontSize = 28;
+                }
+                else
+                {
+                    ManagerUITheme.SetPointAnchor(
+                        inputRect, new Vector2(0f, 1f), new Vector2(contentLeft, -contentTop), new Vector2(nameColumnWidth, 56f));
+
+                    if (managerNameInput.textComponent != null) managerNameInput.textComponent.fontSize = 18;
+                    if (managerNameInput.placeholder is TextMeshProUGUI smallPlaceholder) smallPlaceholder.fontSize = 18;
+                }
+            }
+
+            if (teamGridContainer != null && !isNameStep)
+            {
+                RectTransform gridRect = teamGridContainer.GetComponent<RectTransform>();
+                gridRect.anchorMin = new Vector2(0f, 0f);
+                gridRect.anchorMax = new Vector2(1f, 1f);
+                gridRect.offsetMin = new Vector2(contentLeft, bandHeight + 47f);
+                gridRect.offsetMax = new Vector2(-contentLeft, -contentTop);
+            }
+
+            if (confirmTeamButton != null)
+            {
+                TextMeshProUGUI confirmLabel = confirmTeamButton.GetComponentInChildren<TextMeshProUGUI>();
+                if (confirmLabel != null) confirmLabel.text = isNameStep ? "CONTINUE" : "START CAREER";
+
+                bool nameFilled = managerNameInput != null && !string.IsNullOrWhiteSpace(managerNameInput.text);
+                confirmTeamButton.interactable = !isNameStep || nameFilled;
+            }
+        }
+
         public void OnTeamSelectBackClicked()
         {
+            if (teamSelectStep == 2)
+            {
+                teamSelectStep = 1;
+                RefreshTeamSelectStepUI();
+                return;
+            }
+
             if (teamSelectPanel != null) teamSelectPanel.SetActive(false);
 
             ShowTitleScreen();
@@ -991,6 +1134,19 @@ namespace Manager
 
         public void OnConfirmTeamClicked()
         {
+            if (teamSelectStep == 1)
+            {
+                if (managerNameInput == null || string.IsNullOrWhiteSpace(managerNameInput.text))
+                {
+                    return;
+                }
+
+                managerName = managerNameInput.text.Trim();
+                teamSelectStep = 2;
+                RefreshTeamSelectStepUI();
+                return;
+            }
+
             if (availableTeamNames.Count > 0)
             {
                 managedTeamName = availableTeamNames[selectedTeamIndex];
@@ -1043,22 +1199,68 @@ namespace Manager
             statisticalModel.Train(trainingMatches);
         }
 
-        // --- Tactic selection (Balanced default: no modifier applied) ---
+        // --- Mentality selection (Balanced default: no modifier applied). Renamed from
+        // "Tactic" - mentality is the real football term for this attacking/balanced/
+        // defensive spectrum; "tactic" more naturally implies formation/shape, which
+        // this has nothing to do with (see the Tactics Board for that, a completely
+        // separate screen). Selectable both pre-match (Hub/Matchday Prep) and now live
+        // during a match too - see ApplyLiveMentalityChangeIfMatchInProgress. ---
 
-        public void SelectAttackingTactic() => SetTactic(ManagerTactic.Attacking);
-        public void SelectBalancedTactic() => SetTactic(ManagerTactic.Balanced);
-        public void SelectDefensiveTactic() => SetTactic(ManagerTactic.Defensive);
+        public void SelectAttackingMentality() => SetMentality(ManagerMentality.Attacking);
+        public void SelectBalancedMentality() => SetMentality(ManagerMentality.Balanced);
+        public void SelectDefensiveMentality() => SetMentality(ManagerMentality.Defensive);
 
-        private void SetTactic(ManagerTactic tactic)
+        private void SetMentality(ManagerMentality mentality)
         {
-            selectedTactic = tactic;
+            selectedMentality = mentality;
 
-            HighlightSelectedTacticButton(attackingButton, tactic == ManagerTactic.Attacking);
-            HighlightSelectedTacticButton(balancedButton, tactic == ManagerTactic.Balanced);
-            HighlightSelectedTacticButton(defensiveButton, tactic == ManagerTactic.Defensive);
+            HighlightSelectedMentalityButton(attackingButton, mentality == ManagerMentality.Attacking);
+            HighlightSelectedMentalityButton(balancedButton, mentality == ManagerMentality.Balanced);
+            HighlightSelectedMentalityButton(defensiveButton, mentality == ManagerMentality.Defensive);
+
+            ApplyLiveMentalityChangeIfMatchInProgress();
         }
 
-        private static void HighlightSelectedTacticButton(Button button, bool selected)
+        // A mentality click during a live match now genuinely changes the rest of that
+        // match instead of silently only affecting the *next* one (the old "scaffolded
+        // mid-match control, v1 scope" limitation) - reuses the exact same resimulation
+        // path substitutions already use (TriggerMidMatchResimulation). Recomputed from
+        // the stored pre-mentality baseline (lastRawExpectedHomeGoals/AwayGoals, set in
+        // SimulateFixture) rather than re-applying the modifier on top of
+        // lastExpectedHomeGoals/AwayGoals, which already has whatever mentality was
+        // selected at kickoff baked in - reapplying on top of that would compound two
+        // modifiers instead of replacing one with the other.
+        private void ApplyLiveMentalityChangeIfMatchInProgress()
+        {
+            // currentFixture is a struct (OpenFootballMatch), always populated by the
+            // time isMatchCurrentlyLive can be true - both OnNextMatchdayClicked and
+            // OnSimulateMatchClicked set it before a match ever starts - so no separate
+            // null check is needed or possible here.
+            if (!isMatchCurrentlyLive || lastSimulatedResult == null)
+            {
+                return;
+            }
+
+            float expectedHomeGoals = lastRawExpectedHomeGoals;
+            float expectedAwayGoals = lastRawExpectedAwayGoals;
+
+            if (currentFixture.HomeTeam == managedTeamName)
+            {
+                ManagerMentalityModifier.Apply(selectedMentality, ref expectedHomeGoals, ref expectedAwayGoals);
+            }
+            else if (currentFixture.AwayTeam == managedTeamName)
+            {
+                ManagerMentalityModifier.Apply(selectedMentality, ref expectedAwayGoals, ref expectedHomeGoals);
+            }
+
+            lastExpectedHomeGoals = expectedHomeGoals;
+            lastExpectedAwayGoals = expectedAwayGoals;
+            mentalityUsedForCurrentMatch = selectedMentality;
+
+            TriggerMidMatchResimulation();
+        }
+
+        private static void HighlightSelectedMentalityButton(Button button, bool selected)
         {
             if (button == null || !button.TryGetComponent(out Image image))
             {
@@ -1584,7 +1786,14 @@ namespace Manager
             handleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
 
             Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
-            scrollbar.direction = Scrollbar.Direction.TopToBottom;
+            // BottomToTop, not the seemingly-obvious TopToBottom - ScrollRect's
+            // verticalNormalizedPosition convention is 1=viewing the top of the content,
+            // 0=viewing the bottom, and it drives the linked Scrollbar's .value directly.
+            // Confirmed empirically (not guessed): with TopToBottom, value=1 (viewing the
+            // list's top) rendered the handle at the BOTTOM of the track and vice versa -
+            // exactly backwards, matching the reported "scroll to the bottom of the
+            // scrollbar to see the top of the list" symptom.
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
             scrollbar.handleRect = handleRect;
             scrollbar.targetGraphic = handleObj.GetComponent<Image>();
 
@@ -1841,21 +2050,72 @@ namespace Manager
             // only if a specific formation still shows real overlap.
             Vector2 anchor = new Vector2(pinPercent.x, 1f - pinPercent.y);
 
+            // Three tiers now, matching PlayerAgent.GetPositionFit: 1.00 primary or 0.85
+            // listed secondary both read as comfortable (plain slot label, no color) -
+            // 0.80 "adjacent but never rolled as an actual secondary" (e.g. an LW never
+            // got LM) reads as a lenient orange warning - anything below that is a
+            // genuinely foreign position, flagged red. Both warning tiers show the
+            // player's own true PrimaryPosition rather than the slot's position label -
+            // showing "DM" in red for a misplaced ST just relabels the empty slot, not
+            // where the manager actually needs to move him; showing "ST" makes that
+            // unambiguous. This is purely a visual flag - see ManagerFormationFit for
+            // the actual gameplay consequence (which reads the same GetPositionFit
+            // value, so the color tier and the real penalty always agree).
+            float positionFit = player.GetPositionFit(slotPosition);
+            string slotLabel;
+
+            if (positionFit >= 0.85f)
+            {
+                slotLabel = slotPosition.ToString();
+            }
+            else if (positionFit >= 0.80f)
+            {
+                slotLabel = $"<color=#{ColorUtility.ToHtmlStringRGB(ManagerUITheme.Warning)}>{player.PrimaryPosition}</color>";
+            }
+            else
+            {
+                slotLabel = $"<color=#{ColorUtility.ToHtmlStringRGB(ManagerUITheme.Danger)}>{player.PrimaryPosition}</color>";
+            }
+
+            // Live condition, not just a static Stamina number on Player Detail - reads
+            // the exact same GetFatigueMultiplier the sim itself plays the match against
+            // (made public in the ManagerSim fork for this). Tints the pin's border
+            // (previously always a flat Accent green, purely decorative) instead of
+            // adding new pin real estate, which the position-mismatch text already uses
+            // for its own separate signal.
+            //
+            // Gated on isMatchCurrentlyLive rather than assuming currentMatchMinute is 0
+            // whenever no match is live - it isn't; ReplayMatchCoroutine only resets it
+            // at kickoff, so it's left sitting at ~90 between full-time and the next
+            // match's kickoff. Without this gate, players read as still gassed from the
+            // *previous* match on the Tactics Board right up until the next one starts
+            // (confirmed live - reported as "not sure if this is by design", it wasn't).
+            float condition = isMatchCurrentlyLive
+                ? matchSimulator.GetFatigueMultiplier(player, currentMatchMinute)
+                : 1f;
+            Color conditionColor = condition >= 0.95f
+                ? ManagerUITheme.Accent
+                : condition >= 0.85f
+                    ? ManagerUITheme.Warning
+                    : ManagerUITheme.Danger;
+
             GameObject pinObj = ManagerUITheme.BuildPitchPinVisual(
                 tacticsBoardPitchContainer,
                 $"Pin_{player.Name}",
                 anchor,
                 circleSize: 68f,
-                borderColor: ManagerUITheme.Accent,
+                borderColor: conditionColor,
                 ratingText: GetDisplayRating(player.GetOverallRating()).ToString(),
                 ratingFontSize: 18,
-                labelText: $"{player.Name} · {slotPosition}",
+                labelText: $"{player.Name} · {slotLabel}",
                 labelFontSize: 14);
 
             pinObj.GetComponent<Image>().raycastTarget = true;
 
             TacticsBoardPlayerCard card = pinObj.AddComponent<TacticsBoardPlayerCard>();
-            card.Configure(player, isDraggable: false, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin);
+            // isDraggable: true now (was false) - lets a pin be dragged onto another
+            // pin to swap their positions, not just a bench card dragged onto a pin.
+            card.Configure(player, isDraggable: true, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin, OnPinPlayersSwapped);
         }
 
         private void BuildTacticsBoardBenchCard(PlayerAgent player)
@@ -1930,11 +2190,37 @@ namespace Manager
             RefreshTacticsBoardUI();
         }
 
+        // A pin dragged onto another pin - e.g. after a formation change scatters the
+        // ST onto the LM spot and vice versa, dragging the ST back onto the ST pin.
+        // Both players stay in the starting XI (unlike OnBenchPlayerDroppedOnPin, this
+        // never touches the Bench), so it's not logged as a "Subs Made" entry - no sub
+        // was used, nobody came off. Still resimulates the rest of a live match though,
+        // same as a real substitution would - position genuinely affects the sim now
+        // (see ManagerFormationFit), so repositioning players mid-match should too.
+        private void OnPinPlayersSwapped(PlayerAgent draggedPlayer, PlayerAgent targetPlayer)
+        {
+            if (draggedPlayer == targetPlayer)
+            {
+                return;
+            }
+
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            bool applied = team.SwapStartingPositions(draggedPlayer, targetPlayer);
+
+            if (applied && tacticsBoardOpenedMidMatch)
+            {
+                TriggerMidMatchResimulation();
+            }
+
+            RefreshTacticsBoardUI();
+        }
+
         // Regenerates the remainder of the currently-live match (from the minute after
-        // the sub was made) against the same underlying prediction, so a mid-match sub
-        // actually affects the rest of that match's events/result instead of only
-        // taking effect from the *next* match onward. lastSimulatedResult is the same
-        // object reference ReplayMatchCoroutine holds as its own "result" parameter, so
+        // the change was made) against the current prediction, so a mid-match sub or
+        // mentality change (see ApplyLiveMentalityChangeIfMatchInProgress) actually
+        // affects the rest of that match's events/result instead of only taking effect
+        // from the *next* match onward. lastSimulatedResult is the same object
+        // reference ReplayMatchCoroutine holds as its own "result" parameter, so
         // mutating it here is visible to that coroutine as soon as it resumes (it's
         // sitting frozen at Time.timeScale=0 while the Tactics Board is open, not
         // actively reading events right now).
@@ -2108,7 +2394,14 @@ namespace Manager
             handleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
 
             Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
-            scrollbar.direction = Scrollbar.Direction.TopToBottom;
+            // BottomToTop, not the seemingly-obvious TopToBottom - ScrollRect's
+            // verticalNormalizedPosition convention is 1=viewing the top of the content,
+            // 0=viewing the bottom, and it drives the linked Scrollbar's .value directly.
+            // Confirmed empirically (not guessed): with TopToBottom, value=1 (viewing the
+            // list's top) rendered the handle at the BOTTOM of the track and vice versa -
+            // exactly backwards, matching the reported "scroll to the bottom of the
+            // scrollbar to see the top of the list" symptom.
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
             scrollbar.handleRect = handleRect;
             scrollbar.targetGraphic = handleObj.GetComponent<Image>();
 
@@ -2137,11 +2430,11 @@ namespace Manager
                     OpenFootballMatch nextFixture = managedTeamFixtures[currentFixtureIndex];
                     bool managedIsHome = nextFixture.HomeTeam == managedTeamName;
                     string opponentName = managedIsHome ? nextFixture.AwayTeam : nextFixture.HomeTeam;
-                    squadBrowseByline.text = $"Next: vs {opponentName} ({(managedIsHome ? "H" : "A")})   ·   Formation {formationText}   ·   Tactic: {selectedTactic}";
+                    squadBrowseByline.text = $"Next: vs {opponentName} ({(managedIsHome ? "H" : "A")})   ·   Formation {formationText}   ·   Mentality: {selectedMentality}";
                 }
                 else
                 {
-                    squadBrowseByline.text = $"Season complete   ·   Formation {formationText}   ·   Tactic: {selectedTactic}";
+                    squadBrowseByline.text = $"Season complete   ·   Formation {formationText}   ·   Mentality: {selectedMentality}";
                 }
             }
 
@@ -2332,8 +2625,8 @@ namespace Manager
 
         // Rebuilt in full each time (unlike Title/Team Select, which build once) since the
         // content changes per player. Only uses PlayerAgent fields that actually exist -
-        // no invented Age or descriptive role titles like "Ball-Playing Defender", since
-        // this data doesn't track either.
+        // no invented descriptive role titles like "Ball-Playing Defender", since this
+        // data doesn't track that (Age/Height do exist, see the meta line below).
         private void RefreshPlayerInspectUI()
         {
             if (playerInspectContentContainer == null || inspectSquadPlayers.Count == 0)
@@ -2406,7 +2699,7 @@ namespace Manager
             metaRect.pivot = new Vector2(0f, 1f);
             metaRect.sizeDelta = new Vector2(-320f, 34f);
             metaRect.anchoredPosition = new Vector2(200f, -100f);
-            string metaText = $"{player.Role}  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
+            string metaText = $"{player.Role}  ·  {player.Age} yrs  ·  {player.Height:F0}cm  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
             TextMeshProUGUI metaTMP = ManagerUITheme.BuildLabel(metaLabel.transform, metaText, 21, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
             if (weakFootStarSpriteAsset != null) metaTMP.spriteAsset = weakFootStarSpriteAsset;
 
@@ -2620,7 +2913,7 @@ namespace Manager
             return sb.ToString();
         }
 
-        // --- Matchday Prep (opponent scouting, Tactic, pre-match Subs - shown before
+        // --- Matchday Prep (opponent scouting, Mentality, pre-match Subs - shown before
         // every match instead of simulating straight from the Hub) ---
 
         public void OnNextMatchdayClicked()
@@ -2646,7 +2939,7 @@ namespace Manager
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(true);
 
-            // Tactic pills belong to live Match Day now, not scouting - but they're the
+            // Mentality pills belong to live Match Day now, not scouting - but they're the
             // same shared Button instances Match Day reparents into its own footer, and
             // that reparenting only happens lazily the first time BuildMatchdayChrome runs
             // (first Simulate Match click). Until then they're still sitting wherever they
@@ -2923,7 +3216,7 @@ namespace Manager
             if (matchStatsText != null) matchStatsText.gameObject.SetActive(false);
 
             // --- Toolbar: Skip to Results (existing, repositioned) / Pause ---
-            // No more "Tactics / Subs" placeholder here - real, working Tactic pills and
+            // No more "Tactics / Subs" placeholder here - real, working Mentality pills and
             // a Substitutions section are now directly on this screen (see below), so a
             // separate disabled button pointing at the same functionality would just be
             // redundant/confusing.
@@ -3058,7 +3351,12 @@ namespace Manager
                 eventRect.anchorMax = Vector2.one;
                 eventRect.offsetMin = Vector2.zero;
                 eventRect.offsetMax = Vector2.zero;
-                eventFeedText.fontSize = 15;
+                // Bumped from 15 with added line spacing - the log's own mask has
+                // plenty of vertical room (footerHeight+24 to headerHeight+56, hundreds
+                // of px), so there's no risk of maxVisibleEventLines worth of lines
+                // overflowing the hard RectMask2D clip at this size.
+                eventFeedText.fontSize = 19;
+                eventFeedText.lineSpacing = 14f;
 
                 // Hidden entirely at full-time - the design moves the full event list to
                 // its own separate "Match Events" screen instead of showing it inline here.
@@ -3136,21 +3434,24 @@ namespace Manager
             matchStatsBarsContainer.anchorMax = new Vector2(0.55f, 1f);
             matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
             matchStatsBarsContainer.anchoredPosition = new Vector2(20f, -(headerHeight + 238f));
-            matchStatsBarsContainer.sizeDelta = new Vector2(360f, 140f);
+            // Grown from 140 (1 row: Shots) to fit 4 rows (Possession/Chances Created/
+            // Shots/Shots on Target) at 36px pitch each.
+            matchStatsBarsContainer.sizeDelta = new Vector2(360f, 190f);
 
-            // --- Footer: live Tactic pills (left, real - reused from Matchday Prep, which
-            // no longer needs them since it's scouting-only now) + Continue (right) ---
-            GameObject tacticLabelObj = new GameObject("TacticFooterCaption", typeof(RectTransform));
-            tacticLabelObj.transform.SetParent(footerBand.transform, false);
-            RectTransform tacticLabelRect = tacticLabelObj.GetComponent<RectTransform>();
-            tacticLabelRect.anchorMin = new Vector2(0f, 0.5f);
-            tacticLabelRect.anchorMax = new Vector2(0f, 0.5f);
-            tacticLabelRect.pivot = new Vector2(0f, 0.5f);
-            tacticLabelRect.anchoredPosition = new Vector2(40f, 0f);
-            tacticLabelRect.sizeDelta = new Vector2(70f, 26f);
-            ManagerUITheme.BuildLabel(tacticLabelObj.transform, "TACTIC", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            // --- Footer: live Mentality pills (left, real - reused from Matchday Prep,
+            // which no longer needs them since it's scouting-only now; now genuinely
+            // live too, see ApplyLiveMentalityChangeIfMatchInProgress) + Continue (right) ---
+            GameObject mentalityLabelObj = new GameObject("MentalityFooterCaption", typeof(RectTransform));
+            mentalityLabelObj.transform.SetParent(footerBand.transform, false);
+            RectTransform mentalityLabelRect = mentalityLabelObj.GetComponent<RectTransform>();
+            mentalityLabelRect.anchorMin = new Vector2(0f, 0.5f);
+            mentalityLabelRect.anchorMax = new Vector2(0f, 0.5f);
+            mentalityLabelRect.pivot = new Vector2(0f, 0.5f);
+            mentalityLabelRect.anchoredPosition = new Vector2(40f, 0f);
+            mentalityLabelRect.sizeDelta = new Vector2(90f, 26f);
+            ManagerUITheme.BuildLabel(mentalityLabelObj.transform, "MENTALITY", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
-            matchLiveOnlyElements[^1] = tacticLabelObj;
+            matchLiveOnlyElements[^1] = mentalityLabelObj;
 
             // Repositioning alone isn't enough - these three are still children of
             // MatchdayPrepPanel (their original parent from before Matchday Prep was
@@ -3289,7 +3590,17 @@ namespace Manager
 
         // Single proportional bar showing the home team's share of total shots (no
         // possession bar - see BuildMatchdayChrome comment on why).
-        private void RefreshLiveMatchStats(int homeShots, int awayShots)
+        // Expanded from a single live Shots row to the same four real, derived stats the
+        // full-time panel shows (see ShowFullTimeMatchStats) - Possession/Chances
+        // Created update on every event now (not just shots), matching how
+        // HomeTeamAttacking is set on every event in the ManagerSim fork.
+        private void RefreshLiveMatchStats(
+            int homeShots,
+            int awayShots,
+            int homeShotsOnTarget,
+            int awayShotsOnTarget,
+            int homeAttackEvents,
+            int awayAttackEvents)
         {
             if (matchStatsBarsContainer == null)
             {
@@ -3301,16 +3612,31 @@ namespace Manager
                 Destroy(child.gameObject);
             }
 
-            int totalShots = homeShots + awayShots;
-            float homeSharePct = totalShots > 0 ? homeShots / (float)totalShots : 0.5f;
+            int totalAttackEvents = homeAttackEvents + awayAttackEvents;
+            int homePossessionPct = totalAttackEvents > 0
+                ? Mathf.RoundToInt(100f * homeAttackEvents / totalAttackEvents)
+                : 50;
+            int awayPossessionPct = 100 - homePossessionPct;
 
-            GameObject row = new GameObject("ShotsRow", typeof(RectTransform));
+            float y = 0f;
+            y = BuildLiveStatRow("POSSESSION", homePossessionPct, awayPossessionPct, y, "%");
+            y = BuildLiveStatRow("CHANCES CREATED", homeAttackEvents, awayAttackEvents, y);
+            y = BuildLiveStatRow("SHOTS", homeShots, awayShots, y);
+            BuildLiveStatRow("SHOTS ON TARGET", homeShotsOnTarget, awayShotsOnTarget, y);
+        }
+
+        private float BuildLiveStatRow(string label, int homeValue, int awayValue, float y, string valueSuffix = "")
+        {
+            int total = homeValue + awayValue;
+            float homeSharePct = total > 0 ? homeValue / (float)total : 0.5f;
+
+            GameObject row = new GameObject($"{label}Row", typeof(RectTransform));
             row.transform.SetParent(matchStatsBarsContainer, false);
             RectTransform rowRect = row.GetComponent<RectTransform>();
             rowRect.anchorMin = new Vector2(0f, 1f);
             rowRect.anchorMax = new Vector2(1f, 1f);
             rowRect.pivot = new Vector2(0f, 1f);
-            rowRect.anchoredPosition = Vector2.zero;
+            rowRect.anchoredPosition = new Vector2(0f, -y);
             rowRect.sizeDelta = new Vector2(0f, 40f);
 
             GameObject labelObj = new GameObject("Label", typeof(RectTransform));
@@ -3320,12 +3646,12 @@ namespace Manager
             labelRect.anchorMax = new Vector2(1f, 1f);
             labelRect.offsetMin = Vector2.zero;
             labelRect.offsetMax = Vector2.zero;
-            TextMeshProUGUI label = labelObj.AddComponent<TextMeshProUGUI>();
-            label.text = $"SHOTS   {homeShots} / {awayShots}";
-            label.fontSize = 14;
-            label.color = ManagerUITheme.TextBody;
-            label.alignment = TextAlignmentOptions.MidlineLeft;
-            label.textWrappingMode = TextWrappingModes.NoWrap;
+            TextMeshProUGUI labelText = labelObj.AddComponent<TextMeshProUGUI>();
+            labelText.text = $"{label}   {homeValue}{valueSuffix} / {awayValue}{valueSuffix}";
+            labelText.fontSize = 14;
+            labelText.color = ManagerUITheme.TextBody;
+            labelText.alignment = TextAlignmentOptions.MidlineLeft;
+            labelText.textWrappingMode = TextWrappingModes.NoWrap;
 
             GameObject barObj = new GameObject("Bar", typeof(RectTransform));
             barObj.transform.SetParent(row.transform, false);
@@ -3335,12 +3661,28 @@ namespace Manager
             barRect.offsetMin = Vector2.zero;
             barRect.offsetMax = Vector2.zero;
             ManagerUITheme.BuildBar(barRect, homeSharePct, ManagerUITheme.Accent, 6f);
+
+            return y + 36f;
         }
 
         // Decorative equal-split bars (matching the design - the numbers carry the real
         // information, the bar underneath is just a visual accent) for shots and goals,
         // plus the tactic actually used, once the match has finished.
-        private void ShowFullTimeMatchStats(int homeShots, int awayShots, int homeGoals, int awayGoals)
+        //
+        // Possession/Chances Created/Shots on Target are all real, derived numbers, not
+        // invented ones - see the ManagerSim fork of AgentMatchSimulator for how. They
+        // needed a genuine model change (an on/off-target split, and setting
+        // HomeTeamAttacking on every event instead of just shots) that the protected
+        // Sim.AgentMatchSimulator can't take, hence the fork.
+        private void ShowFullTimeMatchStats(
+            int homeShots,
+            int awayShots,
+            int homeShotsOnTarget,
+            int awayShotsOnTarget,
+            int homeAttackEvents,
+            int awayAttackEvents,
+            int homeGoals,
+            int awayGoals)
         {
             if (matchStatsBarsContainer == null)
             {
@@ -3352,24 +3694,33 @@ namespace Manager
                 Destroy(child.gameObject);
             }
 
+            int totalAttackEvents = homeAttackEvents + awayAttackEvents;
+            int homePossessionPct = totalAttackEvents > 0
+                ? Mathf.RoundToInt(100f * homeAttackEvents / totalAttackEvents)
+                : 50;
+            int awayPossessionPct = 100 - homePossessionPct;
+
             float y = 0f;
+            y = BuildFullTimeStatRow("POSSESSION", homePossessionPct, awayPossessionPct, y, "%");
+            y = BuildFullTimeStatRow("CHANCES CREATED", homeAttackEvents, awayAttackEvents, y);
             y = BuildFullTimeStatRow("SHOTS", homeShots, awayShots, y);
+            y = BuildFullTimeStatRow("SHOTS ON TARGET", homeShotsOnTarget, awayShotsOnTarget, y);
             y = BuildFullTimeStatRow("GOALS", homeGoals, awayGoals, y);
 
-            GameObject tacticLineObj = new GameObject("TacticUsedLine", typeof(RectTransform));
-            tacticLineObj.transform.SetParent(matchStatsBarsContainer, false);
-            RectTransform tacticLineRect = tacticLineObj.GetComponent<RectTransform>();
-            tacticLineRect.anchorMin = new Vector2(0f, 1f);
-            tacticLineRect.anchorMax = new Vector2(1f, 1f);
-            tacticLineRect.pivot = new Vector2(0f, 1f);
-            tacticLineRect.anchoredPosition = new Vector2(0f, -y - 8f);
-            tacticLineRect.sizeDelta = new Vector2(0f, 22f);
+            GameObject mentalityLineObj = new GameObject("MentalityUsedLine", typeof(RectTransform));
+            mentalityLineObj.transform.SetParent(matchStatsBarsContainer, false);
+            RectTransform mentalityLineRect = mentalityLineObj.GetComponent<RectTransform>();
+            mentalityLineRect.anchorMin = new Vector2(0f, 1f);
+            mentalityLineRect.anchorMax = new Vector2(1f, 1f);
+            mentalityLineRect.pivot = new Vector2(0f, 1f);
+            mentalityLineRect.anchoredPosition = new Vector2(0f, -y - 8f);
+            mentalityLineRect.sizeDelta = new Vector2(0f, 22f);
             // Centered, matching the design's Full-Time Summary board (it centers this
             // line under the stat bars rather than left-aligning it).
-            ManagerUITheme.BuildLabel(tacticLineObj.transform, $"Tactic used: {tacticUsedForCurrentMatch}", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
+            ManagerUITheme.BuildLabel(mentalityLineObj.transform, $"Mentality used: {mentalityUsedForCurrentMatch}", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
         }
 
-        private float BuildFullTimeStatRow(string label, int homeValue, int awayValue, float y)
+        private float BuildFullTimeStatRow(string label, int homeValue, int awayValue, float y, string valueSuffix = "")
         {
             GameObject row = new GameObject($"{label}Row", typeof(RectTransform));
             row.transform.SetParent(matchStatsBarsContainer, false);
@@ -3388,7 +3739,7 @@ namespace Manager
             labelRect.offsetMin = Vector2.zero;
             labelRect.offsetMax = Vector2.zero;
             TextMeshProUGUI text = labelObj.AddComponent<TextMeshProUGUI>();
-            text.text = $"{homeValue}   {label}   {awayValue}";
+            text.text = $"{homeValue}{valueSuffix}   {label}   {awayValue}{valueSuffix}";
             text.fontSize = 18;
             text.color = ManagerUITheme.TextBody;
             text.alignment = TextAlignmentOptions.MidlineLeft;
@@ -3409,7 +3760,7 @@ namespace Manager
 
         public void OnSimulateMatchClicked()
         {
-            tacticUsedForCurrentMatch = selectedTactic;
+            mentalityUsedForCurrentMatch = selectedMentality;
 
             AgentMatchSimulator.AgentMatchResult result = SimulateFixture(currentFixture);
 
@@ -3437,7 +3788,7 @@ namespace Manager
             // match instead of the live view's 52pt, same class of bug that motivated
             // ResetMatchStatsPanelToLiveLayout in the first place.
             if (scoreText != null) scoreText.fontSize = 52;
-            SetTactic(selectedTactic); // re-highlights the correct footer pill for this screen
+            SetMentality(selectedMentality); // re-highlights the correct footer pill for this screen
             matchSubsLog.Clear();
             RefreshMatchSubsMadeList();
             if (matchFullTimeCaptionGroup != null) matchFullTimeCaptionGroup.SetActive(false);
@@ -3502,7 +3853,7 @@ namespace Manager
                 matchStatsBarsContainer.anchorMax = new Vector2(0.55f, 1f);
                 matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
                 matchStatsBarsContainer.anchoredPosition = new Vector2(20f, -(headerHeight + 238f));
-                matchStatsBarsContainer.sizeDelta = new Vector2(360f, 140f);
+                matchStatsBarsContainer.sizeDelta = new Vector2(360f, 190f);
             }
         }
 
@@ -3624,7 +3975,7 @@ namespace Manager
             return $"<mspace=1.4em>{string.Join(" ", history)}</mspace>";
         }
 
-        // Applies the tactic modifier only when the managed club is actually playing
+        // Applies the mentality modifier only when the managed club is actually playing
         // in this fixture - other clubs' matches against each other use the plain
         // predicted expected goals with no modifier.
         private AgentMatchSimulator.AgentMatchResult SimulateFixture(OpenFootballMatch fixture)
@@ -3632,24 +3983,38 @@ namespace Manager
             AgentTeam homeTeam = GetOrCreateAgentTeam(fixture.HomeTeam);
             AgentTeam awayTeam = GetOrCreateAgentTeam(fixture.AwayTeam);
 
+            // Throwaway fit-adjusted clones, not the real squad data - see
+            // ManagerFormationFit. A no-op for AI teams (never touched by the user, so
+            // every starter is already a perfect fit for their slot); only matters once
+            // the managed team's XI has anyone out of position.
+            AgentTeam fitAdjustedHomeTeam = ManagerFormationFit.BuildFitAdjustedTeam(homeTeam, squadGenerator.GetStartingPositions(homeTeam.Formation));
+            AgentTeam fitAdjustedAwayTeam = ManagerFormationFit.BuildFitAdjustedTeam(awayTeam, squadGenerator.GetStartingPositions(awayTeam.Formation));
+
             StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(fixture);
+
+            // Kept before the mentality modifier touches anything - see
+            // ApplyLiveMentalityChangeIfMatchInProgress, which needs this exact
+            // pre-mentality baseline to recompute cleanly from if mentality changes
+            // again mid-match.
+            lastRawExpectedHomeGoals = prediction.ExpectedHomeGoals;
+            lastRawExpectedAwayGoals = prediction.ExpectedAwayGoals;
 
             float expectedHomeGoals = prediction.ExpectedHomeGoals;
             float expectedAwayGoals = prediction.ExpectedAwayGoals;
 
             if (fixture.HomeTeam == managedTeamName)
             {
-                ManagerTacticModifier.Apply(selectedTactic, ref expectedHomeGoals, ref expectedAwayGoals);
+                ManagerMentalityModifier.Apply(selectedMentality, ref expectedHomeGoals, ref expectedAwayGoals);
             }
             else if (fixture.AwayTeam == managedTeamName)
             {
-                ManagerTacticModifier.Apply(selectedTactic, ref expectedAwayGoals, ref expectedHomeGoals);
+                ManagerMentalityModifier.Apply(selectedMentality, ref expectedAwayGoals, ref expectedHomeGoals);
             }
 
             lastExpectedHomeGoals = expectedHomeGoals;
             lastExpectedAwayGoals = expectedAwayGoals;
 
-            return matchSimulator.SimulateMatch(homeTeam, awayTeam, expectedHomeGoals, expectedAwayGoals);
+            return matchSimulator.SimulateMatch(fitAdjustedHomeTeam, fitAdjustedAwayTeam, expectedHomeGoals, expectedAwayGoals);
         }
 
         // Lets the running replay coroutine finish out its remaining minutes without
@@ -3661,9 +4026,9 @@ namespace Manager
         }
 
         // Simulates the full match instantly, then replays the pre-computed events
-        // against an accelerated clock so it reads as if live. Tactic buttons stay
-        // interactable during replay, but only affect the *next* match (scaffolded
-        // mid-match control, per the v1 scope) — this match is already fully resolved.
+        // against an accelerated clock so it reads as if live. Mentality buttons stay
+        // interactable during replay and now genuinely affect the match in progress -
+        // see ApplyLiveMentalityChangeIfMatchInProgress and isMatchCurrentlyLive below.
         private IEnumerator ReplayMatchCoroutine(AgentMatchSimulator.AgentMatchResult result)
         {
             Queue<string> recentEventLines = new();
@@ -3676,16 +4041,27 @@ namespace Manager
             matchSubsLog.Clear();
             RefreshMatchSubsMadeList();
 
+            // Explicit flag rather than inferring "live" from panel active-states -
+            // SetMentality also gets called during match *setup* (OnSimulateMatchClicked,
+            // purely to re-highlight the footer pill) before this coroutine has even
+            // reset currentMatchMinute to 0, so a state-inferred check could fire a bogus
+            // resimulation against stale leftover data from the previous match.
+            isMatchCurrentlyLive = true;
+
             if (eventFeedText != null) eventFeedText.text = "";
             if (scoreText != null) scoreText.text = "0 - 0";
             if (clockText != null) clockText.text = "0' LIVE";
 
-            RefreshLiveMatchStats(0, 0);
+            RefreshLiveMatchStats(0, 0, 0, 0, 0, 0);
 
             float secondsPerMinute = matchReplayDurationSeconds / 90f;
 
             int homeShots = 0;
             int awayShots = 0;
+            int homeShotsOnTarget = 0;
+            int awayShotsOnTarget = 0;
+            int homeAttackEvents = 0;
+            int awayAttackEvents = 0;
             int eventIndex = 0;
 
             for (int minute = 1; minute <= 90; minute++)
@@ -3738,12 +4114,25 @@ namespace Manager
                         }
                     }
 
+                    // Every event now carries HomeTeamAttacking (see the ManagerSim fork -
+                    // the protected original only set it on shots), so "chances created"/
+                    // possession share can come straight from the full event list instead
+                    // of needing separate running totals threaded through the mid-match
+                    // resimulation splice.
+                    if (matchEvent.HomeTeamAttacking) homeAttackEvents++; else awayAttackEvents++;
+
                     if (matchEvent.IsShot)
                     {
                         if (matchEvent.HomeTeamAttacking) homeShots++; else awayShots++;
-
-                        RefreshLiveMatchStats(homeShots, awayShots);
+                        if (matchEvent.IsOnTarget)
+                        {
+                            if (matchEvent.HomeTeamAttacking) homeShotsOnTarget++; else awayShotsOnTarget++;
+                        }
                     }
+
+                    // Refreshed on every event, not just shots - Possession/Chances
+                    // Created should tick up on a stopped-before-shot attack too.
+                    RefreshLiveMatchStats(homeShots, awayShots, homeShotsOnTarget, awayShotsOnTarget, homeAttackEvents, awayAttackEvents);
 
                     if (eventFeedText != null)
                     {
@@ -3766,9 +4155,14 @@ namespace Manager
                 }
             }
 
+            // Match is resolved - any further mentality clicks should only affect the
+            // *next* match again, not trigger a resimulation against a finished match.
+            isMatchCurrentlyLive = false;
+
             // Switch from the live layout to the full-time one: hide the toolbar/clock/
-            // tactic readout, show the "FULL TIME" caption, enlarge the score, and swap
-            // the stats panel from the live single shots bar to the full-time breakdown.
+            // mentality readout, show the "FULL TIME" caption, enlarge the score, and
+            // swap the stats panel from the live single shots bar to the full-time
+            // breakdown.
             foreach (GameObject liveElement in matchLiveOnlyElements)
             {
                 if (liveElement != null) liveElement.SetActive(false);
@@ -3844,10 +4238,21 @@ namespace Manager
                 matchStatsBarsContainer.anchorMax = new Vector2(0.5f, 1f);
                 matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
                 matchStatsBarsContainer.anchoredPosition = new Vector2(-260f, -356f);
-                matchStatsBarsContainer.sizeDelta = new Vector2(520f, 150f);
+                // Grown from 150 (2 rows: Shots/Goals) to fit 5 rows (Possession/Chances
+                // Created/Shots/Shots on Target/Goals) plus the tactic-used line - each
+                // BuildFullTimeStatRow is 44 tall, so 5*44=220 plus room for the line.
+                matchStatsBarsContainer.sizeDelta = new Vector2(520f, 280f);
             }
 
-            ShowFullTimeMatchStats(homeShots, awayShots, result.HomeGoals, result.AwayGoals);
+            ShowFullTimeMatchStats(
+                homeShots,
+                awayShots,
+                homeShotsOnTarget,
+                awayShotsOnTarget,
+                homeAttackEvents,
+                awayAttackEvents,
+                result.HomeGoals,
+                result.AwayGoals);
 
             if (fullTimeContinueButton != null)
             {
@@ -4103,7 +4508,14 @@ namespace Manager
             scrollHandleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
 
             Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
-            scrollbar.direction = Scrollbar.Direction.TopToBottom;
+            // BottomToTop, not the seemingly-obvious TopToBottom - ScrollRect's
+            // verticalNormalizedPosition convention is 1=viewing the top of the content,
+            // 0=viewing the bottom, and it drives the linked Scrollbar's .value directly.
+            // Confirmed empirically (not guessed): with TopToBottom, value=1 (viewing the
+            // list's top) rendered the handle at the BOTTOM of the track and vice versa -
+            // exactly backwards, matching the reported "scroll to the bottom of the
+            // scrollbar to see the top of the list" symptom.
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
             scrollbar.handleRect = scrollHandleRect;
             scrollbar.targetGraphic = scrollHandleObj.GetComponent<Image>();
 

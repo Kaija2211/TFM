@@ -5,13 +5,30 @@ namespace Sim
 {
     public class AgentSquadGenerator
     {
+        // Expanded from an original 30 to cut down on birthday-paradox collisions across
+        // a ~380-player league (900 combos was producing ~80 expected duplicate names),
+        // and to spread the pool across more of the regions real top-flight squads draw
+        // from rather than skewing Western European. Kept to common, non-celebrity given
+        // names/surnames throughout - deliberately avoided pairing any name with a
+        // surname distinctive enough to reproduce one specific real, currently-active
+        // player's full name by chance.
         private readonly string[] firstNames =
         {
             "Daniel", "Luca", "Mateo", "Jonas", "Ethan", "Noah",
             "Oscar", "Leo", "Max", "Samuel", "Rafael", "Milan",
             "Tomas", "Nico", "Julian", "Felix", "Adam", "Lucas",
             "Marco", "David", "Emil", "Ben", "Kai", "Andre",
-            "Hugo", "Victor", "Tiago", "Gabriel", "Leon", "Isaac"
+            "Hugo", "Victor", "Tiago", "Gabriel", "Leon", "Isaac",
+            "Mohamed", "Yusuf", "Ibrahim", "Omar", "Hakim", "Malik",
+            "Karim", "Idris", "Amara", "Kwame", "Kofi", "Sekou",
+            "Moussa", "Chidi", "Bukola", "Aleksandar", "Dusan", "Nemanja",
+            "Stefan", "Filip", "Jakub", "Piotr", "Wojciech", "Kacper",
+            "Martin", "Lars", "Bjorn", "Sven", "Henrik", "Rasmus",
+            "Mikkel", "Andrei", "Radu", "Kenji", "Haruto", "Ren",
+            "Minjun", "Jin", "Wei", "Arjun", "Rohan", "Dev",
+            "Ravi", "Santiago", "Diego", "Pablo", "Alejandro", "Enzo",
+            "Mathis", "Antoine", "Theo", "Nathan", "Yannick", "Cedric",
+            "Sean", "Ryan", "Connor", "Finn", "Declan", "Conor"
         };
 
         private readonly string[] lastNames =
@@ -20,8 +37,24 @@ namespace Sim
             "Silva", "Meyer", "Rossi", "Santos", "Walker", "Fischer",
             "Davies", "Martins", "Schneider", "Moreira", "Wilson", "Weber",
             "Reed", "Mendes", "Hart", "Carvalho", "Bauer", "Cole",
-            "Wright", "Oliveira", "Mason", "Rocha", "Foster", "Nolan"
+            "Wright", "Oliveira", "Mason", "Rocha", "Foster", "Nolan",
+            "Adebayo", "Okafor", "Diallo", "Toure", "Traore", "Fofana",
+            "Konate", "Camara", "Boateng", "Osei", "Mensah", "Nwosu",
+            "Kovacic", "Petrovic", "Jovic", "Nowak", "Kowalski", "Wozniak",
+            "Zielinski", "Nilsson", "Andersson", "Johansson", "Larsen", "Hansen",
+            "Nielsen", "Sorensen", "Popescu", "Ionescu", "Georgescu", "Tanaka",
+            "Sato", "Suzuki", "Yamamoto", "Kim", "Park", "Choi",
+            "Sharma", "Patel", "Singh", "Kumar", "Fernandez", "Gonzalez",
+            "Ramirez", "Herrera", "Dubois", "Lefevre", "Girard", "Moreau",
+            "Laurent", "Alonso", "Navarro"
         };
+
+        // Instance-level (not local to GenerateSquad) so names stay unique across the
+        // whole league, not just within one team's 20-player squad - GenerateSquad gets
+        // called once per team against this same AgentSquadGenerator instance (see
+        // ManagerPrototypeController.squadGenerator), so this HashSet accumulates every
+        // name handed out so far, league-wide.
+        private readonly HashSet<string> usedNames = new();
 
         public AgentTeam GenerateSquad(
             string teamName,
@@ -32,14 +65,12 @@ namespace Sim
 
             AgentTeam team = new AgentTeam(teamName, formation);
 
-            HashSet<string> usedNames = new();
-
             List<PlayerPosition> startingPositions = GetStartingPositions(formation);
 
             foreach (PlayerPosition position in startingPositions)
             {
                 PlayerAgent player = GeneratePlayer(
-                    GenerateUniqueName(usedNames),
+                    GenerateUniqueName(),
                     position,
                     attackStrength,
                     defenceStrength
@@ -51,7 +82,7 @@ namespace Sim
             foreach (PlayerPosition position in GetBenchPositions(formation))
             {
                 PlayerAgent player = GeneratePlayer(
-                    GenerateUniqueName(usedNames),
+                    GenerateUniqueName(),
                     position,
                     attackStrength,
                     defenceStrength
@@ -333,191 +364,308 @@ namespace Sim
                     break;
             }
 
+            ApplyAgeAndHeight(player);
+
             ClampAttributes(player);
             AddSecondaryPositions(player);
 
             return player;
         }
 
+        // Age/height are rolled independently of team strength (attackMultiplier/
+        // defenceMultiplier don't apply here - being tall or old isn't a mark of quality),
+        // then nudge a few existing attributes so the numbers feel connected to the
+        // physical profile instead of being pure flavour text. Applied after the
+        // position-specific generator and before ClampAttributes so the usual [1,100]
+        // clamp still catches anything pushed out of range.
+        private void ApplyAgeAndHeight(PlayerAgent player)
+        {
+            player.Age = GenerateAge();
+
+            // Bell curve around the position's typical band rather than a hard
+            // Random.Range clamp - a 190cm winger or a genuinely tiny striker is rare
+            // but real, so the per-position band is a center of gravity, not a wall.
+            // The only hard wall is the 150/200cm floor/ceiling below.
+            (float minHeight, float maxHeight) = GetHeightRangeForPosition(player.PrimaryPosition);
+            float heightMidpoint = (minHeight + maxHeight) / 2f;
+            float heightSpread = (maxHeight - minHeight) / 2f;
+            float heightStdDev = heightSpread / 2f;
+
+            player.Height = Mathf.Clamp(RandomGaussian(heightMidpoint, heightStdDev), 150f, 200f);
+
+            float heightFactor = heightSpread > 0f
+                ? Mathf.Clamp((player.Height - heightMidpoint) / heightSpread, -1f, 1f)
+                : 0f;
+
+            // 1 at 18 fading to 0 at 24+; 0 below 29 fading up to 1 at 37+.
+            float youthFactor = Mathf.Clamp01((24f - player.Age) / 6f);
+            float veteranFactor = Mathf.Clamp01((player.Age - 29f) / 8f);
+
+            player.Aerial += heightFactor * 8f;
+            player.Strength += heightFactor * 6f;
+            player.Pace -= heightFactor * 4f;
+
+            player.Composure += (veteranFactor * 8f) - (youthFactor * 6f);
+            player.Positioning += (veteranFactor * 5f) - (youthFactor * 4f);
+            player.Pace -= veteranFactor * 8f;
+            player.Stamina -= veteranFactor * 5f;
+        }
+
+        // Averaging two rolls instead of one Random.Range gives a rough bell curve
+        // centred in the mid-20s (peak career years) instead of a flat distribution
+        // across 17-35, so most squads read as prime-age with a scatter of young/veteran
+        // outliers rather than an even spread.
+        private int GenerateAge()
+        {
+            float roll = (Random.Range(17f, 35f) + Random.Range(17f, 35f)) / 2f;
+            return Mathf.RoundToInt(roll);
+        }
+
+        // Box-Muller transform - UnityEngine.Random only gives uniform distributions,
+        // and a uniform roll can't produce a bell curve with rare tail outliers.
+        private float RandomGaussian(float mean, float stdDev)
+        {
+            float u1 = 1f - Random.value;
+            float u2 = 1f - Random.value;
+            float standardNormal = Mathf.Sqrt(-2f * Mathf.Log(u1)) * Mathf.Sin(2f * Mathf.PI * u2);
+            return mean + (stdDev * standardNormal);
+        }
+
+        // Rough real-world height bands per position, in cm.
+        private (float min, float max) GetHeightRangeForPosition(PlayerPosition position)
+        {
+            switch (position)
+            {
+                case PlayerPosition.GK:
+                    return (186f, 199f);
+
+                case PlayerPosition.CB:
+                    return (182f, 196f);
+
+                case PlayerPosition.RB:
+                case PlayerPosition.LB:
+                    return (170f, 185f);
+
+                case PlayerPosition.RWB:
+                case PlayerPosition.LWB:
+                    return (170f, 186f);
+
+                case PlayerPosition.DM:
+                    return (178f, 190f);
+
+                case PlayerPosition.CM:
+                    return (174f, 186f);
+
+                case PlayerPosition.AM:
+                    return (168f, 182f);
+
+                case PlayerPosition.RM:
+                case PlayerPosition.LM:
+                    return (168f, 182f);
+
+                case PlayerPosition.RW:
+                case PlayerPosition.LW:
+                    return (165f, 180f);
+
+                case PlayerPosition.ST:
+                    return (172f, 192f);
+
+                default:
+                    return (170f, 190f);
+            }
+        }
+
+        // Bell curve around the position-typical band instead of a hard Random.Range
+        // wall, same reasoning as height/age: a centre-back with a Koeman-level shot is
+        // rare but real, so the band below is a center of gravity, not a limit. The
+        // existing ClampAttributes 1-100 wall is the only true clamp, no separate one
+        // needed here (unlike height, which had no pre-existing wall to reuse).
+        private float RollAttribute(float min, float max)
+        {
+            float mean = (min + max) / 2f;
+            float stdDev = (max - min) / 4f;
+            return RandomGaussian(mean, stdDev);
+        }
+
         private void ApplyBaseAttributes(PlayerAgent player)
         {
-            player.Finishing = Random.Range(35f, 60f);
-            player.Passing = Random.Range(35f, 60f);
-            player.Dribbling = Random.Range(35f, 60f);
-            player.Crossing = Random.Range(35f, 60f);
-            player.Heading = Random.Range(35f, 60f);
+            player.Finishing = RollAttribute(35f, 60f);
+            player.Passing = RollAttribute(35f, 60f);
+            player.Dribbling = RollAttribute(35f, 60f);
+            player.Crossing = RollAttribute(35f, 60f);
+            player.Heading = RollAttribute(35f, 60f);
 
-            player.Creativity = Random.Range(35f, 60f);
-            player.Positioning = Random.Range(35f, 60f);
-            player.Composure = Random.Range(35f, 60f);
+            player.Creativity = RollAttribute(35f, 60f);
+            player.Positioning = RollAttribute(35f, 60f);
+            player.Composure = RollAttribute(35f, 60f);
 
-            player.Defending = Random.Range(35f, 60f);
-            player.Tackling = Random.Range(35f, 60f);
+            player.Defending = RollAttribute(35f, 60f);
+            player.Tackling = RollAttribute(35f, 60f);
 
-            player.Pace = Random.Range(45f, 75f);
-            player.Strength = Random.Range(45f, 75f);
-            player.Stamina = Random.Range(55f, 85f);
-            player.Aerial = Random.Range(35f, 65f);
+            player.Pace = RollAttribute(45f, 75f);
+            player.Strength = RollAttribute(45f, 75f);
+            player.Stamina = RollAttribute(55f, 85f);
+            player.Aerial = RollAttribute(35f, 65f);
 
-            player.Goalkeeping = Random.Range(1f, 10f);
-            player.Reflexes = Random.Range(1f, 10f);
+            player.Goalkeeping = RollAttribute(1f, 10f);
+            player.Reflexes = RollAttribute(1f, 10f);
 
-            player.WeakFoot = Random.Range(35f, 85f);
+            player.WeakFoot = RollAttribute(35f, 85f);
         }
 
         private void GenerateGoalkeeper(PlayerAgent player, float defenceMultiplier)
         {
-            player.Goalkeeping = Random.Range(65f, 88f) * defenceMultiplier;
-            player.Reflexes = Random.Range(65f, 90f) * defenceMultiplier;
-            player.Positioning = Random.Range(55f, 80f) * defenceMultiplier;
-            player.Passing = Random.Range(35f, 70f);
-            player.Composure = Random.Range(50f, 80f);
+            player.Goalkeeping = RollAttribute(65f, 88f) * defenceMultiplier;
+            player.Reflexes = RollAttribute(65f, 90f) * defenceMultiplier;
+            player.Positioning = RollAttribute(55f, 80f) * defenceMultiplier;
+            player.Passing = RollAttribute(35f, 70f);
+            player.Composure = RollAttribute(50f, 80f);
 
-            player.Finishing = Random.Range(1f, 8f);
-            player.Dribbling = Random.Range(5f, 20f);
-            player.Crossing = Random.Range(1f, 10f);
-            player.Heading = Random.Range(5f, 20f);
-            player.Defending = Random.Range(15f, 35f);
-            player.Tackling = Random.Range(10f, 30f);
-            player.Stamina = Random.Range(35f, 60f);
+            player.Finishing = RollAttribute(18f, 32f);
+            player.Dribbling = RollAttribute(20f, 35f);
+            player.Crossing = RollAttribute(16f, 28f);
+            player.Heading = RollAttribute(20f, 35f);
+            player.Defending = RollAttribute(22f, 40f);
+            player.Tackling = RollAttribute(20f, 38f);
+            player.Stamina = RollAttribute(35f, 60f);
         }
 
         private void GenerateCentreBack(PlayerAgent player, float defenceMultiplier)
         {
-            player.Defending = Random.Range(60f, 85f) * defenceMultiplier;
-            player.Tackling = Random.Range(60f, 85f) * defenceMultiplier;
-            player.Heading = Random.Range(60f, 85f) * defenceMultiplier;
-            player.Aerial = Random.Range(65f, 90f) * defenceMultiplier;
-            player.Strength = Random.Range(65f, 90f);
-            player.Positioning = Random.Range(55f, 80f) * defenceMultiplier;
-            player.Passing = Random.Range(35f, 65f);
+            player.Defending = RollAttribute(60f, 85f) * defenceMultiplier;
+            player.Tackling = RollAttribute(60f, 85f) * defenceMultiplier;
+            player.Heading = RollAttribute(60f, 85f) * defenceMultiplier;
+            player.Aerial = RollAttribute(65f, 90f) * defenceMultiplier;
+            player.Strength = RollAttribute(65f, 90f);
+            player.Positioning = RollAttribute(55f, 80f) * defenceMultiplier;
+            player.Passing = RollAttribute(35f, 65f);
 
-            player.Finishing = Random.Range(5f, 25f);
-            player.Dribbling = Random.Range(20f, 50f);
-            player.Crossing = Random.Range(10f, 35f);
-            player.Stamina = Random.Range(55f, 78f);
+            player.Finishing = RollAttribute(20f, 38f);
+            player.Dribbling = RollAttribute(20f, 50f);
+            player.Crossing = RollAttribute(22f, 42f);
+            player.Stamina = RollAttribute(55f, 78f);
         }
 
         private void GenerateFullBack(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Defending = Random.Range(50f, 75f) * defenceMultiplier;
-            player.Tackling = Random.Range(50f, 75f) * defenceMultiplier;
-            player.Crossing = Random.Range(50f, 78f) * attackMultiplier;
-            player.Pace = Random.Range(60f, 88f);
-            player.Stamina = Random.Range(65f, 90f);
-            player.Passing = Random.Range(45f, 70f);
-            player.Dribbling = Random.Range(45f, 72f);
+            player.Defending = RollAttribute(50f, 75f) * defenceMultiplier;
+            player.Tackling = RollAttribute(50f, 75f) * defenceMultiplier;
+            player.Crossing = RollAttribute(50f, 78f) * attackMultiplier;
+            player.Pace = RollAttribute(60f, 88f);
+            player.Stamina = RollAttribute(65f, 90f);
+            player.Passing = RollAttribute(45f, 70f);
+            player.Dribbling = RollAttribute(45f, 72f);
 
-            player.Finishing = Random.Range(10f, 35f);
-            player.Heading = Random.Range(35f, 65f);
-            player.Aerial = Random.Range(35f, 65f);
+            player.Finishing = RollAttribute(22f, 42f);
+            player.Heading = RollAttribute(35f, 65f);
+            player.Aerial = RollAttribute(35f, 65f);
         }
 
         private void GenerateWingBack(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Defending = Random.Range(45f, 70f) * defenceMultiplier;
-            player.Tackling = Random.Range(45f, 72f) * defenceMultiplier;
-            player.Crossing = Random.Range(55f, 82f) * attackMultiplier;
-            player.Pace = Random.Range(65f, 90f);
-            player.Stamina = Random.Range(70f, 92f);
-            player.Dribbling = Random.Range(50f, 76f) * attackMultiplier;
-            player.Passing = Random.Range(45f, 70f);
+            player.Defending = RollAttribute(45f, 70f) * defenceMultiplier;
+            player.Tackling = RollAttribute(45f, 72f) * defenceMultiplier;
+            player.Crossing = RollAttribute(55f, 82f) * attackMultiplier;
+            player.Pace = RollAttribute(65f, 90f);
+            player.Stamina = RollAttribute(70f, 92f);
+            player.Dribbling = RollAttribute(50f, 76f) * attackMultiplier;
+            player.Passing = RollAttribute(45f, 70f);
 
-            player.Finishing = Random.Range(12f, 38f);
+            player.Finishing = RollAttribute(24f, 44f);
         }
 
         private void GenerateDefensiveMidfielder(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Defending = Random.Range(55f, 80f) * defenceMultiplier;
-            player.Tackling = Random.Range(55f, 82f) * defenceMultiplier;
-            player.Passing = Random.Range(55f, 80f) * attackMultiplier;
-            player.Positioning = Random.Range(55f, 82f) * defenceMultiplier;
-            player.Strength = Random.Range(55f, 80f);
-            player.Stamina = Random.Range(65f, 90f);
-            player.Creativity = Random.Range(40f, 70f) * attackMultiplier;
+            player.Defending = RollAttribute(55f, 80f) * defenceMultiplier;
+            player.Tackling = RollAttribute(55f, 82f) * defenceMultiplier;
+            player.Passing = RollAttribute(55f, 80f) * attackMultiplier;
+            player.Positioning = RollAttribute(55f, 82f) * defenceMultiplier;
+            player.Strength = RollAttribute(55f, 80f);
+            player.Stamina = RollAttribute(65f, 90f);
+            player.Creativity = RollAttribute(40f, 70f) * attackMultiplier;
 
-            player.Finishing = Random.Range(15f, 40f);
-            player.Dribbling = Random.Range(35f, 65f);
-            player.Heading = Random.Range(40f, 70f);
-            player.Aerial = Random.Range(40f, 70f);
+            player.Finishing = RollAttribute(25f, 45f);
+            player.Dribbling = RollAttribute(35f, 65f);
+            player.Heading = RollAttribute(40f, 70f);
+            player.Aerial = RollAttribute(40f, 70f);
         }
 
         private void GenerateCentralMidfielder(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Passing = Random.Range(60f, 85f) * attackMultiplier;
-            player.Creativity = Random.Range(55f, 82f) * attackMultiplier;
-            player.Positioning = Random.Range(50f, 78f);
-            player.Composure = Random.Range(55f, 82f);
-            player.Stamina = Random.Range(65f, 90f);
-            player.Defending = Random.Range(40f, 70f) * defenceMultiplier;
-            player.Tackling = Random.Range(40f, 70f) * defenceMultiplier;
-            player.Dribbling = Random.Range(45f, 75f) * attackMultiplier;
+            player.Passing = RollAttribute(60f, 85f) * attackMultiplier;
+            player.Creativity = RollAttribute(55f, 82f) * attackMultiplier;
+            player.Positioning = RollAttribute(50f, 78f);
+            player.Composure = RollAttribute(55f, 82f);
+            player.Stamina = RollAttribute(65f, 90f);
+            player.Defending = RollAttribute(40f, 70f) * defenceMultiplier;
+            player.Tackling = RollAttribute(40f, 70f) * defenceMultiplier;
+            player.Dribbling = RollAttribute(45f, 75f) * attackMultiplier;
 
-            player.Finishing = Random.Range(25f, 55f) * attackMultiplier;
+            player.Finishing = RollAttribute(25f, 55f) * attackMultiplier;
         }
 
         private void GenerateAttackingMidfielder(PlayerAgent player, float attackMultiplier)
         {
-            player.Passing = Random.Range(60f, 85f) * attackMultiplier;
-            player.Creativity = Random.Range(65f, 90f) * attackMultiplier;
-            player.Dribbling = Random.Range(60f, 88f) * attackMultiplier;
-            player.Composure = Random.Range(55f, 85f);
-            player.Finishing = Random.Range(40f, 70f) * attackMultiplier;
-            player.Positioning = Random.Range(50f, 78f);
+            player.Passing = RollAttribute(60f, 85f) * attackMultiplier;
+            player.Creativity = RollAttribute(65f, 90f) * attackMultiplier;
+            player.Dribbling = RollAttribute(60f, 88f) * attackMultiplier;
+            player.Composure = RollAttribute(55f, 85f);
+            player.Finishing = RollAttribute(40f, 70f) * attackMultiplier;
+            player.Positioning = RollAttribute(50f, 78f);
 
-            player.Defending = Random.Range(15f, 45f);
-            player.Tackling = Random.Range(15f, 45f);
-            player.Heading = Random.Range(25f, 55f);
-            player.Aerial = Random.Range(25f, 55f);
-            player.Stamina = Random.Range(58f, 82f);
+            player.Defending = RollAttribute(25f, 48f);
+            player.Tackling = RollAttribute(25f, 48f);
+            player.Heading = RollAttribute(25f, 55f);
+            player.Aerial = RollAttribute(25f, 55f);
+            player.Stamina = RollAttribute(58f, 82f);
         }
 
         private void GenerateWideMidfielder(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Crossing = Random.Range(58f, 84f) * attackMultiplier;
-            player.Dribbling = Random.Range(55f, 82f) * attackMultiplier;
-            player.Pace = Random.Range(60f, 88f);
-            player.Stamina = Random.Range(65f, 90f);
-            player.Passing = Random.Range(48f, 74f) * attackMultiplier;
-            player.Defending = Random.Range(35f, 65f) * defenceMultiplier;
-            player.Tackling = Random.Range(35f, 65f) * defenceMultiplier;
+            player.Crossing = RollAttribute(58f, 84f) * attackMultiplier;
+            player.Dribbling = RollAttribute(55f, 82f) * attackMultiplier;
+            player.Pace = RollAttribute(60f, 88f);
+            player.Stamina = RollAttribute(65f, 90f);
+            player.Passing = RollAttribute(48f, 74f) * attackMultiplier;
+            player.Defending = RollAttribute(35f, 65f) * defenceMultiplier;
+            player.Tackling = RollAttribute(35f, 65f) * defenceMultiplier;
 
-            player.Finishing = Random.Range(25f, 55f) * attackMultiplier;
+            player.Finishing = RollAttribute(25f, 55f) * attackMultiplier;
         }
 
         private void GenerateWinger(PlayerAgent player, float attackMultiplier)
         {
-            player.Pace = Random.Range(68f, 94f);
-            player.Dribbling = Random.Range(62f, 90f) * attackMultiplier;
-            player.Crossing = Random.Range(55f, 84f) * attackMultiplier;
-            player.Creativity = Random.Range(50f, 78f) * attackMultiplier;
-            player.Passing = Random.Range(45f, 72f) * attackMultiplier;
-            player.Finishing = Random.Range(35f, 68f) * attackMultiplier;
-            player.Composure = Random.Range(45f, 75f);
+            player.Pace = RollAttribute(68f, 94f);
+            player.Dribbling = RollAttribute(62f, 90f) * attackMultiplier;
+            player.Crossing = RollAttribute(55f, 84f) * attackMultiplier;
+            player.Creativity = RollAttribute(50f, 78f) * attackMultiplier;
+            player.Passing = RollAttribute(45f, 72f) * attackMultiplier;
+            player.Finishing = RollAttribute(35f, 68f) * attackMultiplier;
+            player.Composure = RollAttribute(45f, 75f);
 
-            player.Defending = Random.Range(10f, 35f);
-            player.Tackling = Random.Range(10f, 35f);
-            player.Heading = Random.Range(20f, 55f);
-            player.Aerial = Random.Range(20f, 55f);
-            player.Stamina = Random.Range(60f, 86f);
+            player.Defending = RollAttribute(22f, 42f);
+            player.Tackling = RollAttribute(22f, 42f);
+            player.Heading = RollAttribute(20f, 55f);
+            player.Aerial = RollAttribute(20f, 55f);
+            player.Stamina = RollAttribute(60f, 86f);
         }
 
         private void GenerateStriker(PlayerAgent player, float attackMultiplier)
         {
-            player.Finishing = Random.Range(62f, 90f) * attackMultiplier;
-            player.Positioning = Random.Range(60f, 88f) * attackMultiplier;
-            player.Composure = Random.Range(58f, 88f) * attackMultiplier;
-            player.Heading = Random.Range(45f, 82f) * attackMultiplier;
-            player.Aerial = Random.Range(45f, 82f) * attackMultiplier;
-            player.Strength = Random.Range(45f, 82f);
-            player.Pace = Random.Range(50f, 88f);
-            player.Dribbling = Random.Range(40f, 75f) * attackMultiplier;
+            player.Finishing = RollAttribute(62f, 90f) * attackMultiplier;
+            player.Positioning = RollAttribute(60f, 88f) * attackMultiplier;
+            player.Composure = RollAttribute(58f, 88f) * attackMultiplier;
+            player.Heading = RollAttribute(45f, 82f) * attackMultiplier;
+            player.Aerial = RollAttribute(45f, 82f) * attackMultiplier;
+            player.Strength = RollAttribute(45f, 82f);
+            player.Pace = RollAttribute(50f, 88f);
+            player.Dribbling = RollAttribute(40f, 75f) * attackMultiplier;
 
-            player.Passing = Random.Range(30f, 60f);
-            player.Creativity = Random.Range(25f, 60f);
-            player.Defending = Random.Range(5f, 25f);
-            player.Tackling = Random.Range(5f, 25f);
-            player.Stamina = Random.Range(55f, 80f);
+            player.Passing = RollAttribute(30f, 60f);
+            player.Creativity = RollAttribute(25f, 60f);
+            player.Defending = RollAttribute(20f, 40f);
+            player.Tackling = RollAttribute(20f, 40f);
+            player.Stamina = RollAttribute(55f, 80f);
         }
 
         private void AddSecondaryPositions(PlayerAgent player)
@@ -635,7 +783,7 @@ namespace Sim
             }
         }
 
-        private string GenerateUniqueName(HashSet<string> usedNames)
+        private string GenerateUniqueName()
         {
             for (int i = 0; i < 100; i++)
             {

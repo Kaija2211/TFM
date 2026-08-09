@@ -25,6 +25,7 @@ namespace Manager
         private bool isDropTarget;
         private Action<PlayerAgent> onClicked;
         private Action<PlayerAgent, PlayerAgent> onBenchPlayerDroppedOnPin;
+        private Action<PlayerAgent, PlayerAgent> onPinSwapped;
 
         private Image background;
         private Canvas rootCanvas;
@@ -36,13 +37,15 @@ namespace Manager
             bool isDraggable,
             bool isDropTarget,
             Action<PlayerAgent> onClicked,
-            Action<PlayerAgent, PlayerAgent> onBenchPlayerDroppedOnPin)
+            Action<PlayerAgent, PlayerAgent> onBenchPlayerDroppedOnPin,
+            Action<PlayerAgent, PlayerAgent> onPinSwapped = null)
         {
             Player = player;
             this.isDraggable = isDraggable;
             this.isDropTarget = isDropTarget;
             this.onClicked = onClicked;
             this.onBenchPlayerDroppedOnPin = onBenchPlayerDroppedOnPin;
+            this.onPinSwapped = onPinSwapped;
 
             TryGetComponent(out background);
             rootCanvas = GetComponentInParent<Canvas>()?.rootCanvas;
@@ -131,18 +134,33 @@ namespace Manager
                 return;
             }
 
+            if (draggedCard == this)
+            {
+                return;
+            }
+
             // Must clean up the dragged card's ghost/highlight HERE, before invoking the
-            // sub callback - not left to rely on OnEndDrag firing afterward. The sub
-            // callback triggers a full board rebuild that destroys every bench card,
-            // including the one currently being dragged; Destroy() makes a UnityEngine
-            // Object compare == null immediately (even though actual destruction is
-            // deferred to end of frame), so Unity's EventSystem sees pointerDrag as null
-            // by the time it goes to call OnEndDrag and silently skips it - orphaning the
-            // ghost on screen forever. Confirmed live: dragging worked, but the floating
-            // name box never went away after a successful drop.
+            // sub/swap callback - not left to rely on OnEndDrag firing afterward. Both
+            // callbacks trigger a full board rebuild that destroys every card, including
+            // the one currently being dragged; Destroy() makes a UnityEngine Object
+            // compare == null immediately (even though actual destruction is deferred to
+            // end of frame), so Unity's EventSystem sees pointerDrag as null by the time
+            // it goes to call OnEndDrag and silently skips it - orphaning the ghost on
+            // screen forever. Confirmed live: dragging worked, but the floating name box
+            // never went away after a successful drop.
             draggedCard.EndDragVisual();
 
-            onBenchPlayerDroppedOnPin?.Invoke(draggedCard.Player, Player);
+            // A pin dragged onto another pin (both isDropTarget) swaps their positions -
+            // both stay in the starting XI. A bench card dragged onto a pin (isDropTarget
+            // false, since bench cards aren't drop targets) substitutes instead.
+            if (draggedCard.isDropTarget)
+            {
+                onPinSwapped?.Invoke(draggedCard.Player, Player);
+            }
+            else
+            {
+                onBenchPlayerDroppedOnPin?.Invoke(draggedCard.Player, Player);
+            }
         }
 
         // Destroys the drag ghost and restores the card's normal background - called from

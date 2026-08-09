@@ -1,6 +1,6 @@
 namespace Manager
 {
-    public enum ManagerTactic
+    public enum ManagerMentality
     {
         Attacking,
         Balanced,

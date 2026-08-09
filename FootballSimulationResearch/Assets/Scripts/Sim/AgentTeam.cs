@@ -63,6 +63,26 @@ namespace Sim
             return true;
         }
 
+        // Swaps two starters' positions within the XI (e.g. dragging the ST onto the LM
+        // pin after a formation change scattered them) - unlike SubstitutePlayer, both
+        // players stay on the pitch, nobody moves to/from the Bench. Manager Mode only,
+        // same as SubstitutePlayer/ChangeFormation below.
+        public bool SwapStartingPositions(PlayerAgent a, PlayerAgent b)
+        {
+            int indexA = StartingEleven.IndexOf(a);
+            int indexB = StartingEleven.IndexOf(b);
+
+            if (indexA < 0 || indexB < 0)
+            {
+                return false;
+            }
+
+            StartingEleven[indexA] = b;
+            StartingEleven[indexB] = a;
+
+            return true;
+        }
+
         // Reassigns the whole squad to a new formation/shape in one step (Tactics
         // Board formation switch) - newStartingEleven must already be in the same
         // order as GetStartingPositions(newFormation) returns, one player per slot.
