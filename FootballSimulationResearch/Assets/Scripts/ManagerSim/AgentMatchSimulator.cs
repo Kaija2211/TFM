@@ -362,7 +362,8 @@ namespace Manager
                         attackingTeam,
                         creator,
                         defender,
-                        chanceType
+                        chanceType,
+                        creatorFatigue
                     ),
                     HomeTeamAttacking = homeAttacks
                 });
@@ -391,7 +392,8 @@ namespace Manager
                     Description = BuildOffTargetEventText(
                         attackingTeam,
                         shooter,
-                        chanceType
+                        chanceType,
+                        shooterFatigue
                     ),
                     IsShot = true,
                     HomeTeamAttacking = homeAttacks
@@ -409,14 +411,37 @@ namespace Manager
                 ((goalkeeperFatigue + defenderFatigue) / 2f) *
                 defendingMentalityMultiplier;
 
-            float goalChance = Mathf.Clamp(
+            // This is the exact formula/clamp range the protected original uses for
+            // "chance of scoring given any shot" - kept identical so it stays a faithful
+            // baseline, not a second place to accidentally drift from Research Mode's
+            // calibration.
+            float unconditionalGoalChance = Mathf.Clamp(
                 0.302f + (goalQuality - saveQuality) / 320f,
                 0.08f,
                 0.63f
             );
 
+            // Rescaled from "given any shot" to "given the shot is already on target" -
+            // the on-target gate above is a fork-only addition (the protected original has
+            // no such split) that would otherwise silently stack a second filter in front
+            // of the same goal roll, roughly halving the overall goals/match rate.
+            // Confirmed via a 200-match same-teams batch: 2.82 goals/match in the protected
+            // original vs 1.21 in this fork before this fix - almost exactly explained by
+            // onTargetChance's own typical range. Dividing by onTargetChance restores the
+            // original's overall per-shot scoring rate exactly, since
+            // P(goal | shot) = onTargetChance * (unconditionalGoalChance / onTargetChance)
+            // = unconditionalGoalChance - while the 0.85 ceiling still leaves room for a
+            // save even on a near-certain on-target effort.
+            float goalChance = Mathf.Clamp(unconditionalGoalChance / onTargetChance, 0.08f, 0.85f);
+
             if (Random.value < goalChance)
             {
+                // Real score-state check, taken before this goal is applied to the score -
+                // "dramatic" only when the scoring team was level or behind and it's 80'+,
+                // not just "any goal that happens to land late."
+                bool isDramaticLateGoal = minute >= 80 &&
+                    (homeAttacks ? result.HomeGoals - result.AwayGoals <= 0 : result.AwayGoals - result.HomeGoals <= 0);
+
                 if (homeAttacks)
                 {
                     result.HomeGoals++;
@@ -433,7 +458,8 @@ namespace Manager
                         attackingTeam,
                         creator,
                         shooter,
-                        chanceType
+                        chanceType,
+                        isDramaticLateGoal
                     ),
                     IsGoal = true,
                     HomeTeamScored = homeAttacks,
@@ -867,65 +893,171 @@ namespace Manager
             return players[players.Count - 1];
         }
 
+        // Picks one phrasing at random from a fixed set of variants for the same event
+        // slot. Each slot mixes at least one short, punchy line in with the fuller
+        // sentences - stopped/off-target events are the most frequent ones in a match,
+        // so a single fixed template per slot (the pre-variant version of this file)
+        // meant the same handful of sentences recurring constantly across 90 minutes.
+        // Variety here is purely about phrasing, not new match information.
+        private static string PickVariant(params string[] variants)
+        {
+            return variants[Random.Range(0, variants.Length)];
+        }
+
+        // Below this, an event's own real simulated state (fatigue) reads as tired -
+        // GetFatigueMultiplier only drops below ~0.90 for a below-average-stamina player
+        // well into the second half (see its own clamp, 0.72-1.0). Direction 2 from the
+        // Match Log discussion (2026-08-09): let genuine sim state shape phrasing, not
+        // just pick from a fixed pool - this is real derived data, not decorative
+        // randomness.
+        private const float TiredFatigueThreshold = 0.90f;
+
         private string BuildStoppedEventText(
             AgentTeam attackingTeam,
             PlayerAgent creator,
             PlayerAgent defender,
-            ChanceType chanceType)
+            ChanceType chanceType,
+            float creatorFatigue)
         {
+            if (creatorFatigue < TiredFatigueThreshold)
+            {
+                return PickVariant(
+                    $"{creator.Name} looks leggy on the ball and {defender.Name} mops up.",
+                    $"{creator.Name}'s legs are heavy chasing the move for {attackingTeam.TeamName}, and {defender.Name} intervenes.",
+                    $"{attackingTeam.TeamName} push on through a tiring {creator.Name}, but {defender.Name} reads it easily."
+                );
+            }
+
             switch (chanceType)
             {
                 case ChanceType.Cross:
-                    return $"{attackingTeam.TeamName} look for a cross from {creator.Name}, but {defender.Name} clears it.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} look for a cross from {creator.Name}, but {defender.Name} clears it.",
+                        $"{defender.Name} cuts out the cross from {creator.Name}.",
+                        $"{creator.Name} whips a ball into the box for {attackingTeam.TeamName}, but {defender.Name} gets there first."
+                    );
 
                 case ChanceType.ThroughBall:
-                    return $"{creator.Name} tries to slip a through ball in for {attackingTeam.TeamName}, but {defender.Name} reads it.";
+                    return PickVariant(
+                        $"{creator.Name} tries to slip a through ball in for {attackingTeam.TeamName}, but {defender.Name} reads it.",
+                        $"{defender.Name} reads the pass and cuts it out.",
+                        $"{creator.Name} looks to thread it through for {attackingTeam.TeamName}, but {defender.Name} is alert."
+                    );
 
                 case ChanceType.Dribble:
-                    return $"{creator.Name} drives forward for {attackingTeam.TeamName}, but {defender.Name} wins the duel.";
+                    return PickVariant(
+                        $"{creator.Name} drives forward for {attackingTeam.TeamName}, but {defender.Name} wins the duel.",
+                        $"{defender.Name} shuts down {creator.Name} before he can get a shot away.",
+                        $"{creator.Name} tries to beat his man for {attackingTeam.TeamName}, but {defender.Name} holds firm."
+                    );
 
                 case ChanceType.LongShot:
-                    return $"{attackingTeam.TeamName} work space outside the box through {creator.Name}, but {defender.Name} closes it down.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} work space outside the box through {creator.Name}, but {defender.Name} closes it down.",
+                        $"{defender.Name} closes the space down before {creator.Name} can shoot.",
+                        $"{attackingTeam.TeamName} probe from range through {creator.Name}, but {defender.Name} blocks the path."
+                    );
 
                 case ChanceType.SetPiece:
-                    return $"{attackingTeam.TeamName} deliver a set piece through {creator.Name}, but {defender.Name} deals with it.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} deliver a set piece through {creator.Name}, but {defender.Name} deals with it.",
+                        $"{defender.Name} heads the set piece clear.",
+                        $"{attackingTeam.TeamName} work a routine from the set piece, but {defender.Name} deals with {creator.Name}'s delivery."
+                    );
 
                 case ChanceType.CounterAttack:
-                    return $"{attackingTeam.TeamName} break quickly through {creator.Name}, but {defender.Name} stops the counter.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} break quickly through {creator.Name}, but {defender.Name} stops the counter.",
+                        $"{defender.Name} snuffs out the counter.",
+                        $"{attackingTeam.TeamName} break at pace behind {creator.Name}, but {defender.Name} recovers to stop it."
+                    );
 
                 default:
-                    return $"{attackingTeam.TeamName} build an attack through {creator.Name}, but {defender.Name} stops the chance.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} build an attack through {creator.Name}, but {defender.Name} stops the chance.",
+                        $"{defender.Name} deals with it.",
+                        $"{attackingTeam.TeamName} probe through {creator.Name}, but {defender.Name} is equal to it."
+                    );
             }
         }
 
+        // Never include the word "goal"/"GOAL" in any of these variants - the caller
+        // (AppendMatchEventRow in ManagerPrototypeController) already prepends a fixed,
+        // bold "{minute}' GOAL ·" prefix to every goal event's row, so a variant that also
+        // said "goal" read as a visible duplicate ("GOAL · GOAL! ..." - confirmed live,
+        // user feedback). This method is only ever reached for events that ARE goals, so
+        // the description itself never needs to say so again.
         private string BuildGoalEventText(
             AgentTeam attackingTeam,
             PlayerAgent creator,
             PlayerAgent shooter,
-            ChanceType chanceType)
+            ChanceType chanceType,
+            bool isDramaticLateGoal)
         {
+            // Real score-state, not decorative - set only when the scoring team was level
+            // or behind before this goal, 80'+ (see the isDramaticLateGoal computation at
+            // the call site in ResolveAttack). Deliberately not chanceType-specific - a
+            // late leveller/winner reads the same regardless of how the chance itself
+            // came about.
+            if (isDramaticLateGoal)
+            {
+                return PickVariant(
+                    $"DRAMA! {shooter.Name} finds a crucial strike deep into the closing stages for {attackingTeam.TeamName}!",
+                    $"{attackingTeam.TeamName} snatch a huge winner in the closing stages through {shooter.Name}!",
+                    $"With time running out, {shooter.Name} delivers when it matters most for {attackingTeam.TeamName}!"
+                );
+            }
+
             switch (chanceType)
             {
                 case ChanceType.Cross:
-                    return $"{attackingTeam.TeamName} goal! {creator.Name} whips in the cross and {shooter.Name} finishes.";
+                    return PickVariant(
+                        $"{creator.Name} whips in the cross and {shooter.Name} finishes for {attackingTeam.TeamName}.",
+                        $"{creator.Name}'s cross is met by {shooter.Name}, who makes no mistake.",
+                        $"{shooter.Name} rises highest to head home {creator.Name}'s delivery."
+                    );
 
                 case ChanceType.ThroughBall:
-                    return $"{attackingTeam.TeamName} goal! {creator.Name} splits the defence and {shooter.Name} slots it away.";
+                    return PickVariant(
+                        $"{creator.Name} splits the defence and {shooter.Name} slots it away for {attackingTeam.TeamName}.",
+                        $"{creator.Name} threads the perfect pass and {shooter.Name} finishes with ease.",
+                        $"{shooter.Name} times his run to perfection and slots past the keeper."
+                    );
 
                 case ChanceType.Dribble:
-                    return $"{attackingTeam.TeamName} goal! {shooter.Name} beats his marker after work from {creator.Name} and scores.";
+                    return PickVariant(
+                        $"{shooter.Name} beats his marker after work from {creator.Name} and scores for {attackingTeam.TeamName}.",
+                        $"{shooter.Name} dances past his marker and buries it, {creator.Name} the provider.",
+                        $"{shooter.Name} shows brilliant footwork before finishing clinically."
+                    );
 
                 case ChanceType.LongShot:
-                    return $"{attackingTeam.TeamName} goal! {shooter.Name} finds space and fires in from range.";
+                    return PickVariant(
+                        $"{shooter.Name} finds space and fires in from range for {attackingTeam.TeamName}.",
+                        $"{shooter.Name} lets fly from range and it flies into the net.",
+                        $"A stunning strike from {shooter.Name}, unstoppable from distance."
+                    );
 
                 case ChanceType.SetPiece:
-                    return $"{attackingTeam.TeamName} goal! {creator.Name} delivers the set piece and {shooter.Name} converts.";
+                    return PickVariant(
+                        $"{creator.Name} delivers the set piece and {shooter.Name} converts for {attackingTeam.TeamName}.",
+                        $"{creator.Name}'s delivery is met perfectly by {shooter.Name}.",
+                        $"{shooter.Name} rises above everyone to convert {creator.Name}'s set piece."
+                    );
 
                 case ChanceType.CounterAttack:
-                    return $"{attackingTeam.TeamName} goal! {creator.Name} launches the counter and {shooter.Name} finishes it.";
+                    return PickVariant(
+                        $"{creator.Name} launches the counter and {shooter.Name} finishes it for {attackingTeam.TeamName}.",
+                        $"{attackingTeam.TeamName} sweep forward on the break and {shooter.Name} finishes it off.",
+                        $"{creator.Name} picks out {shooter.Name} on the counter, who makes no mistake."
+                    );
 
                 default:
-                    return $"{attackingTeam.TeamName} goal! {creator.Name} creates the chance and {shooter.Name} finishes.";
+                    return PickVariant(
+                        $"{creator.Name} creates the chance and {shooter.Name} finishes for {attackingTeam.TeamName}.",
+                        $"{shooter.Name} finishes off {creator.Name}'s work.",
+                        $"{shooter.Name} gets on the scoresheet."
+                    );
             }
         }
 
@@ -938,25 +1070,53 @@ namespace Manager
             switch (chanceType)
             {
                 case ChanceType.Cross:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} meets the cross, but {goalkeeper.Name} saves.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} meets the cross, but {goalkeeper.Name} saves.",
+                        $"{shooter.Name} rises to meet the cross, but {goalkeeper.Name} is equal to it.",
+                        $"Great save! {goalkeeper.Name} keeps out {shooter.Name}'s header from the cross."
+                    );
 
                 case ChanceType.ThroughBall:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} gets in behind, but {goalkeeper.Name} saves.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} gets in behind, but {goalkeeper.Name} saves.",
+                        $"{shooter.Name} is played clean through by {attackingTeam.TeamName}, but {goalkeeper.Name} rushes out to deny him.",
+                        $"{goalkeeper.Name} stands tall to save from {shooter.Name} after the ball is played through."
+                    );
 
                 case ChanceType.Dribble:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots after a dribble, but {goalkeeper.Name} saves.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} shoots after a dribble, but {goalkeeper.Name} saves.",
+                        $"{shooter.Name} skips past a challenge and shoots, but {goalkeeper.Name} palms it away.",
+                        $"{goalkeeper.Name} denies {shooter.Name} after a driving run."
+                    );
 
                 case ChanceType.LongShot:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots from distance, but {goalkeeper.Name} saves.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} shoots from distance, but {goalkeeper.Name} saves.",
+                        $"{shooter.Name} unleashes an effort from range, but {goalkeeper.Name} tips it over.",
+                        $"{goalkeeper.Name} makes a smart stop from {shooter.Name}'s long-range effort."
+                    );
 
                 case ChanceType.SetPiece:
-                    return $"{attackingTeam.TeamName} chance from the set piece. {shooter.Name} gets the effort away, but {goalkeeper.Name} saves.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance from the set piece. {shooter.Name} gets the effort away, but {goalkeeper.Name} saves.",
+                        $"{shooter.Name} connects with the set piece, but {goalkeeper.Name} produces a fine save.",
+                        $"{goalkeeper.Name} claws away {shooter.Name}'s effort from the set piece."
+                    );
 
                 case ChanceType.CounterAttack:
-                    return $"{attackingTeam.TeamName} chance on the counter. {shooter.Name} shoots, but {goalkeeper.Name} saves.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance on the counter. {shooter.Name} shoots, but {goalkeeper.Name} saves.",
+                        $"{shooter.Name} bears down on goal on the break, but {goalkeeper.Name} stands firm.",
+                        $"{goalkeeper.Name} thwarts {shooter.Name} at the end of a rapid counter."
+                    );
 
                 default:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots, but {goalkeeper.Name} saves.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} shoots, but {goalkeeper.Name} saves.",
+                        $"{shooter.Name} tests {goalkeeper.Name}, who makes the save.",
+                        $"{goalkeeper.Name} denies {shooter.Name}."
+                    );
             }
         }
 
@@ -966,30 +1126,68 @@ namespace Manager
         private string BuildOffTargetEventText(
             AgentTeam attackingTeam,
             PlayerAgent shooter,
-            ChanceType chanceType)
+            ChanceType chanceType,
+            float shooterFatigue)
         {
+            if (shooterFatigue < TiredFatigueThreshold)
+            {
+                return PickVariant(
+                    $"{shooter.Name} is out on his feet and drags the effort well wide.",
+                    $"Tired legs from {shooter.Name} - the shot never troubles the target.",
+                    $"{shooter.Name} can't generate any power on a heavy touch and skies it."
+                );
+            }
+
             switch (chanceType)
             {
                 case ChanceType.Cross:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} meets the cross but heads it wide.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} meets the cross but heads it wide.",
+                        $"Wide! {shooter.Name} can't keep the header down.",
+                        $"{shooter.Name} gets up well to meet the cross, but the header flashes wide."
+                    );
 
                 case ChanceType.ThroughBall:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} gets in behind but drags the shot wide.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} gets in behind but drags the shot wide.",
+                        $"Off target! {shooter.Name} drags it wide after getting in behind.",
+                        $"{shooter.Name} races onto the through ball but the finish lets him down."
+                    );
 
                 case ChanceType.Dribble:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots after a dribble but fires over the bar.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} shoots after a dribble but fires over the bar.",
+                        $"Over the bar! {shooter.Name} can't find the target.",
+                        $"{shooter.Name} jinks past a man and shoots, but it flies over."
+                    );
 
                 case ChanceType.LongShot:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots from distance but sends it well wide.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} shoots from distance but sends it well wide.",
+                        $"Wide of the post! {shooter.Name} tries his luck from range.",
+                        $"{shooter.Name} lets fly from distance, but it sails well wide."
+                    );
 
                 case ChanceType.SetPiece:
-                    return $"{attackingTeam.TeamName} chance from the set piece. {shooter.Name} can't keep the effort down.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance from the set piece. {shooter.Name} can't keep the effort down.",
+                        $"Off target from the set piece.",
+                        $"{shooter.Name} gets a clean connection from the set piece, but it's over the bar."
+                    );
 
                 case ChanceType.CounterAttack:
-                    return $"{attackingTeam.TeamName} chance on the counter. {shooter.Name} shoots but drags it wide.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance on the counter. {shooter.Name} shoots but drags it wide.",
+                        $"Wasted! {shooter.Name} can't finish off the counter.",
+                        $"{shooter.Name} breaks clear on the counter but drags the shot wide."
+                    );
 
                 default:
-                    return $"{attackingTeam.TeamName} chance. {shooter.Name} shoots wide.";
+                    return PickVariant(
+                        $"{attackingTeam.TeamName} chance. {shooter.Name} shoots wide.",
+                        $"{shooter.Name} fires wide.",
+                        $"{shooter.Name} can't find the target."
+                    );
             }
         }
 

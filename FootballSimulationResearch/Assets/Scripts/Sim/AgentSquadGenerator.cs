@@ -31,6 +31,13 @@ namespace Sim
             "Sean", "Ryan", "Connor", "Finn", "Declan", "Conor"
         };
 
+        // Doubled from 81 to ~183 (2026-08-09, session 6) - with ~20 players/squad, 81
+        // names meant a shared surname within one squad was the *expected* outcome
+        // (birthday-paradox math: ~90% of squads had at least one collision) rather than
+        // occasional coincidence. Full names still can't collide league-wide (see
+        // usedNames below) - this just makes surname-only collisions genuinely rare
+        // instead of near-certain, without needing an impractically large list (getting
+        // collisions down to ~20% within one squad alone would need ~800+ names).
         private readonly string[] lastNames =
         {
             "Mercer", "Brandt", "Hughes", "Keller", "Costa", "Bennett",
@@ -46,7 +53,30 @@ namespace Sim
             "Sato", "Suzuki", "Yamamoto", "Kim", "Park", "Choi",
             "Sharma", "Patel", "Singh", "Kumar", "Fernandez", "Gonzalez",
             "Ramirez", "Herrera", "Dubois", "Lefevre", "Girard", "Moreau",
-            "Laurent", "Alonso", "Navarro"
+            "Laurent", "Alonso", "Navarro",
+            "Baker", "Turner", "Palmer", "Hayes", "Marsh", "Pearce",
+            "Stevens", "Grant", "Doyle", "Barrett",
+            "Pereira", "Almeida", "Correia", "Barbosa", "Teixeira", "Machado",
+            "Cardoso", "Vieira",
+            "Romano", "Ferrari", "Bianchi", "Marino", "Greco", "Conti",
+            "Barone", "Villa",
+            "Bernard", "Petit", "Fontaine", "Renard", "Marchand", "Lambert",
+            "Roy", "Blanc",
+            "Schulz", "Wagner", "Becker", "Hoffmann", "Krause", "Richter",
+            "Vogel", "Zimmer",
+            "Berg", "Lund", "Holm", "Dahl", "Eriksen", "Karlsson",
+            "Bergstrom", "Lindqvist",
+            "Wojcik", "Kaminski", "Lewandowski", "Szymanski", "Dabrowski", "Kozlowski",
+            "Mazur", "Wysocki",
+            "Eze", "Bello", "Chukwu", "Abara", "Owusu", "Asante",
+            "Appiah", "Danso",
+            "Mwangi", "Otieno", "Kariuki", "Wanjiru", "Haile", "Bekele",
+            "Hassan", "Farouk", "Karimi", "Rahimi", "Aziz", "Nasser",
+            "Rana", "Malhotra", "Chowdhury", "Rahman", "Ahmed", "Gupta",
+            "Watanabe", "Takahashi", "Nakamura", "Ito", "Wong", "Chen",
+            "Liu", "Wang", "Lee", "Han",
+            "Cruz", "Reyes", "Morales", "Jimenez", "Castillo", "Vargas",
+            "Ortiz", "Delgado"
         };
 
         // Instance-level (not local to GenerateSquad) so names stay unique across the

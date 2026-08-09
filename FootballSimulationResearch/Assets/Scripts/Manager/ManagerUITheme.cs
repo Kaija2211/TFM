@@ -184,6 +184,46 @@ namespace Manager
             return trackRect;
         }
 
+        // Two-segment proportional bar - home team's share fills from the left, the
+        // remainder fills from the right in a second color, meeting at the split point.
+        // Unlike BuildBar above (a single 0-100% fill against a neutral track), this is
+        // for match-stat comparison rows where both teams' numbers matter side by side.
+        public static RectTransform BuildSplitBar(Transform parent, float homeShare, Color homeColor, Color awayColor, float height = 6f)
+        {
+            homeShare = Mathf.Clamp01(homeShare);
+
+            GameObject track = new GameObject("SplitBarTrack", typeof(RectTransform), typeof(Image));
+            track.transform.SetParent(parent, false);
+
+            RectTransform trackRect = track.GetComponent<RectTransform>();
+            trackRect.anchorMin = new Vector2(0f, 0.5f);
+            trackRect.anchorMax = new Vector2(1f, 0.5f);
+            trackRect.pivot = new Vector2(0f, 0.5f);
+            trackRect.sizeDelta = new Vector2(0f, height);
+            trackRect.anchoredPosition = Vector2.zero;
+            track.GetComponent<Image>().color = BarTrack;
+
+            GameObject homeFill = new GameObject("HomeFill", typeof(RectTransform), typeof(Image));
+            homeFill.transform.SetParent(track.transform, false);
+            RectTransform homeFillRect = homeFill.GetComponent<RectTransform>();
+            homeFillRect.anchorMin = new Vector2(0f, 0f);
+            homeFillRect.anchorMax = new Vector2(homeShare, 1f);
+            homeFillRect.offsetMin = Vector2.zero;
+            homeFillRect.offsetMax = Vector2.zero;
+            homeFill.GetComponent<Image>().color = homeColor;
+
+            GameObject awayFill = new GameObject("AwayFill", typeof(RectTransform), typeof(Image));
+            awayFill.transform.SetParent(track.transform, false);
+            RectTransform awayFillRect = awayFill.GetComponent<RectTransform>();
+            awayFillRect.anchorMin = new Vector2(homeShare, 0f);
+            awayFillRect.anchorMax = new Vector2(1f, 1f);
+            awayFillRect.offsetMin = Vector2.zero;
+            awayFillRect.offsetMax = Vector2.zero;
+            awayFill.GetComponent<Image>().color = awayColor;
+
+            return trackRect;
+        }
+
         public static TextMeshProUGUI BuildLabel(
             Transform parent,
             string text,

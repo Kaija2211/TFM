@@ -19,7 +19,10 @@ namespace Manager
         [SerializeField] private TextAsset seasonFile;
         [SerializeField] private TextAsset[] trainingSeasonFiles;
         [SerializeField] private string managedTeamName = "Liverpool";
-        [SerializeField] private float matchReplayDurationSeconds = 45f;
+        // 45s (0.5s/simulated minute) read as too fast once Match Log lines got more
+        // varied in phrasing/length (see PickVariant in the ManagerSim fork) - bumped to
+        // give each event more real time on screen before the next one lands.
+        [SerializeField] private float matchReplayDurationSeconds = 60f;
         [SerializeField] private int maxVisibleEventLines = 12;
 
         [Header("Title Screen")]
@@ -115,9 +118,17 @@ namespace Manager
         private RectTransform matchStatsCaptionRect;
         private RectTransform matchKeyMomentsCaptionRect;
         private GameObject matchLogGroup;
+        // Row-based live event feed (matches the mockup's per-line border-bottom divider)
+        // - replaces the old single eventFeedText block, which is still built/reparented
+        // by chrome but no longer has its .text touched; this container sits alongside it
+        // in the same masked area instead.
+        private RectTransform matchEventFeedContainer;
+        private readonly Queue<GameObject> matchEventFeedRows = new();
         private RectTransform matchSubsLogContainer;
         private TextMeshProUGUI matchHomeScorersLabel;
         private TextMeshProUGUI matchAwayScorersLabel;
+        private RectTransform matchGoalTimelineContainer;
+        private float matchGoalTimelineWidth;
         private Button viewMatchEventsButton;
         private List<AgentMatchSimulator.AgentMatchEvent> lastMatchEvents;
         private List<GameObject> matchFullTimeOnlyElements;
@@ -157,6 +168,10 @@ namespace Manager
         // Sprite + Image rather than a TMP Sprite Asset.
         private Sprite tfmLogoSprite;
 
+        // Developer easter egg - see ApplyDeveloperEasterEggPlayer. A real portrait, only
+        // ever shown on this one specific player's Player Detail screen.
+        private Sprite hiddePortraitSprite;
+
         // In-memory only - there is no save system, so this never persists across sessions.
         private string managerName = "Manager";
         private bool titleScreenBuilt;
@@ -177,8 +192,17 @@ namespace Manager
         private bool skipToResultsRequested;
 
         private bool matchdayPrepChromeBuilt;
-        private TextMeshProUGUI matchdayPrepTitleLabel;
-        private TextMeshProUGUI matchdayPrepSubtitleLabel;
+        // GameObject, not TextMeshProUGUI - both labels start with text="" (see
+        // BuildMatchdayPrepChrome), a prime target for the TMP mesh-generation failure
+        // this project has hit before (New Career's subtitle, session 5): the
+        // destroy/recreate recovery sweep (RecoverBlankLabelsNextFrame) can silently swap
+        // out a label's TextMeshProUGUI component, orphaning any cached reference to it.
+        // Caching the parent GameObject and re-fetching GetComponentInChildren fresh each
+        // refresh (same fix as teamSelectSubtitleObj) avoids writing to a dead reference
+        // while the real on-screen label never updates again - confirmed live as the
+        // cause of "matchday prep always shows the very first fixture" (Thomas, 2026-08-09).
+        private GameObject matchdayPrepTitleLabel;
+        private GameObject matchdayPrepSubtitleLabel;
         private RectTransform matchdayPrepPitchContainer;
 
         private bool hubChromeBuilt;
@@ -249,6 +273,7 @@ namespace Manager
             weakFootStarSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/star-filled");
             footballIconSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/football-icon");
             tfmLogoSprite = Resources.Load<Sprite>("Manager/tfm-logo");
+            hiddePortraitSprite = Resources.Load<Sprite>("Manager/hidde_playerportrait");
 
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnNextMatchdayClicked);
             if (simulateMatchButton != null) simulateMatchButton.onClick.AddListener(OnSimulateMatchClicked);
@@ -2658,7 +2683,11 @@ namespace Manager
             // gap opened up between the header band and "TECHNICAL"). Growing the banner
             // itself - bigger photo/name/meta - eats into that gap directly rather than
             // just relocating it.
-            const float headerBandHeight = 240f;
+            // Bumped again to 300 (2026-08-09) to fit the bigger photo below (220px, was
+            // 140) with matching top/bottom margins - user feedback wanted the photo to
+            // fill more of its area, twice ("fill in the red borders", then "bigger
+            // actually").
+            const float headerBandHeight = 300f;
 
             // Full-width (no contentMargin) unlike the centered stat grid below it - the
             // margined header looked like it wasn't filling the screen, with visible
@@ -2677,18 +2706,34 @@ namespace Manager
             photoRect.anchorMin = new Vector2(0f, 1f);
             photoRect.anchorMax = new Vector2(0f, 1f);
             photoRect.pivot = new Vector2(0f, 1f);
-            photoRect.sizeDelta = new Vector2(140f, 140f);
+            photoRect.sizeDelta = new Vector2(220f, 220f);
             photoRect.anchoredPosition = new Vector2(36f, -40f);
-            photo.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
 
+            // Developer easter egg (see ApplyDeveloperEasterEggPlayer) - a real portrait
+            // for this one specific player, everyone else keeps the plain placeholder
+            // color since there's no actual photo pipeline for generated players.
+            Image photoImage = photo.GetComponent<Image>();
+            if (player.Name == "Hidde Rietberg" && hiddePortraitSprite != null)
+            {
+                photoImage.sprite = hiddePortraitSprite;
+                photoImage.color = Color.white;
+                photoImage.preserveAspect = true;
+            }
+            else
+            {
+                photoImage.color = ManagerUITheme.CardNeutralAlt;
+            }
+
+            // Start-x and sizeDelta shrink both bumped from 200/-320 to 300/-420 to clear
+            // the wider photo (220px, was 140) with the same ~44px gap after it.
             GameObject nameLabel = new GameObject("Name", typeof(RectTransform));
             nameLabel.transform.SetParent(headerBand.transform, false);
             RectTransform nameRect = nameLabel.GetComponent<RectTransform>();
             nameRect.anchorMin = new Vector2(0f, 1f);
             nameRect.anchorMax = new Vector2(1f, 1f);
             nameRect.pivot = new Vector2(0f, 1f);
-            nameRect.sizeDelta = new Vector2(-320f, 40f);
-            nameRect.anchoredPosition = new Vector2(200f, -44f);
+            nameRect.sizeDelta = new Vector2(-420f, 40f);
+            nameRect.anchoredPosition = new Vector2(300f, -60f);
             ManagerUITheme.BuildLabel(nameLabel.transform, player.Name.ToUpperInvariant(), 32, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject metaLabel = new GameObject("Meta", typeof(RectTransform));
@@ -2697,13 +2742,13 @@ namespace Manager
             metaRect.anchorMin = new Vector2(0f, 1f);
             metaRect.anchorMax = new Vector2(1f, 1f);
             metaRect.pivot = new Vector2(0f, 1f);
-            metaRect.sizeDelta = new Vector2(-320f, 34f);
-            metaRect.anchoredPosition = new Vector2(200f, -100f);
+            metaRect.sizeDelta = new Vector2(-420f, 34f);
+            metaRect.anchoredPosition = new Vector2(300f, -116f);
             string metaText = $"{player.Role}  ·  {player.Age} yrs  ·  {player.Height:F0}cm  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
             TextMeshProUGUI metaTMP = ManagerUITheme.BuildLabel(metaLabel.transform, metaText, 21, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
             if (weakFootStarSpriteAsset != null) metaTMP.spriteAsset = weakFootStarSpriteAsset;
 
-            float badgeX = 200f;
+            float badgeX = 300f;
             AddPositionBadge(headerBand.transform, player.PrimaryPosition.ToString(), badgeX, true);
             badgeX += 68f;
 
@@ -2748,26 +2793,57 @@ namespace Manager
             attributeGridRect.offsetMin = new Vector2(contentMargin + 20f, 110f);
             attributeGridRect.offsetMax = new Vector2(-(contentMargin + 20f), -(headerBandHeight + 20f));
 
-            BuildAttributeColumn(attributeGridRect, 0, 4, "Technical", new (string, float)[]
+            if (player.PrimaryPosition == PlayerPosition.GK)
             {
-                ("Finishing", player.Finishing), ("Passing", player.Passing), ("Dribbling", player.Dribbling),
-                ("Crossing", player.Crossing), ("Heading", player.Heading)
-            });
+                // GKs never roll meaningful Finishing/Dribbling/Crossing/Heading/Creativity/
+                // Tackling values (see AgentSquadGenerator.GenerateGoalkeeper - those stay at
+                // low dump-stat floors), so showing them here was always a bit dishonest.
+                // Goalkeeping/Reflexes are the two stats actually generated for and used by
+                // a keeper (AgentMatchSimulator's shot-stopping resolution) but were never
+                // surfaced anywhere in the UI until now.
+                BuildAttributeColumn(attributeGridRect, 0, 4, "Goalkeeping", new (string, float)[]
+                {
+                    ("Goalkeeping", player.Goalkeeping), ("Reflexes", player.Reflexes)
+                });
 
-            BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
-            {
-                ("Creativity", player.Creativity), ("Positioning", player.Positioning), ("Composure", player.Composure)
-            });
+                BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
+                {
+                    ("Positioning", player.Positioning), ("Composure", player.Composure)
+                });
 
-            BuildAttributeColumn(attributeGridRect, 2, 4, "Defensive", new (string, float)[]
-            {
-                ("Defending", player.Defending), ("Tackling", player.Tackling)
-            });
+                BuildAttributeColumn(attributeGridRect, 2, 4, "Distribution", new (string, float)[]
+                {
+                    ("Passing", player.Passing)
+                });
 
-            BuildAttributeColumn(attributeGridRect, 3, 4, "Physical", new (string, float)[]
+                BuildAttributeColumn(attributeGridRect, 3, 4, "Physical", new (string, float)[]
+                {
+                    ("Pace", player.Pace), ("Strength", player.Strength), ("Stamina", player.Stamina), ("Aerial", player.Aerial)
+                });
+            }
+            else
             {
-                ("Pace", player.Pace), ("Strength", player.Strength), ("Stamina", player.Stamina), ("Aerial", player.Aerial)
-            });
+                BuildAttributeColumn(attributeGridRect, 0, 4, "Technical", new (string, float)[]
+                {
+                    ("Finishing", player.Finishing), ("Passing", player.Passing), ("Dribbling", player.Dribbling),
+                    ("Crossing", player.Crossing), ("Heading", player.Heading)
+                });
+
+                BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
+                {
+                    ("Creativity", player.Creativity), ("Positioning", player.Positioning), ("Composure", player.Composure)
+                });
+
+                BuildAttributeColumn(attributeGridRect, 2, 4, "Defensive", new (string, float)[]
+                {
+                    ("Defending", player.Defending), ("Tackling", player.Tackling)
+                });
+
+                BuildAttributeColumn(attributeGridRect, 3, 4, "Physical", new (string, float)[]
+                {
+                    ("Pace", player.Pace), ("Strength", player.Strength), ("Stamina", player.Stamina), ("Aerial", player.Aerial)
+                });
+            }
 
             // Player Inspect fully destroys and rebuilds every label on every refresh
             // (see spawnedInspectElements above) - that rapid churn turns out to trigger
@@ -2821,17 +2897,20 @@ namespace Manager
             const float rowSpacing = 42f;
             float contentHeight = titleHeight + titleGap + attributes.Length * rowSpacing;
 
-            // Vertically centers each column's title+rows block instead of pinning it to
-            // the top - at the old fixed 34px row spacing the tallest column (Technical,
-            // 5 rows) only filled a fraction of the grid's ~800px height, leaving a large
-            // dead gap below every column (confirmed live). Columns have different row
-            // counts (2-5), so each centers independently within the same shared height.
+            // Top-aligned (matches the "PLAYER DETAIL" mockup's align-items:start), not
+            // vertically centered. Centering was tried first, but with columns holding
+            // different row counts (2-5) each one centers independently, so column titles
+            // land at different heights depending on how many stats that column has - the
+            // "why are Technical and Defensive's titles not in line" bug. Pinning every
+            // stack to the top keeps titles level across all columns regardless of length,
+            // and reads as using the grid's space top-down rather than floating in the
+            // middle of a tall, mostly-empty area.
             GameObject stack = new GameObject("Stack", typeof(RectTransform));
             stack.transform.SetParent(column.transform, false);
             RectTransform stackRect = stack.GetComponent<RectTransform>();
-            stackRect.anchorMin = new Vector2(0f, 0.5f);
-            stackRect.anchorMax = new Vector2(1f, 0.5f);
-            stackRect.pivot = new Vector2(0.5f, 0.5f);
+            stackRect.anchorMin = new Vector2(0f, 1f);
+            stackRect.anchorMax = new Vector2(1f, 1f);
+            stackRect.pivot = new Vector2(0.5f, 1f);
             stackRect.sizeDelta = new Vector2(0f, contentHeight);
             stackRect.anchoredPosition = Vector2.zero;
 
@@ -2975,7 +3054,8 @@ namespace Manager
             titleRect.pivot = new Vector2(0f, 1f);
             titleRect.sizeDelta = new Vector2(-120f, 34f);
             titleRect.anchoredPosition = new Vector2(60f, -22f);
-            matchdayPrepTitleLabel = ManagerUITheme.BuildLabel(titleObj.transform, "", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(titleObj.transform, "", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            matchdayPrepTitleLabel = titleObj;
 
             GameObject subtitleObj = new GameObject("Subtitle", typeof(RectTransform));
             subtitleObj.transform.SetParent(header.transform, false);
@@ -2985,7 +3065,8 @@ namespace Manager
             subtitleRect.pivot = new Vector2(0f, 1f);
             subtitleRect.sizeDelta = new Vector2(-120f, 20f);
             subtitleRect.anchoredPosition = new Vector2(60f, -58f);
-            matchdayPrepSubtitleLabel = ManagerUITheme.BuildLabel(subtitleObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            ManagerUITheme.BuildLabel(subtitleObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            matchdayPrepSubtitleLabel = subtitleObj;
 
             ManagerUITheme.BuildAccentBand(matchdayPrepContentContainer, topBand: false, height: bandHeight);
 
@@ -3088,14 +3169,22 @@ namespace Manager
 
             if (matchdayPrepTitleLabel != null)
             {
-                matchdayPrepTitleLabel.text = managedIsHome
-                    ? $"{managedTeamName} vs {opponentName} (Home)"
-                    : $"{managedTeamName} vs {opponentName} (Away)";
+                TextMeshProUGUI titleTMP = matchdayPrepTitleLabel.GetComponentInChildren<TextMeshProUGUI>();
+                if (titleTMP != null)
+                {
+                    titleTMP.text = managedIsHome
+                        ? $"{managedTeamName} vs {opponentName} (Home)"
+                        : $"{managedTeamName} vs {opponentName} (Away)";
+                }
             }
 
             if (matchdayPrepSubtitleLabel != null)
             {
-                matchdayPrepSubtitleLabel.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {TacticsBoardLayout.FormatFormation(opponentTeam.Formation)}";
+                TextMeshProUGUI subtitleTMP = matchdayPrepSubtitleLabel.GetComponentInChildren<TextMeshProUGUI>();
+                if (subtitleTMP != null)
+                {
+                    subtitleTMP.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {TacticsBoardLayout.FormatFormation(opponentTeam.Formation)}";
+                }
             }
 
             // Read-only scouting list - Starting XI + Bench, no row click handler (null
@@ -3281,44 +3370,89 @@ namespace Manager
             matchFullTimeCaptionGroup = fullTimeCaptionObj;
             matchFullTimeCaptionGroup.SetActive(false);
 
-            // Goal-scorer lists, flanking center below the header - full-time only, built
-            // from the real ScorerName on each goal event (see AgentMatchSimulator), not
-            // fabricated or parsed out of the free-text event description.
-            // Width (220) is deliberately less than double the offset (120) so the two
-            // boxes' inner edges can't cross at center - at the old 260 width they
-            // overlapped by 20px there regardless of text, invisible with short scorer
-            // names/few goals but a real collision once a name or scorer count pushed
-            // right up against that boundary (confirmed live).
-            // Moved below the header entirely (was inside it, right under the score) -
-            // a one-sided scoreline of 3+ goals needed more lines than fit in the old
-            // 44px box even with autosizing at its 7pt floor, visibly spilling up into
-            // the score/header area (confirmed live). Match Stats (see the full-time
-            // repositioning block below) is pushed down to make room for this.
-            const float scorersBlockTop = -(headerHeight + 20f);
-            const float scorersBlockHeight = 100f;
+            // Goals: full-time only, built from the real ScorerName on each goal event (see
+            // AgentMatchSimulator), never fabricated or parsed out of the free-text event
+            // description. Previously a tiny pair of labels (12pt, autosizing down to a 7pt
+            // floor) flanking dead-center below the header - illegible at a glance
+            // (confirmed live, user feedback). Redesigned again after the first left/right-
+            // half pass left a large empty band below both halves for a typical (non-8-goal)
+            // scoreline (confirmed live, user feedback, screenshot) - compact team-labeled
+            // scorer lists stay up top, and a large, full-width goal timeline (spanning the
+            // whole screen, not just the left half) with minute labels on each marker now
+            // fills that space instead of sitting cramped and small next to it.
+            const float goalsBlockTop = -(headerHeight + 20f);
+            const float halfMargin = 40f;
+            // Left half is anchor x 0-0.5 (960px at 1920-wide); this is its usable width
+            // with halfMargin on both the true left edge and the center-side, matching the
+            // right half's own rightHalfWidth in the full-time repositioning block below.
+            const float scorersWidth = 880f;
+
+            GameObject goalsCaptionObj = new GameObject("GoalsCaption", typeof(RectTransform));
+            goalsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(goalsCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(halfMargin, goalsBlockTop), new Vector2(400f, 20f));
+            goalsCaptionObj.GetComponent<RectTransform>().pivot = new Vector2(0f, 1f);
+            ManagerUITheme.BuildLabel(goalsCaptionObj.transform, "GOALS", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            // Side-by-side columns (not stacked) - each list is self-labeled with its own
+            // team name (see PopulateGoalScorerLists) since position alone doesn't imply
+            // which team the way left-vs-right flanking across the whole screen used to.
+            // Kept compact (not the full available height) now that the big timeline below
+            // is the section's main visual - this is scannable detail, not the centerpiece.
+            const float scorersTop = goalsBlockTop - 34f;
+            const float scorersColumnGap = 40f;
+            const float scorersColumnWidth = (scorersWidth - scorersColumnGap) / 2f;
+            const float scorersBlockHeight = 140f;
 
             GameObject homeScorersObj = new GameObject("HomeScorers", typeof(RectTransform));
             homeScorersObj.transform.SetParent(matchdayPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(homeScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(-120f, scorersBlockTop), new Vector2(220f, scorersBlockHeight));
-            matchHomeScorersLabel = ManagerUITheme.BuildLabel(homeScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopRight, FontStyles.Normal, noWrap: false);
+            ManagerUITheme.SetPointAnchor(homeScorersObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(halfMargin, scorersTop), new Vector2(scorersColumnWidth, scorersBlockHeight));
+            homeScorersObj.GetComponent<RectTransform>().pivot = new Vector2(0f, 1f);
+            matchHomeScorersLabel = ManagerUITheme.BuildLabel(homeScorersObj.transform, "", 20, ManagerUITheme.TextPrimary, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
             if (footballIconSpriteAsset != null) matchHomeScorersLabel.spriteAsset = footballIconSpriteAsset;
-            // An unusually long one-sided scoreline can still need more lines than this
-            // box's height allows - autosizing shrinks the font to fit rather than
-            // overflowing into whatever sits below (Match Stats).
+            // An unusually long one-sided scoreline can still need more lines than this box
+            // allows - autosizing shrinks the font to fit rather than overflowing into the
+            // timeline below.
             matchHomeScorersLabel.enableAutoSizing = true;
-            matchHomeScorersLabel.fontSizeMin = 7;
-            matchHomeScorersLabel.fontSizeMax = 12;
+            matchHomeScorersLabel.fontSizeMin = 13;
+            matchHomeScorersLabel.fontSizeMax = 20;
 
             GameObject awayScorersObj = new GameObject("AwayScorers", typeof(RectTransform));
             awayScorersObj.transform.SetParent(matchdayPanel.transform, false);
-            ManagerUITheme.SetPointAnchor(awayScorersObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(120f, scorersBlockTop), new Vector2(220f, scorersBlockHeight));
-            matchAwayScorersLabel = ManagerUITheme.BuildLabel(awayScorersObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
+            ManagerUITheme.SetPointAnchor(awayScorersObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(halfMargin + scorersColumnWidth + scorersColumnGap, scorersTop), new Vector2(scorersColumnWidth, scorersBlockHeight));
+            awayScorersObj.GetComponent<RectTransform>().pivot = new Vector2(0f, 1f);
+            matchAwayScorersLabel = ManagerUITheme.BuildLabel(awayScorersObj.transform, "", 20, ManagerUITheme.TextPrimary, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
             if (footballIconSpriteAsset != null) matchAwayScorersLabel.spriteAsset = footballIconSpriteAsset;
             matchAwayScorersLabel.enableAutoSizing = true;
-            matchAwayScorersLabel.fontSizeMin = 7;
-            matchAwayScorersLabel.fontSizeMax = 12;
+            matchAwayScorersLabel.fontSizeMin = 13;
+            matchAwayScorersLabel.fontSizeMax = 20;
 
-            matchFullTimeOnlyElements = new List<GameObject> { homeScorersObj, awayScorersObj };
+            // Big full-width timeline - starts below BOTH the scorer lists above (left
+            // half) and Match Stats (right half, see the full-time repositioning block
+            // below, which ends around -550) so it never runs underneath either at any
+            // x-position, then has the whole rest of the panel down to the footer to work
+            // with. Bigger markers (26px, was 14) and a minute label on each one now that
+            // there's room, plus it spans corner-to-corner instead of being confined to the
+            // left half.
+            const float bigTimelineWidth = 1840f; // full 1920 width minus halfMargin each side
+            const float bigTimelineY = -730f;
+            matchGoalTimelineWidth = bigTimelineWidth;
+
+            GameObject timelineTrackObj = new GameObject("GoalTimelineTrack", typeof(RectTransform), typeof(Image));
+            timelineTrackObj.transform.SetParent(matchdayPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(timelineTrackObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(halfMargin, bigTimelineY), new Vector2(bigTimelineWidth, 4f));
+            timelineTrackObj.GetComponent<RectTransform>().pivot = new Vector2(0f, 0.5f);
+            timelineTrackObj.GetComponent<Image>().color = ManagerUITheme.BarTrack;
+
+            GameObject timelineMarkersObj = new GameObject("GoalTimelineMarkers", typeof(RectTransform));
+            timelineMarkersObj.transform.SetParent(matchdayPanel.transform, false);
+            matchGoalTimelineContainer = timelineMarkersObj.GetComponent<RectTransform>();
+            ManagerUITheme.SetPointAnchor(matchGoalTimelineContainer, new Vector2(0f, 1f), new Vector2(halfMargin, bigTimelineY), new Vector2(bigTimelineWidth, 4f));
+            matchGoalTimelineContainer.pivot = new Vector2(0f, 0.5f);
+
+            matchFullTimeOnlyElements = new List<GameObject> { goalsCaptionObj, timelineTrackObj, timelineMarkersObj, homeScorersObj, awayScorersObj };
+            goalsCaptionObj.SetActive(false);
+            timelineTrackObj.SetActive(false);
+            timelineMarkersObj.SetActive(false);
             homeScorersObj.SetActive(false);
             awayScorersObj.SetActive(false);
 
@@ -3357,6 +3491,29 @@ namespace Manager
                 // overflowing the hard RectMask2D clip at this size.
                 eventFeedText.fontSize = 19;
                 eventFeedText.lineSpacing = 14f;
+
+                // Live feed is now row-based (see AppendMatchEventRow) so each event gets
+                // its own bottom divider, matching the mockup's per-line
+                // "border-bottom:1px solid #1e2a3d" - eventFeedText itself is a
+                // pre-existing Inspector-wired SerializeField, kept in the hierarchy
+                // (still reparented/sized above) but disabled and never given text again,
+                // rather than touching its scene wiring.
+                eventFeedText.gameObject.SetActive(false);
+
+                GameObject feedRowsObj = new GameObject("EventFeedRows", typeof(RectTransform));
+                feedRowsObj.transform.SetParent(maskRect, false);
+                matchEventFeedContainer = feedRowsObj.GetComponent<RectTransform>();
+                matchEventFeedContainer.anchorMin = Vector2.zero;
+                matchEventFeedContainer.anchorMax = Vector2.one;
+                matchEventFeedContainer.offsetMin = Vector2.zero;
+                matchEventFeedContainer.offsetMax = Vector2.zero;
+
+                VerticalLayoutGroup feedLayout = feedRowsObj.AddComponent<VerticalLayoutGroup>();
+                feedLayout.childForceExpandWidth = true;
+                feedLayout.childForceExpandHeight = false;
+                feedLayout.childControlWidth = true;
+                feedLayout.childControlHeight = true;
+                feedLayout.spacing = 0f;
 
                 // Hidden entirely at full-time - the design moves the full event list to
                 // its own separate "Match Events" screen instead of showing it inline here.
@@ -3660,7 +3817,14 @@ namespace Manager
             barRect.anchorMax = new Vector2(1f, 0.5f);
             barRect.offsetMin = Vector2.zero;
             barRect.offsetMax = Vector2.zero;
-            ManagerUITheme.BuildBar(barRect, homeSharePct, ManagerUITheme.Accent, 6f);
+
+            // Real two-team comparison (green/red split at the home team's actual share),
+            // not just a single-color fill - managed-team-relative like the rest of this
+            // session's coloring work, not simply home=green/away=red.
+            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+            Color homeColor = managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger;
+            Color awayColor = managedIsHome ? ManagerUITheme.Danger : ManagerUITheme.Accent;
+            ManagerUITheme.BuildSplitBar(barRect, homeSharePct, homeColor, awayColor, 6f);
 
             return y + 36f;
         }
@@ -3753,7 +3917,17 @@ namespace Manager
             barsRect.offsetMin = Vector2.zero;
             barsRect.offsetMax = Vector2.zero;
 
-            ManagerUITheme.BuildBar(barsRect, 1f, ManagerUITheme.Accent, 6f);
+            // Real two-team comparison (e.g. 60/40 possession -> a 60% green / 40% red
+            // split, not a decorative always-full bar) - was previously hardcoded to
+            // pct=1f regardless of the actual values (confirmed live, user feedback).
+            // Managed-team-relative like the rest of this session's coloring work, not
+            // simply home=green/away=red.
+            int total = homeValue + awayValue;
+            float homeSharePct = total > 0 ? homeValue / (float)total : 0.5f;
+            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+            Color homeColor = managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger;
+            Color awayColor = managedIsHome ? ManagerUITheme.Danger : ManagerUITheme.Accent;
+            ManagerUITheme.BuildSplitBar(barsRect, homeSharePct, homeColor, awayColor, 6f);
 
             return y + 44f;
         }
@@ -4031,8 +4205,6 @@ namespace Manager
         // see ApplyLiveMentalityChangeIfMatchInProgress and isMatchCurrentlyLive below.
         private IEnumerator ReplayMatchCoroutine(AgentMatchSimulator.AgentMatchResult result)
         {
-            Queue<string> recentEventLines = new();
-
             skipToResultsRequested = false;
             tacticsBoardOpenedMidMatch = false;
             currentMatchMinute = 0;
@@ -4048,7 +4220,16 @@ namespace Manager
             // resimulation against stale leftover data from the previous match.
             isMatchCurrentlyLive = true;
 
-            if (eventFeedText != null) eventFeedText.text = "";
+            if (matchEventFeedContainer != null)
+            {
+                foreach (Transform child in matchEventFeedContainer)
+                {
+                    Destroy(child.gameObject);
+                }
+
+                matchEventFeedRows.Clear();
+            }
+
             if (scoreText != null) scoreText.text = "0 - 0";
             if (clockText != null) clockText.text = "0' LIVE";
 
@@ -4134,24 +4315,7 @@ namespace Manager
                     // Created should tick up on a stopped-before-shot attack too.
                     RefreshLiveMatchStats(homeShots, awayShots, homeShotsOnTarget, awayShotsOnTarget, homeAttackEvents, awayAttackEvents);
 
-                    if (eventFeedText != null)
-                    {
-                        // Goal lines get bolded and colored via TMP rich text (richText is
-                        // on by default) to match the design's treatment - everything else
-                        // stays the plain default color.
-                        string line = matchEvent.IsGoal
-                            ? $"<b><color=#3ddc84>{minute}' GOAL</color></b> · {matchEvent.Description}"
-                            : $"{minute}' {matchEvent.Description}";
-
-                        recentEventLines.Enqueue(line);
-
-                        while (recentEventLines.Count > maxVisibleEventLines)
-                        {
-                            recentEventLines.Dequeue();
-                        }
-
-                        eventFeedText.text = string.Join("\n", recentEventLines);
-                    }
+                    AppendMatchEventRow(minute, matchEvent);
                 }
             }
 
@@ -4197,30 +4361,21 @@ namespace Manager
             }
 
             PopulateGoalScorerLists(result);
+            PopulateGoalTimeline(result);
             lastMatchEvents = new List<AgentMatchSimulator.AgentMatchEvent>(result.Events);
 
-            // Recenter the stats panel into a single centered 520-wide column (matching
-            // the design) now that it doesn't need to share the row with anything else.
-            // Pushed down from its old position (viewEvents at -179/caption at -183/bars
-            // at -215) to make room for the goal-scorer lists, which moved from inside
-            // the header to just below it (see BuildMatchdayChrome's HomeScorers/
-            // AwayScorers) - previously just pinned near the top, leaving a large dead
-            // gap below it before the footer (confirmed live).
-            if (matchStatsCaptionRect != null)
-            {
-                // Must be matchStatsCaptionRect (the "MatchStatsCaption" container that's
-                // actually parented to the canvas), not matchStatsCaptionLabel.rectTransform
-                // (BuildLabel's inner "Label" child, whose anchors/position are relative to
-                // that container instead) - repositioning the child left the container
-                // behind at its original column position and produced a nonsense on-screen
-                // spot for the text, nowhere near the intended centered position.
-                RectTransform captionRect = matchStatsCaptionRect;
-                captionRect.anchorMin = new Vector2(0.5f, 1f);
-                captionRect.anchorMax = new Vector2(0.5f, 1f);
-                captionRect.pivot = new Vector2(0f, 1f);
-                captionRect.anchoredPosition = new Vector2(-260f, -324f);
-                captionRect.sizeDelta = new Vector2(240f, 20f);
-            }
+            // Match Stats + View Match Events move to the right half now that the goal
+            // timeline/scorer lists (see BuildMatchdayChrome) own the whole left half -
+            // previously both were recentered into one narrow column sharing the same
+            // dead-center space the (then-tiny) scorer labels also used. Right half starts
+            // right under the header since nothing else occupies that half above it anymore.
+            const float rightHalfMargin = 40f;
+            const float rightHalfTop = -(170f + 20f); // matches BuildMatchdayChrome's headerHeight (170) + goalsBlockTop's own offset
+            // Right half is anchor x 0.5-1.0 (960px at 1920-wide); this is its usable width
+            // with rightHalfMargin on both the center-side and the true right edge.
+            const float rightHalfWidth = 880f;
+            // Button's right edge lines up with the stats bars' own right edge below it.
+            const float rightEdgeOffset = rightHalfMargin + rightHalfWidth;
 
             if (viewMatchEventsButton != null)
             {
@@ -4228,8 +4383,24 @@ namespace Manager
                 viewEventsRect.anchorMin = new Vector2(0.5f, 1f);
                 viewEventsRect.anchorMax = new Vector2(0.5f, 1f);
                 viewEventsRect.pivot = new Vector2(1f, 1f);
-                viewEventsRect.anchoredPosition = new Vector2(260f, -320f);
+                viewEventsRect.anchoredPosition = new Vector2(rightEdgeOffset, rightHalfTop);
                 viewEventsRect.sizeDelta = new Vector2(220f, 32f);
+            }
+
+            if (matchStatsCaptionRect != null)
+            {
+                // Must be matchStatsCaptionRect (the "MatchStatsCaption" container that's
+                // actually parented to the canvas), not matchStatsCaptionLabel.rectTransform
+                // (BuildLabel's inner "Label" child, whose anchors/position are relative to
+                // that container instead) - repositioning the child left the container
+                // behind at its original column position and produced a nonsense on-screen
+                // spot for the text, nowhere near the intended position.
+                RectTransform captionRect = matchStatsCaptionRect;
+                captionRect.anchorMin = new Vector2(0.5f, 1f);
+                captionRect.anchorMax = new Vector2(0.5f, 1f);
+                captionRect.pivot = new Vector2(0f, 1f);
+                captionRect.anchoredPosition = new Vector2(rightHalfMargin, rightHalfTop - 50f);
+                captionRect.sizeDelta = new Vector2(360f, 20f);
             }
 
             if (matchStatsBarsContainer != null)
@@ -4237,11 +4408,13 @@ namespace Manager
                 matchStatsBarsContainer.anchorMin = new Vector2(0.5f, 1f);
                 matchStatsBarsContainer.anchorMax = new Vector2(0.5f, 1f);
                 matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
-                matchStatsBarsContainer.anchoredPosition = new Vector2(-260f, -356f);
-                // Grown from 150 (2 rows: Shots/Goals) to fit 5 rows (Possession/Chances
-                // Created/Shots/Shots on Target/Goals) plus the tactic-used line - each
-                // BuildFullTimeStatRow is 44 tall, so 5*44=220 plus room for the line.
-                matchStatsBarsContainer.sizeDelta = new Vector2(520f, 280f);
+                matchStatsBarsContainer.anchoredPosition = new Vector2(rightHalfMargin, rightHalfTop - 80f);
+                // Widened from 520 to the right half's real available width now that it's
+                // not sharing a centered column - BuildFullTimeStatRow's rows anchor
+                // (0,1)-(1,1) within this container, so they scale with it automatically,
+                // no other change needed. Height fits 5 rows (Possession/Chances Created/
+                // Shots/Shots on Target/Goals) at 44px each.
+                matchStatsBarsContainer.sizeDelta = new Vector2(rightHalfWidth, 280f);
             }
 
             ShowFullTimeMatchStats(
@@ -4257,6 +4430,59 @@ namespace Manager
             if (fullTimeContinueButton != null)
             {
                 fullTimeContinueButton.interactable = true;
+            }
+        }
+
+        // One row per live event, each with its own bottom divider - matches the mockup's
+        // Match Log treatment (per-line "border-bottom:1px solid #1e2a3d") instead of the
+        // old single text block with only line-spacing between events. Oldest row is
+        // dropped once matchEventFeedRows exceeds maxVisibleEventLines, same cap the old
+        // text-line queue used - since row count never exceeds that cap, total content
+        // height never exceeds what the feed's mask was already sized to fit, so newest is
+        // always visible without needing any scrolling logic.
+        private void AppendMatchEventRow(int minute, AgentMatchSimulator.AgentMatchEvent matchEvent)
+        {
+            if (matchEventFeedContainer == null)
+            {
+                return;
+            }
+
+            // Only the "N' GOAL" prefix is green for a goal - the description itself
+            // never mentions "goal" (see BuildGoalEventText), so an inline <color> tag
+            // around just the prefix, not the row's own base color, keeps the rest of the
+            // line in normal text color instead of washing the whole row green.
+            string line = matchEvent.IsGoal
+                ? $"<b><color=#3ddc84>{minute}' GOAL</color></b> · {matchEvent.Description}"
+                : $"{minute}' {matchEvent.Description}";
+
+            GameObject row = new GameObject("EventRow", typeof(RectTransform), typeof(LayoutElement));
+            row.transform.SetParent(matchEventFeedContainer, false);
+
+            LayoutElement rowLayout = row.GetComponent<LayoutElement>();
+            rowLayout.preferredHeight = 44f;
+            rowLayout.flexibleWidth = 1f;
+
+            TextMeshProUGUI rowLabel = ManagerUITheme.BuildLabel(row.transform, line, 19, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+            RectTransform rowLabelRect = rowLabel.GetComponent<RectTransform>();
+            rowLabelRect.offsetMin = new Vector2(0f, 6f);
+            rowLabelRect.offsetMax = Vector2.zero;
+
+            GameObject divider = new GameObject("Divider", typeof(RectTransform), typeof(Image));
+            divider.transform.SetParent(row.transform, false);
+            RectTransform dividerRect = divider.GetComponent<RectTransform>();
+            dividerRect.anchorMin = new Vector2(0f, 0f);
+            dividerRect.anchorMax = new Vector2(1f, 0f);
+            dividerRect.pivot = new Vector2(0.5f, 0f);
+            dividerRect.sizeDelta = new Vector2(0f, 1f);
+            dividerRect.anchoredPosition = Vector2.zero;
+            divider.GetComponent<Image>().color = ManagerUITheme.BarTrack;
+
+            matchEventFeedRows.Enqueue(row);
+
+            while (matchEventFeedRows.Count > maxVisibleEventLines)
+            {
+                GameObject oldRow = matchEventFeedRows.Dequeue();
+                if (oldRow != null) Destroy(oldRow);
             }
         }
 
@@ -4277,7 +4503,7 @@ namespace Manager
                 // Football icon TMP Sprite Asset, not the "·" placeholder this used before
                 // real art existed - matchHomeScorersLabel/matchAwayScorersLabel have
                 // footballIconSpriteAsset assigned where they're built.
-                string line = $"<size=60%><sprite name=\"football-icon\"></size> {evt.ScorerName} {evt.Minute}'\n";
+                string line = $"<size=60%><sprite name=\"football-icon\"></size> {evt.ScorerName}  {evt.Minute}'\n";
 
                 if (evt.HomeTeamScored)
                 {
@@ -4289,8 +4515,99 @@ namespace Manager
                 }
             }
 
-            if (matchHomeScorersLabel != null) matchHomeScorersLabel.text = homeList.TrimEnd('\n');
-            if (matchAwayScorersLabel != null) matchAwayScorersLabel.text = awayList.TrimEnd('\n');
+            // Each block is now self-labeled with its own team name - now that the two
+            // lists are stacked (not flanking left/right of center), position alone no
+            // longer tells you which team is which. A team with no goals gets no block at
+            // all rather than an empty header, rather than inventing a "no goals" line.
+            // Header color is managed-team-relative (green) vs opponent (red), not simply
+            // home/away - same `currentFixture.HomeTeam == managedTeamName` check used
+            // elsewhere (e.g. OnConfirmTeamClicked, matchStatsBarsContainer's possession
+            // math) so it stays correct on the (roughly half the time) away fixtures too.
+            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+            string homeTeamName = matchHomeNameLabel != null ? matchHomeNameLabel.text : "";
+            string awayTeamName = matchAwayNameLabel != null ? matchAwayNameLabel.text : "";
+            string homeHex = ColorUtility.ToHtmlStringRGB(managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger);
+            string awayHex = ColorUtility.ToHtmlStringRGB(managedIsHome ? ManagerUITheme.Danger : ManagerUITheme.Accent);
+
+            if (matchHomeScorersLabel != null)
+            {
+                matchHomeScorersLabel.text = homeList.Length > 0
+                    ? $"<b><color=#{homeHex}>{homeTeamName}</color></b>\n{homeList.TrimEnd('\n')}"
+                    : "";
+            }
+
+            if (matchAwayScorersLabel != null)
+            {
+                matchAwayScorersLabel.text = awayList.Length > 0
+                    ? $"<b><color=#{awayHex}>{awayTeamName}</color></b>\n{awayList.TrimEnd('\n')}"
+                    : "";
+            }
+        }
+
+        // Rebuilt per match (goal count varies) into the chrome-built matchGoalTimelineContainer
+        // (see BuildMatchdayChrome) - a marker per goal placed proportionally along the 0-90'
+        // track by real Minute, home above the line / away below it (mirrors the old
+        // left/right-flanking convention for scorer lists, just turned 90 degrees), now with
+        // the real minute printed next to each marker - the timeline is big enough for that to
+        // read cleanly since it moved to its own full-width band below everything else.
+        private void PopulateGoalTimeline(AgentMatchSimulator.AgentMatchResult result)
+        {
+            if (matchGoalTimelineContainer == null)
+            {
+                return;
+            }
+
+            for (int i = matchGoalTimelineContainer.childCount - 1; i >= 0; i--)
+            {
+                Destroy(matchGoalTimelineContainer.GetChild(i).gameObject);
+            }
+
+            const float markerSize = 26f;
+            // Marker sits a bit off the line, label sits further out beyond the marker -
+            // same above(home)/below(away) split as the marker itself.
+            const float markerOffset = 26f;
+            const float labelOffset = 54f;
+            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+
+            foreach (AgentMatchSimulator.AgentMatchEvent evt in result.Events)
+            {
+                if (!evt.IsGoal)
+                {
+                    continue;
+                }
+
+                float minuteFraction = Mathf.Clamp01(evt.Minute / 90f);
+                float x = minuteFraction * matchGoalTimelineWidth;
+                float sign = evt.HomeTeamScored ? 1f : -1f;
+
+                // Green for the managed team's own goals, red for the opponent's - same
+                // managed-team-relative convention as PopulateGoalScorerLists' headers,
+                // not simply home=green/away=red.
+                bool scoredByManagedTeam = evt.HomeTeamScored == managedIsHome;
+                Color markerColor = scoredByManagedTeam ? ManagerUITheme.Accent : ManagerUITheme.Danger;
+
+                GameObject marker = new GameObject($"GoalMarker_{evt.Minute}", typeof(RectTransform), typeof(Image));
+                marker.transform.SetParent(matchGoalTimelineContainer, false);
+
+                RectTransform markerRect = marker.GetComponent<RectTransform>();
+                markerRect.anchorMin = new Vector2(0f, 0.5f);
+                markerRect.anchorMax = new Vector2(0f, 0.5f);
+                markerRect.pivot = new Vector2(0.5f, 0.5f);
+                markerRect.sizeDelta = new Vector2(markerSize, markerSize);
+                markerRect.anchoredPosition = new Vector2(x, sign * markerOffset);
+                marker.GetComponent<Image>().color = markerColor;
+
+                GameObject label = new GameObject($"GoalMarkerMinute_{evt.Minute}", typeof(RectTransform));
+                label.transform.SetParent(matchGoalTimelineContainer, false);
+
+                RectTransform labelRect = label.GetComponent<RectTransform>();
+                labelRect.anchorMin = new Vector2(0f, 0.5f);
+                labelRect.anchorMax = new Vector2(0f, 0.5f);
+                labelRect.pivot = new Vector2(0.5f, 0.5f);
+                labelRect.sizeDelta = new Vector2(70f, 24f);
+                labelRect.anchoredPosition = new Vector2(x, sign * labelOffset);
+                ManagerUITheme.BuildLabel(label.transform, $"{evt.Minute}'", 15, markerColor, TextAlignmentOptions.Center, FontStyles.Bold);
+            }
         }
 
         public void OnFullTimeContinueClicked()
@@ -4551,8 +4868,11 @@ namespace Manager
                 layoutElement.preferredHeight = 38f;
                 layoutElement.flexibleWidth = 1f;
 
+                // Only the minute prefix is green for a goal - the description itself
+                // never mentions "goal" (see BuildGoalEventText), so wrapping the whole
+                // line in green read as over-highlighted (same fix as AppendMatchEventRow).
                 string text = evt.IsGoal
-                    ? $"<b><color=#3ddc84>{evt.Minute}'</color></b>   <b><color=#3ddc84>{evt.Description}</color></b>"
+                    ? $"<b><color=#3ddc84>{evt.Minute}'</color></b>   {evt.Description}"
                     : $"{evt.Minute}'   {evt.Description}";
 
                 ManagerUITheme.BuildLabel(row.transform, text, 19, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
@@ -4575,10 +4895,39 @@ namespace Manager
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
 
             AgentTeam newTeam = squadGenerator.GenerateSquad(teamName, strength.AttackStrength, strength.DefenceStrength);
+            ApplyDeveloperEasterEggPlayer(newTeam);
 
             squadsByTeamName[teamName] = newTeam;
 
             return newTeam;
+        }
+
+        // Developer easter egg (Manager Mode only, purely cosmetic) - deliberately kept
+        // out of AgentSquadGenerator.cs entirely, since that generator is shared with
+        // Research Mode's ResearchEvaluationRunner. Special-casing anything inside the
+        // generation loop itself would shift the RNG draw sequence and silently change
+        // every other generated player's stats too (the same risk flagged when GK stats
+        // were discussed earlier this session). Applied strictly *after* GenerateSquad
+        // returns, overwriting only Name/Age/Height on one already-generated player -
+        // attributes/Overall are whatever normal generation rolled, untouched.
+        private void ApplyDeveloperEasterEggPlayer(AgentTeam team)
+        {
+            if (team.TeamName != "Arsenal")
+            {
+                return;
+            }
+
+            PlayerAgent target = team.StartingEleven.Find(p => p.PrimaryPosition == PlayerPosition.ST)
+                ?? team.Bench.Find(p => p.PrimaryPosition == PlayerPosition.ST);
+
+            if (target == null)
+            {
+                return;
+            }
+
+            target.Name = "Hidde Rietberg";
+            target.Age = 25;
+            target.Height = 183f;
         }
     }
 }
