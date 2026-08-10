@@ -146,6 +146,8 @@ namespace Manager
         private readonly Dictionary<string, AgentTeam> squadsByTeamName = new();
         private readonly Dictionary<string, ManagerSquadRoles> squadRolesByTeamName = new();
         private readonly ManagerScouting scouting = new();
+        private readonly ManagerAcademy academy = new();
+        private readonly ManagerLoanTracker loanTracker = new();
         private readonly ManagerClubFinance finance = new();
         private readonly ManagerCareerHistory careerHistory = new();
         private SeasonRecord lastSeasonRecord;
@@ -214,9 +216,6 @@ namespace Manager
         private RectTransform matchdayPrepPitchContainer;
 
         private bool hubChromeBuilt;
-        private TextMeshProUGUI hubClubNameLabel;
-        private TextMeshProUGUI hubBylineLabel;
-        private Coroutine hubBylineRecreateCoroutine;
 
         // --- Season loop (career-arc addition, replaces the old dead end where fixtures
         // just ran out and Next Matchday/Simulate Season quietly disabled forever) ---
@@ -246,7 +245,7 @@ namespace Manager
         // possible entry points now that the Squad list screen exists alongside the
         // Tactics Board and the Hub (row-tapped-from-Squad-list vs pin-tapped-from-board
         // need different return screens, and Hub is the fallback for any other caller).
-        private enum PlayerInspectReturnTarget { Hub, TacticsBoard, Squad }
+        private enum PlayerInspectReturnTarget { Hub, TacticsBoard, Squad, Scouting, TransferMarket }
         private PlayerInspectReturnTarget playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
 
         // --- Squad list (read-only Pos/Player/OVR/Rating browse screen, reached from a
@@ -271,8 +270,11 @@ namespace Manager
         private float lastRawExpectedAwayGoals;
 
         // Starting XI followed by Bench, built fresh each time the inspect screen opens.
+        // Overridden to an arbitrary browse list (Scouting/Transfer Market) via
+        // OpenPlayerInspect's browseList param - see its comment.
         private List<PlayerAgent> inspectSquadPlayers = new();
         private int inspectPlayerIndex;
+        private bool inspectIsOwnSquad = true;
 
         // --- Substitutions: pre-match subs happen on the Tactics Board (drag a bench
         // card onto a pin - see OnBenchPlayerDroppedOnPin). Mid-match subs now reuse the
@@ -769,54 +771,6 @@ namespace Manager
                 fresh.raycastTarget = false;
                 fresh.ForceMeshUpdate();
             }
-        }
-
-        // See RefreshHubUI's call site. hubBylineLabel is a class field (reassigned
-        // repeatedly across the session, unlike the one-shot local labels the other
-        // recovery coroutines handle), so this reassigns it to the fresh component
-        // rather than leaving the field pointing at the destroyed one.
-        // WaitForEndOfFrame rather than a plain "yield return null" - the coroutine-
-        // race fix (StopCoroutine before restarting) cut this down a lot but didn't
-        // fully eliminate a fainter version of the same overlap (confirmed live).
-        // "yield return null" resumes at the START of the next Update, before that
-        // frame's render pass - if the old label's draw call was already queued for
-        // THIS frame by the time the destroy/recreate runs, the stale glyph can still
-        // get composited once more. Waiting for the actual end of the frame instead
-        // means the destroy/recreate always happens strictly after a render, so the
-        // freshly rebuilt mesh has a full frame to settle before it's ever drawn.
-        private IEnumerator RecreateHubBylineLabelNextFrame()
-        {
-            yield return new WaitForEndOfFrame();
-
-            if (hubBylineLabel == null)
-            {
-                yield break;
-            }
-
-            GameObject labelObject = hubBylineLabel.gameObject;
-            string text = hubBylineLabel.text;
-            float fontSize = hubBylineLabel.fontSize;
-            Color color = hubBylineLabel.color;
-            TextAlignmentOptions alignment = hubBylineLabel.alignment;
-            FontStyles fontStyle = hubBylineLabel.fontStyle;
-            float characterSpacing = hubBylineLabel.characterSpacing;
-            TMP_FontAsset font = hubBylineLabel.font;
-
-            DestroyImmediate(hubBylineLabel);
-
-            TextMeshProUGUI fresh = labelObject.AddComponent<TextMeshProUGUI>();
-            fresh.font = font;
-            fresh.text = text;
-            fresh.fontSize = fontSize;
-            fresh.color = color;
-            fresh.alignment = alignment;
-            fresh.fontStyle = fontStyle;
-            fresh.characterSpacing = characterSpacing;
-            fresh.raycastTarget = false;
-            fresh.ForceMeshUpdate();
-
-            hubBylineLabel = fresh;
-            hubBylineRecreateCoroutine = null;
         }
 
         public void OnTitleNewCareerClicked()
@@ -1426,12 +1380,12 @@ namespace Manager
             GameObject nameObj = new GameObject("ClubName", typeof(RectTransform));
             nameObj.transform.SetParent(seasonHubPanel.transform, false);
             ManagerUITheme.SetPointAnchor(nameObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(nameLeft, -headerTop), new Vector2(600f, 36f));
-            hubClubNameLabel = ManagerUITheme.BuildLabel(nameObj.transform, "", 32, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(nameObj.transform, "", 32, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject bylineObj = new GameObject("Byline", typeof(RectTransform));
             bylineObj.transform.SetParent(seasonHubPanel.transform, false);
             ManagerUITheme.SetPointAnchor(bylineObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(nameLeft, -(headerTop + 38f)), new Vector2(600f, 20f));
-            hubBylineLabel = ManagerUITheme.BuildLabel(bylineObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            ManagerUITheme.BuildLabel(bylineObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
 
             if (simulateSeasonButton != null)
             {
@@ -1582,37 +1536,43 @@ namespace Manager
             StartCoroutine(RecoverBlankLabelsNextFrame(seasonHubPanel.transform));
         }
 
+        // Session 9 bug fix: hubClubNameLabel/hubBylineLabel used to be cached fields,
+        // assigned once in BuildHubChrome and reused here on every refresh. Confirmed
+        // live to break permanently after the very first matchday - the byline got
+        // stuck reading "Matchday 1" forever while the league table correctly advanced
+        // to 21+ games played. Root cause: RecoverBlankLabelsNextFrame(seasonHubPanel.
+        // transform), the general blank-label recovery sweep also called from this
+        // screen, silently destroys and recreates any TMP label under the Hub panel
+        // that came out blank (a real, if rare, TMP mesh-generation glitch - see that
+        // method's own header comment) without knowing to update either cached field
+        // to point at the new component. Once that happened, hubBylineLabel != null
+        // simply failed forever after, silently skipping the update block entirely -
+        // confirmed via a diagnostic log showing hubBylineLabel null on the very next
+        // refresh after the first one. A previous fix attempt (an unconditional async
+        // destroy+recreate coroutine every refresh, specifically to keep this field
+        // valid) had exactly the failure this replaced: it just moved the same "who
+        // recreates it last" race somewhere else instead of removing it. Looking these
+        // two up fresh by path every refresh - cheap, this isn't a hot path - sidesteps
+        // the whole "stale cached reference to something another mechanism can destroy"
+        // problem class entirely, no coroutine required.
         private void RefreshHubUI()
         {
-            if (hubClubNameLabel != null)
+            TextMeshProUGUI clubNameLabel = seasonHubPanel != null
+                ? seasonHubPanel.transform.Find("ClubName/Label")?.GetComponent<TextMeshProUGUI>()
+                : null;
+            TextMeshProUGUI bylineLabel = seasonHubPanel != null
+                ? seasonHubPanel.transform.Find("Byline/Label")?.GetComponent<TextMeshProUGUI>()
+                : null;
+
+            if (clubNameLabel != null)
             {
-                hubClubNameLabel.text = managedTeamName.ToUpperInvariant();
+                clubNameLabel.text = managedTeamName.ToUpperInvariant();
             }
 
-            if (hubBylineLabel != null)
+            if (bylineLabel != null)
             {
-                hubBylineLabel.text = $"Manager {managerName}   ·   Matchday {currentFixtureIndex + 1}";
-
-                // Same family of TMP mesh-generation flakiness as the blank-label bug
-                // (see RecoverBlankLabelNextFrame) - here it showed up as the OLD glyph
-                // mesh not being cleared, so old and new text render overlapped on top
-                // of each other (confirmed live, after the first matchday). Unlike the
-                // blank case there's no reliable characterCount check to detect it, so
-                // this just unconditionally destroys+recreates the label every refresh
-                // rather than trying to detect the failure first - cheap, since this
-                // only runs when returning to the Hub, not on a hot path.
-                // Must stop any coroutine already in flight from a PREVIOUS RefreshHubUI
-                // call first - without this, returning to the Hub again before the prior
-                // one-frame wait elapsed (confirmed live to happen by matchday 5) started
-                // a second recreate on top of the first, and the two destroy/recreate
-                // cycles racing each other is exactly what produced the overlapping text,
-                // not a one-off fluke.
-                if (hubBylineRecreateCoroutine != null)
-                {
-                    StopCoroutine(hubBylineRecreateCoroutine);
-                }
-
-                hubBylineRecreateCoroutine = StartCoroutine(RecreateHubBylineLabelNextFrame());
+                bylineLabel.text = $"Manager {managerName}   ·   Matchday {currentFixtureIndex + 1}";
+                bylineLabel.ForceMeshUpdate();
             }
 
             bool hasNextFixture = currentFixtureIndex < managedTeamFixtures.Count;
@@ -1888,6 +1848,10 @@ namespace Manager
             // ResetForNewSeason wipes them below - order matters here.
             ApplyPlayerDevelopmentAndRetirements();
 
+            // Loan system (session 9) - fixed-duration loans (per Thomas: until end of
+            // season, no manual recall), so every active loan returns right here.
+            ReturnLoanedPlayersForNewSeason();
+
             DeductManagedTeamWageBill();
 
             playableTable.Reset();
@@ -1895,6 +1859,14 @@ namespace Manager
             {
                 playableTable.EnsureTeam(teamRegistry.GetTeamId(teamName));
             }
+
+            // Bug fix (session 9, live bug report): playableTable.Reset() above clears
+            // PL/GD/PTS for the new season, but recentFormByTeamId was never cleared
+            // alongside it - a club continuing into the new season kept showing last
+            // season's Form strip (slowly overwritten 5 results at a time) while any
+            // club new to this season's fixture file correctly showed blank, making the
+            // mismatch obvious side-by-side.
+            recentFormByTeamId.Clear();
 
             currentFixtureIndex = 0;
             simulatedMatchdays.Clear();
@@ -1935,12 +1907,19 @@ namespace Manager
             // them yet - procrastinate and a hidden wonderkid becomes obviously great
             // (and obviously expensive) by the time you finally look, real tension for
             // the "discover them early" fantasy.
-            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            foreach (string region in scouting.GetPoolRegions())
             {
-                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(teamName, squadGenerator, 1f, 1f))
+                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(region, squadGenerator))
                 {
                     player.Age += 1;
                 }
+            }
+
+            // Youth academy (session 9) - same "keeps developing whether or not you're
+            // watching" reasoning as the scouting pool above.
+            foreach (PlayerAgent player in academy.GetAcademyPoolForAging())
+            {
+                player.Age += 1;
             }
 
             List<TextAsset> seasonFilePool = new List<TextAsset>();
@@ -1996,6 +1975,12 @@ namespace Manager
         private const float AssumedPlayingTimeFactorUncalledReserve = 0.15f;
         private const float AssumedPlayingTimeFactorYouthProspect = 0.1f;
 
+        // Higher than the AI-first-team assumption above - the whole point of a loan
+        // (session 9) is escaping a bench role for regular minutes elsewhere, which
+        // this game doesn't simulate match-by-match, so the assumption reflects that
+        // intent directly.
+        private const float AssumedPlayingTimeFactorOnLoan = 0.8f;
+
         private void ApplyPlayerDevelopmentAndRetirements()
         {
             foreach (KeyValuePair<string, AgentTeam> entry in squadsByTeamName)
@@ -2007,11 +1992,24 @@ namespace Manager
 
                 foreach (PlayerAgent player in team.Players)
                 {
-                    float playingTimeFactor = isManagedTeam
-                        ? Mathf.Clamp01(roles.GetAppearancesThisSeason(player) / 25f)
-                        : AssumedPlayingTimeFactorAiFirstTeam;
+                    if (isManagedTeam)
+                    {
+                        // Growth/decline already happened via ApplyMatchdayProgression
+                        // ticks all season (see ApplyMatchdayConditionAndInjuries) - only
+                        // erosion (a real season-end verdict, not something to tick per
+                        // match, see ApplySeasonEndErosion's comment) and the delta-badge
+                        // snapshot/finalize pair still happen here.
+                        float seasonPlayingTimeFactor = Mathf.Clamp01(roles.GetAppearancesThisSeason(player) / 25f);
 
-                    ManagerPlayerDevelopment.ApplySeasonProgression(player, playingTimeFactor);
+                        ManagerPlayerDevelopment.FinalizeSeasonDelta(player);
+                        ManagerPlayerDevelopment.ApplySeasonEndErosion(player, seasonPlayingTimeFactor);
+                        ManagerPlayerDevelopment.ApplySeasonEndNoiseIfPrimeAge(player);
+                        ManagerPlayerDevelopment.SnapshotSeasonStart(player);
+                    }
+                    else
+                    {
+                        ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorAiFirstTeam);
+                    }
                 }
 
                 ApplyRetirementsForTeam(teamName, team);
@@ -2027,11 +2025,43 @@ namespace Manager
 
             // Unsigned youth prospects (session 8, Phase 2) - no real matches at all, so
             // the lowest playing-time assumption of any pool.
-            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            foreach (string region in scouting.GetPoolRegions())
             {
-                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(teamName, squadGenerator, 1f, 1f))
+                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(region, squadGenerator))
                 {
                     ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect);
+                }
+            }
+
+            // Youth academy (session 9) - same reasoning/rate as unsigned youth
+            // prospects above; reuses ManagerPlayerDevelopment's existing Potential/
+            // growth system completely unchanged, exactly as agreed when this was
+            // first floated, so academy kids visibly grow before they're even
+            // promotion-eligible.
+            foreach (PlayerAgent player in academy.GetAcademyPoolForAging())
+            {
+                ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect);
+            }
+        }
+
+        // Loan system (session 9) - a loaned player isn't in ANY team's Players list
+        // right now (removed from the squad entirely by OnLoanOutClicked), so they're
+        // untouched by AgeAndReloadFixturesForNewSeason and the per-team loop above -
+        // aged and developed here instead, then handed back to their origin squad's
+        // Bench (not Starting XI - they need to earn that back, same as any other
+        // returning/newly-available player).
+        private void ReturnLoanedPlayersForNewSeason()
+        {
+            List<ManagerLoanTracker.LoanRecord> returned = loanTracker.ReturnAllLoansForNewSeason();
+
+            foreach (ManagerLoanTracker.LoanRecord loan in returned)
+            {
+                loan.Player.Age += 1;
+                ManagerPlayerDevelopment.ApplySeasonProgression(loan.Player, AssumedPlayingTimeFactorOnLoan);
+
+                if (squadsByTeamName.TryGetValue(loan.OriginTeamName, out AgentTeam originTeam))
+                {
+                    originTeam.AddBenchPlayer(loan.Player);
                 }
             }
         }
@@ -2153,6 +2183,23 @@ namespace Manager
                 foreach (PlayerAgent p in reserves) data.ManagedReservePool.Add(PlayerAgentSaveData.FromPlayer(p));
             }
 
+            // Loan system (session 9) - see ManagerSaveData.LoanedOutPlayers' comment.
+            // Only the managed team ever loans a player out in this scope, so no other
+            // club's loans need saving.
+            foreach (ManagerLoanTracker.LoanRecord loan in loanTracker.ActiveLoans)
+            {
+                if (loan.OriginTeamName == managedTeamName)
+                {
+                    data.LoanedOutPlayers.Add(PlayerAgentSaveData.FromPlayer(loan.Player));
+                }
+            }
+
+            // Youth academy (session 9) - see ManagerSaveData.AcademyPool's comment.
+            foreach (PlayerAgent academyProspect in academy.GetAcademyPoolForAging())
+            {
+                data.AcademyPool.Add(PlayerAgentSaveData.FromPlayer(academyProspect));
+            }
+
             foreach (LeagueTable.Entry entry in playableTable.Sorted())
             {
                 data.TableEntries.Add(new LeagueTableEntrySaveData
@@ -2180,11 +2227,11 @@ namespace Manager
                 });
             }
 
-            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            foreach (string region in scouting.GetPoolRegions())
             {
-                YouthPoolSaveData poolData = new YouthPoolSaveData { TeamName = teamName };
+                YouthPoolSaveData poolData = new YouthPoolSaveData { Region = region };
 
-                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(teamName, squadGenerator, 1f, 1f))
+                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(region, squadGenerator))
                 {
                     poolData.Prospects.Add(PlayerAgentSaveData.FromPlayer(prospect));
 
@@ -2221,6 +2268,12 @@ namespace Manager
             {
                 playableTable.EnsureTeam(teamRegistry.GetTeamId(teamName));
             }
+
+            // recentFormByTeamId isn't part of the save DTO (same documented scope limit
+            // as condition/injuries/appearances not persisting), so clear it here too -
+            // otherwise a loaded career could show pre-save Form strips that no longer
+            // correspond to anything in the restored fixture list.
+            recentFormByTeamId.Clear();
             foreach (LeagueTableEntrySaveData entry in data.TableEntries)
             {
                 playableTable.SetEntry(entry.TeamId, entry.Played, entry.Wins, entry.Draws, entry.Losses, entry.GoalsFor, entry.GoalsAgainst, entry.Points);
@@ -2230,6 +2283,8 @@ namespace Manager
             reservePoolByTeamName.Clear();
             squadRolesByTeamName.Clear();
             simulatedMatchdays.Clear();
+            loanTracker.Clear();
+            academy.Clear();
 
             AgentTeam managedTeam = data.ManagedSquad.ToTeam();
             squadsByTeamName[managedTeamName] = managedTeam;
@@ -2240,6 +2295,29 @@ namespace Manager
             List<PlayerAgent> restoredReserves = new();
             foreach (PlayerAgentSaveData dto in data.ManagedReservePool) restoredReserves.Add(dto.ToPlayer());
             reservePoolByTeamName[managedTeamName] = restoredReserves;
+
+            // Loan system (session 9) - re-register each restored player as on loan
+            // (SendOnLoan rolls a fresh destination flavor name, harmless since it was
+            // never saved - cosmetic only) rather than adding them back to
+            // managedTeam.Players, since they're still out on loan in the loaded save.
+            foreach (PlayerAgentSaveData dto in data.LoanedOutPlayers)
+            {
+                loanTracker.SendOnLoan(dto.ToPlayer(), managedTeamName);
+            }
+
+            // Youth academy (session 9) - only restore if the pool was actually
+            // generated before saving (data.AcademyPool.Count > 0). If the player never
+            // opened the Academy tab this career, nothing was ever generated to save -
+            // restoring an EMPTY list here would still mark the pool as "already
+            // created" (GetOrCreateAcademyPool's null-check would never trigger again),
+            // permanently freezing it at zero prospects instead of lazily generating
+            // fresh ones the first time it's actually opened after loading.
+            if (data.AcademyPool.Count > 0)
+            {
+                List<PlayerAgent> restoredAcademy = new();
+                foreach (PlayerAgentSaveData dto in data.AcademyPool) restoredAcademy.Add(dto.ToPlayer());
+                academy.RestoreAcademyPool(restoredAcademy);
+            }
 
             ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
             ManagerSquadRolesSaveData rolesData = data.ManagedRoles;
@@ -2299,7 +2377,7 @@ namespace Manager
                     }
                 }
 
-                scouting.RestoreYouthPool(poolData.TeamName, pool);
+                scouting.RestoreYouthPool(poolData.Region, pool);
             }
 
             seasonEndRewardsAppliedForCurrentSeason = true;
@@ -2358,7 +2436,18 @@ namespace Manager
         // reference would silently start writing to the dead original. Confirmed live
         // (Thomas: byline stuck at "0/2" while the per-row status text updated fine).
         private GameObject scoutingBylineObj;
-        private readonly Dictionary<PlayerAgent, string> scoutingProspectClubs = new();
+
+        // Sortable columns (session 9 - Thomas: "click OVR to sort high to low").
+        // -1 = no explicit sort (original generation order). First click on any column
+        // defaults to descending (matches "high to low" as the expected first click for
+        // a numeric column); clicking the same column again toggles direction.
+        private int scoutingSortColumn = -1;
+        private bool scoutingSortDescending = true;
+
+        // Youth academy tab (session 9) - shares this screen/list with World Scouting.
+        private Button scoutingAcademyTabButton;
+        private Button scoutingWorldTabButton;
+        private bool scoutingShowingAcademyTab;
 
         public void OnOpenScoutingClicked()
         {
@@ -2368,9 +2457,23 @@ namespace Manager
                 scoutingChromeBuilt = true;
             }
 
+            scoutingShowingAcademyTab = false;
+
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (scoutingPanel != null) scoutingPanel.SetActive(true);
 
+            RefreshScoutingUI();
+        }
+
+        private void OnScoutingWorldTabClicked()
+        {
+            scoutingShowingAcademyTab = false;
+            RefreshScoutingUI();
+        }
+
+        private void OnScoutingAcademyTabClicked()
+        {
+            scoutingShowingAcademyTab = true;
             RefreshScoutingUI();
         }
 
@@ -2415,6 +2518,18 @@ namespace Manager
             Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(200f, 36f));
             backButton.onClick.AddListener(OnScoutingBackClicked);
+
+            // Youth academy (session 9) - same tab-toggle pattern as Transfer Market's
+            // Buy/Sell (see BuildTransferMarketChrome), sharing this one screen/list
+            // rather than building an entire second panel from scratch for what's
+            // thematically the same "discover/develop young players" concern.
+            scoutingAcademyTabButton = ManagerUITheme.BuildButton(header.transform, "ACADEMY", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(scoutingAcademyTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-276f, -27f), new Vector2(120f, 36f));
+            scoutingAcademyTabButton.onClick.AddListener(OnScoutingAcademyTabClicked);
+
+            scoutingWorldTabButton = ManagerUITheme.BuildButton(header.transform, "WORLD SCOUTING", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
+            ManagerUITheme.SetPointAnchor(scoutingWorldTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-406f, -27f), new Vector2(170f, 36f));
+            scoutingWorldTabButton.onClick.AddListener(OnScoutingWorldTabClicked);
 
             const float contentWidth = 1600f;
             const float sideMargin = (1920f - contentWidth) / 2f;
@@ -2505,19 +2620,45 @@ namespace Manager
                 return;
             }
 
-            scoutingProspectClubs.Clear();
+            if (scoutingWorldTabButton != null && scoutingWorldTabButton.TryGetComponent(out Image worldImage))
+            {
+                worldImage.color = !scoutingShowingAcademyTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(scoutingWorldTabButton, "WORLD SCOUTING", !scoutingShowingAcademyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
+            if (scoutingAcademyTabButton != null && scoutingAcademyTabButton.TryGetComponent(out Image academyImage))
+            {
+                academyImage.color = scoutingShowingAcademyTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(scoutingAcademyTabButton, "ACADEMY", scoutingShowingAcademyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
+            scoutingListView.Clear();
+
+            if (scoutingShowingAcademyTab)
+            {
+                RefreshAcademyUI();
+            }
+            else
+            {
+                RefreshWorldScoutingUI();
+            }
+        }
+
+        private void RefreshWorldScoutingUI()
+        {
             List<PlayerAgent> allProspects = new List<PlayerAgent>();
 
-            foreach (string teamName in availableTeamNames)
+            // World-scattered rework (session 9) - unaffiliated free agents pooled by
+            // region (see ManagerScouting), not tied to any real Premier League club.
+            foreach (string region in ManagerPlayerNationality.AllRegions)
             {
-                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
-                List<PlayerAgent> pool = scouting.GetOrCreateYouthPool(teamName, squadGenerator, strength.AttackStrength, strength.DefenceStrength);
+                List<PlayerAgent> pool = scouting.GetOrCreateYouthPool(region, squadGenerator);
+                allProspects.AddRange(pool);
+            }
 
-                foreach (PlayerAgent prospect in pool)
-                {
-                    scoutingProspectClubs[prospect] = teamName;
-                    allProspects.Add(prospect);
-                }
+            if (scoutingSortColumn >= 0)
+            {
+                allProspects.Sort((a, b) => CompareScoutingColumn(a, b, scoutingSortColumn, scoutingSortDescending));
             }
 
             if (scoutingBylineObj != null)
@@ -2529,12 +2670,11 @@ namespace Manager
                 }
             }
 
-            scoutingListView.Clear();
-            scoutingListView.AddCustomGridHeaderRow(ScoutingColumnHeaders, ScoutingColumnFractions);
+            scoutingListView.AddCustomGridHeaderRow(ScoutingColumnHeaders, ScoutingColumnFractions, OnScoutingColumnHeaderClicked, scoutingSortColumn, scoutingSortDescending);
 
             foreach (PlayerAgent prospect in allProspects)
             {
-                string club = scoutingProspectClubs.TryGetValue(prospect, out string teamName) ? teamName : "?";
+                string nation = ManagerPlayerNationality.GetNationality(prospect).Name;
                 string status = scouting.IsScouted(prospect) ? "<color=#3ddc84>SCOUTED</color>"
                     : scouting.IsAssigned(prospect) ? "<color=#e8c547>SCOUTING...</color>"
                     : "";
@@ -2544,23 +2684,170 @@ namespace Manager
                     prospect.Name,
                     prospect.PrimaryPosition.ToString(),
                     prospect.Age.ToString(),
-                    club,
+                    nation,
                     prospect.GetOverallRating().ToString("F0"),
                     scouting.GetDisplayPotential(prospect),
                     status
                 };
 
-                scoutingListView.AddCustomGridRow(prospect, cells, ScoutingColumnFractions, OnScoutingProspectClicked);
+                scoutingListView.AddCustomGridRow(prospect, cells, ScoutingColumnFractions, OnScoutingProspectClicked,
+                    onNameClicked: p => OpenScoutedProspectDetail(p, allProspects));
             }
         }
 
-        private static readonly string[] ScoutingColumnHeaders = { "PROSPECT", "POS", "AGE", "CLUB", "OVR", "POTENTIAL", "STATUS" };
+        private static readonly string[] ScoutingColumnHeaders = { "PROSPECT", "POS", "AGE", "NATION", "OVR", "POTENTIAL", "STATUS" };
         private static readonly float[] ScoutingColumnFractions = { 0.20f, 0.07f, 0.07f, 0.22f, 0.09f, 0.14f, 0.21f };
+
+        // Youth academy (session 9) - "grew them myself," complementary to World
+        // Scouting's "found them abroad" (see ManagerAcademy). Deliberately no sortable
+        // headers here (only 5 slots - sorting adds little for a list that short) and
+        // no NATION column (they're your own kids, not a scouted discovery).
+        private void RefreshAcademyUI()
+        {
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+            List<PlayerAgent> pool = academy.GetOrCreateAcademyPool(squadGenerator, strength.AttackStrength, strength.DefenceStrength);
+
+            if (scoutingBylineObj != null)
+            {
+                TextMeshProUGUI bylineTMP = scoutingBylineObj.GetComponentInChildren<TextMeshProUGUI>();
+                if (bylineTMP != null)
+                {
+                    bylineTMP.text = $"{ManagerAcademy.AcademySlots} academy prospects   ·   promotable to reserves at age {ManagerAcademy.PromotionAge}   ·   click a promotable prospect to promote";
+                }
+            }
+
+            scoutingListView.AddCustomGridHeaderRow(AcademyColumnHeaders, AcademyColumnFractions);
+
+            foreach (PlayerAgent prospect in pool)
+            {
+                bool promotable = academy.CanPromote(prospect);
+                string status = promotable ? "<color=#3ddc84>PROMOTABLE</color>" : "DEVELOPING";
+
+                string[] cells =
+                {
+                    prospect.Name,
+                    prospect.PrimaryPosition.ToString(),
+                    prospect.Age.ToString(),
+                    prospect.GetOverallRating().ToString("F0"),
+                    scouting.GetDisplayPotential(prospect),
+                    status
+                };
+
+                scoutingListView.AddCustomGridRow(prospect, cells, AcademyColumnFractions, OnAcademyProspectClicked,
+                    onNameClicked: p => OpenAcademyProspectDetail(p, pool));
+            }
+        }
+
+        private static readonly string[] AcademyColumnHeaders = { "PROSPECT", "POS", "AGE", "OVR", "POTENTIAL", "STATUS" };
+        private static readonly float[] AcademyColumnFractions = { 0.24f, 0.10f, 0.10f, 0.12f, 0.18f, 0.26f };
+
+        private void OnAcademyProspectClicked(PlayerAgent prospect)
+        {
+            if (academy.TryPromoteToReserves(prospect))
+            {
+                if (!reservePoolByTeamName.TryGetValue(managedTeamName, out List<PlayerAgent> reserves))
+                {
+                    reserves = new List<PlayerAgent>();
+                    reservePoolByTeamName[managedTeamName] = reserves;
+                }
+
+                reserves.Add(prospect);
+            }
+
+            RefreshScoutingUI();
+        }
+
+        private void OpenAcademyProspectDetail(PlayerAgent prospect, List<PlayerAgent> browseList)
+        {
+            playerInspectReturnTarget = PlayerInspectReturnTarget.Scouting;
+            OpenPlayerInspect(prospect, browseList, ownSquad: false);
+        }
+
+        private void OnScoutingColumnHeaderClicked(int column)
+        {
+            if (scoutingSortColumn == column)
+            {
+                scoutingSortDescending = !scoutingSortDescending;
+            }
+            else
+            {
+                scoutingSortColumn = column;
+                scoutingSortDescending = true;
+            }
+
+            RefreshScoutingUI();
+        }
+
+        // Column indices match ScoutingColumnHeaders. Potential sorts by the same
+        // fuzzy-band display string an unscouted prospect already shows (see
+        // ManagerScouting.GetDisplayPotential) rather than the true hidden value -
+        // sorting shouldn't leak information scouting itself hasn't revealed yet.
+        private int CompareScoutingColumn(PlayerAgent a, PlayerAgent b, int column, bool descending)
+        {
+            int result;
+            switch (column)
+            {
+                case 0:
+                    result = string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 1:
+                    result = string.Compare(a.PrimaryPosition.ToString(), b.PrimaryPosition.ToString(), StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 2:
+                    result = a.Age.CompareTo(b.Age);
+                    break;
+                case 3:
+                    string nationA = ManagerPlayerNationality.GetNationality(a).Name;
+                    string nationB = ManagerPlayerNationality.GetNationality(b).Name;
+                    result = string.Compare(nationA, nationB, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 4:
+                    result = a.GetOverallRating().CompareTo(b.GetOverallRating());
+                    break;
+                case 5:
+                    result = GetScoutingPotentialSortKey(a).CompareTo(GetScoutingPotentialSortKey(b));
+                    break;
+                case 6:
+                    result = GetScoutingStatusSortKey(a).CompareTo(GetScoutingStatusSortKey(b));
+                    break;
+                default:
+                    result = 0;
+                    break;
+            }
+
+            return descending ? -result : result;
+        }
+
+        private float GetScoutingPotentialSortKey(PlayerAgent prospect)
+        {
+            string display = scouting.GetDisplayPotential(prospect);
+            string firstPart = display.Split('-')[0];
+            return float.TryParse(firstPart, out float value) ? value : 0f;
+        }
+
+        private int GetScoutingStatusSortKey(PlayerAgent prospect)
+        {
+            if (scouting.IsScouted(prospect)) return 2;
+            if (scouting.IsAssigned(prospect)) return 1;
+            return 0;
+        }
 
         private void OnScoutingProspectClicked(PlayerAgent prospect)
         {
             scouting.TryAssignScout(prospect, currentFixtureIndex);
             RefreshScoutingUI();
+        }
+
+        // Session 9 - Thomas: "click a prospect's name to see detailed stats" instead of
+        // buying/scouting blind off just Age/OVR. browseList is the exact same list
+        // (allProspects) Prev/Next will cycle through - browsing every scouted prospect
+        // without going back to the list each time. ownSquad:false hides the roles band
+        // (captaincy/set-piece/attack-defend) in RefreshPlayerInspectUI - none of that
+        // applies to a prospect you don't own yet.
+        private void OpenScoutedProspectDetail(PlayerAgent prospect, List<PlayerAgent> browseList)
+        {
+            playerInspectReturnTarget = PlayerInspectReturnTarget.Scouting;
+            OpenPlayerInspect(prospect, browseList, ownSquad: false);
         }
 
         // --- Transfer Market (career-arc addition, session 8, Phase 3): Buy tab browses
@@ -2749,6 +3036,14 @@ namespace Manager
 
         private readonly Dictionary<PlayerAgent, string> transferMarketRowClubs = new();
 
+        // Sortable columns (session 9 - Thomas: "click OVR to sort high to low"), same
+        // pattern as scoutingSortColumn/scoutingSortDescending above. Separate state per
+        // tab since Buy and Sell have different column layouts.
+        private int transferBuySortColumn = -1;
+        private bool transferBuySortDescending = true;
+        private int transferSellSortColumn = -1;
+        private bool transferSellSortDescending = true;
+
         private void RefreshTransferMarketUI()
         {
             if (transferMarketListView == null)
@@ -2793,8 +3088,19 @@ namespace Manager
             }
         }
 
+        // Grid-column layout (same AddCustomGridRow/AddCustomGridHeaderRow technique
+        // already shipped for Scouting - see RefreshScoutingUI) replacing the old flat
+        // concatenated-string label, which didn't align into columns since name lengths
+        // vary (backlog item, see HANDOFF).
+        private static readonly string[] TransferBuyColumnHeaders = { "PLAYER", "POS", "AGE", "CLUB/NATION", "OVR", "BID" };
+        private static readonly float[] TransferBuyColumnFractions = { 0.28f, 0.10f, 0.08f, 0.24f, 0.10f, 0.20f };
+        private static readonly string[] TransferSellColumnHeaders = { "PLAYER", "POS", "AGE", "OVR", "SELL FOR" };
+        private static readonly float[] TransferSellColumnFractions = { 0.34f, 0.14f, 0.12f, 0.14f, 0.26f };
+
         private void RefreshTransferMarketBuyList(float budget)
         {
+            List<PlayerAgent> players = new List<PlayerAgent>();
+
             foreach (string teamName in availableTeamNames)
             {
                 if (teamName == managedTeamName)
@@ -2807,35 +3113,127 @@ namespace Manager
                 foreach (PlayerAgent player in team.Players)
                 {
                     transferMarketRowClubs[player] = teamName;
-                    AddBuyRow(player, teamName, budget);
+                    players.Add(player);
                 }
             }
 
-            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            // World-scattered rework (session 9) - scouted prospects are unaffiliated
+            // free agents now, so the shared "CLUB" column shows their nation instead
+            // for these rows specifically (same transferMarketRowClubs dictionary, just
+            // a different kind of string stored in it - every reader of that dictionary
+            // already just displays/sorts whatever string is there, so no other call
+            // site needed to change).
+            foreach (string region in ManagerPlayerNationality.AllRegions)
             {
-                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
-
-                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(teamName, squadGenerator, strength.AttackStrength, strength.DefenceStrength))
+                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(region, squadGenerator))
                 {
                     if (!scouting.IsScouted(prospect))
                     {
                         continue;
                     }
 
-                    transferMarketRowClubs[prospect] = teamName;
-                    AddBuyRow(prospect, teamName, budget);
+                    transferMarketRowClubs[prospect] = ManagerPlayerNationality.GetNationality(prospect).Name;
+                    players.Add(prospect);
                 }
+            }
+
+            if (transferBuySortColumn >= 0)
+            {
+                players.Sort((a, b) => CompareTransferBuyColumn(a, b, transferBuySortColumn, transferBuySortDescending));
+            }
+
+            transferMarketListView.AddCustomGridHeaderRow(TransferBuyColumnHeaders, TransferBuyColumnFractions, OnTransferBuyColumnHeaderClicked, transferBuySortColumn, transferBuySortDescending);
+
+            foreach (PlayerAgent player in players)
+            {
+                string teamName = transferMarketRowClubs.TryGetValue(player, out string t) ? t : "?";
+                AddBuyRow(player, teamName, budget, players);
             }
         }
 
-        private void AddBuyRow(PlayerAgent player, string teamName, float budget)
+        private void OnTransferBuyColumnHeaderClicked(int column)
+        {
+            if (transferBuySortColumn == column)
+            {
+                transferBuySortDescending = !transferBuySortDescending;
+            }
+            else
+            {
+                transferBuySortColumn = column;
+                transferBuySortDescending = true;
+            }
+
+            RefreshTransferMarketUI();
+        }
+
+        // Column indices match TransferBuyColumnHeaders.
+        private int CompareTransferBuyColumn(PlayerAgent a, PlayerAgent b, int column, bool descending)
+        {
+            int result;
+            switch (column)
+            {
+                case 0:
+                    result = string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 1:
+                    result = string.Compare(a.PrimaryPosition.ToString(), b.PrimaryPosition.ToString(), StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 2:
+                    result = a.Age.CompareTo(b.Age);
+                    break;
+                case 3:
+                    string clubA = transferMarketRowClubs.TryGetValue(a, out string ca) ? ca : "";
+                    string clubB = transferMarketRowClubs.TryGetValue(b, out string cb) ? cb : "";
+                    result = string.Compare(clubA, clubB, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 4:
+                    result = a.GetOverallRating().CompareTo(b.GetOverallRating());
+                    break;
+                case 5:
+                    result = GetTransferAskingPrice(a).CompareTo(GetTransferAskingPrice(b));
+                    break;
+                default:
+                    result = 0;
+                    break;
+            }
+
+            return descending ? -result : result;
+        }
+
+        private float GetTransferAskingPrice(PlayerAgent player)
+        {
+            return ManagerClubFinance.GetMarketValue(player) * TransferBidMultiplier;
+        }
+
+        private void AddBuyRow(PlayerAgent player, string teamName, float budget, List<PlayerAgent> browseList)
         {
             float value = ManagerClubFinance.GetMarketValue(player);
             float askingPrice = value * TransferBidMultiplier;
-            string affordability = askingPrice <= budget ? "" : "  <color=#e05a5a>(over budget)</color>";
+            string bidCell = askingPrice <= budget
+                ? $"£{askingPrice:F1}m"
+                : $"£{askingPrice:F1}m  <color=#e05a5a>(over budget)</color>";
 
-            string label = $"{player.Name}   {player.PrimaryPosition}   Age {player.Age}   {teamName}   OVR {player.GetOverallRating():F0}   Bid £{askingPrice:F1}m{affordability}";
-            transferMarketListView.AddPlayerRow(player, label, OnBuyRowClicked);
+            string[] cells =
+            {
+                player.Name,
+                player.PrimaryPosition.ToString(),
+                player.Age.ToString(),
+                teamName,
+                player.GetOverallRating().ToString("F0"),
+                bidCell
+            };
+
+            // Session 9 - Thomas: "click a name to see detailed stats" instead of buying
+            // blind off just Age/OVR. See OpenScoutedProspectDetail's comment - same
+            // pattern, ownSquad:false since these are other clubs' players.
+            transferMarketListView.AddCustomGridRow(player, cells, TransferBuyColumnFractions, OnBuyRowClicked,
+                onNameClicked: p => OpenTransferTargetDetail(p, browseList));
+        }
+
+        private void OpenTransferTargetDetail(PlayerAgent player, List<PlayerAgent> browseList)
+        {
+            playerInspectReturnTarget = PlayerInspectReturnTarget.TransferMarket;
+            OpenPlayerInspect(player, browseList, ownSquad: false);
         }
 
         private void RefreshTransferMarketSellList()
@@ -2845,13 +3243,84 @@ namespace Manager
             // Squad or playing a match (squads generate lazily), which would otherwise
             // silently show an empty Sell list instead of your real bench.
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            List<PlayerAgent> players = new List<PlayerAgent>(team.Bench);
 
-            foreach (PlayerAgent player in team.Bench)
+            if (transferSellSortColumn >= 0)
+            {
+                players.Sort((a, b) => CompareTransferSellColumn(a, b, transferSellSortColumn, transferSellSortDescending));
+            }
+
+            transferMarketListView.AddCustomGridHeaderRow(TransferSellColumnHeaders, TransferSellColumnFractions, OnTransferSellColumnHeaderClicked, transferSellSortColumn, transferSellSortDescending);
+
+            foreach (PlayerAgent player in players)
             {
                 float sellPrice = ManagerClubFinance.GetSellPrice(player);
-                string label = $"{player.Name}   {player.PrimaryPosition}   Age {player.Age}   OVR {player.GetOverallRating():F0}   Sell for £{sellPrice:F1}m";
-                transferMarketListView.AddPlayerRow(player, label, OnSellRowClicked);
+                string[] cells =
+                {
+                    player.Name,
+                    player.PrimaryPosition.ToString(),
+                    player.Age.ToString(),
+                    player.GetOverallRating().ToString("F0"),
+                    $"£{sellPrice:F1}m"
+                };
+
+                // Session 9 - unlike Buy/Scouting, a Sell-list player IS on your own
+                // squad, so this opens the normal full Player Detail (roles band and
+                // all) rather than the read-only external mode - just returning to
+                // Transfers instead of the Hub.
+                transferMarketListView.AddCustomGridRow(player, cells, TransferSellColumnFractions, OnSellRowClicked,
+                    onNameClicked: p => OpenOwnSquadDetailFromTransferMarket(p, players));
             }
+        }
+
+        private void OpenOwnSquadDetailFromTransferMarket(PlayerAgent player, List<PlayerAgent> browseList)
+        {
+            playerInspectReturnTarget = PlayerInspectReturnTarget.TransferMarket;
+            OpenPlayerInspect(player, browseList, ownSquad: true);
+        }
+
+        private void OnTransferSellColumnHeaderClicked(int column)
+        {
+            if (transferSellSortColumn == column)
+            {
+                transferSellSortDescending = !transferSellSortDescending;
+            }
+            else
+            {
+                transferSellSortColumn = column;
+                transferSellSortDescending = true;
+            }
+
+            RefreshTransferMarketUI();
+        }
+
+        // Column indices match TransferSellColumnHeaders.
+        private int CompareTransferSellColumn(PlayerAgent a, PlayerAgent b, int column, bool descending)
+        {
+            int result;
+            switch (column)
+            {
+                case 0:
+                    result = string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 1:
+                    result = string.Compare(a.PrimaryPosition.ToString(), b.PrimaryPosition.ToString(), StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 2:
+                    result = a.Age.CompareTo(b.Age);
+                    break;
+                case 3:
+                    result = a.GetOverallRating().CompareTo(b.GetOverallRating());
+                    break;
+                case 4:
+                    result = ManagerClubFinance.GetSellPrice(a).CompareTo(ManagerClubFinance.GetSellPrice(b));
+                    break;
+                default:
+                    result = 0;
+                    break;
+            }
+
+            return descending ? -result : result;
         }
 
         private void OnBuyRowClicked(PlayerAgent target)
@@ -2877,13 +3346,16 @@ namespace Manager
 
             // Move the player onto the managed squad. Scouted youth prospects live in
             // the scouting pool, not squadsByTeamName - remove from whichever source
-            // they actually came from.
-            bool wasProspect = sourceTeam != null && scouting.GetTeamNamesWithPools().Contains(sourceTeam)
-                && scouting.GetOrCreateYouthPool(sourceTeam, squadGenerator, 1f, 1f).Contains(target);
+            // they actually came from. World-scattered rework (session 9) - sourceTeam
+            // is now a NATION name for a scouted prospect (see RefreshTransferMarketBuyList),
+            // not a pool key, so which pool to remove from is looked up via the
+            // prospect's own REGION instead of trying to reuse that string directly.
+            string prospectRegion = ManagerPlayerNationality.GetNationality(target).Region;
+            bool wasProspect = scouting.GetOrCreateYouthPool(prospectRegion, squadGenerator).Contains(target);
 
             if (wasProspect)
             {
-                scouting.GetOrCreateYouthPool(sourceTeam, squadGenerator, 1f, 1f).Remove(target);
+                scouting.GetOrCreateYouthPool(prospectRegion, squadGenerator).Remove(target);
             }
             else if (sourceTeam != null && squadsByTeamName.TryGetValue(sourceTeam, out AgentTeam sourceSquad))
             {
@@ -4167,6 +4639,13 @@ namespace Manager
                     ? ManagerUITheme.Warning
                     : ManagerUITheme.Danger;
 
+            // Injury cross (session 9) - the Tactics screen previously had zero injury
+            // awareness at all (see feedback in HANDOFF), so a manager could plan a
+            // lineup around a player who's silently benched at kickoff. Doesn't block
+            // selection yet, just makes it visible where the lineup is actually built.
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            bool isInjured = roles.IsInjured(player, currentFixtureIndex);
+
             GameObject pinObj = ManagerUITheme.BuildPitchPinVisual(
                 tacticsBoardPitchContainer,
                 $"Pin_{player.Name}",
@@ -4176,7 +4655,8 @@ namespace Manager
                 ratingText: GetDisplayRating(player.GetOverallRating()).ToString(),
                 ratingFontSize: 18,
                 labelText: $"{player.Name} · {slotLabel}",
-                labelFontSize: 14);
+                labelFontSize: 14,
+                showInjuryIcon: isInjured);
 
             pinObj.GetComponent<Image>().raycastTarget = true;
 
@@ -4252,6 +4732,10 @@ namespace Manager
             {
                 matchSubsLog.Add((pinPlayer.Name, pinPlayer.PrimaryPosition.ToString(), benchPlayer.Name, benchPlayer.PrimaryPosition.ToString(), currentMatchMinute));
                 RefreshMatchSubsMadeList();
+
+                // Fresh legs, fresh fatigue clock - see AgentMatchSimulator.
+                // GetFatigueMultiplier's own comment on why this was missing before.
+                matchSimulator.RegisterSubstitution(benchPlayer, currentMatchMinute);
                 TriggerMidMatchResimulation();
             }
 
@@ -4518,14 +5002,14 @@ namespace Manager
             {
                 PlayerAgent player = team.StartingEleven[i];
                 PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
-                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles));
+                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex));
             }
 
             squadBrowseListView.AddSectionHeader($"Bench ({team.Bench.Count})");
 
             foreach (PlayerAgent player in team.Bench)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles));
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex));
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
@@ -4584,9 +5068,12 @@ namespace Manager
         {
             if (roles.IsInjured(player, currentFixtureIndex))
             {
+                // No leading "INJ" text anymore - the injury cross icon (see
+                // ManagerUITheme.BuildInjuryCrossIcon) already says that visually now;
+                // this just adds the one piece of info the icon alone can't carry.
                 int returnMatchday = roles.GetInjuryReturnMatchday(player);
                 string dangerHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Danger);
-                return $"  <size=80%><color=#{dangerHex}>INJ (Ret. MD{returnMatchday + 1})</color></size>";
+                return $"  <size=80%><color=#{dangerHex}>(Ret. MD{returnMatchday + 1})</color></size>";
             }
 
             float condition = roles.GetCondition(player);
@@ -4603,14 +5090,30 @@ namespace Manager
         // --- Player Inspect (Prev/Next once inside; entry point jumps straight to a
         // specific player from the squad browse list - no standalone Hub entry point) ---
 
-        private void OpenPlayerInspect(PlayerAgent preselected)
+        // browseList/ownSquad (session 9 - Thomas: "we need to be able to click on
+        // [a Transfer/Scouting target's] name to see detailed stats") let Player Detail
+        // browse an arbitrary list instead of always the managed squad - e.g. Prev/Next
+        // cycles through the exact Scouting or Transfer Market list you clicked from.
+        // Every pre-existing call site omits both and keeps browsing the managed squad
+        // exactly as before. ownSquad also gates the roles band in RefreshPlayerInspectUI
+        // - captaincy/set-piece/attack-defend assignment only makes sense for a player
+        // you actually manage, not someone else's player you're scouting or bidding on.
+        private void OpenPlayerInspect(PlayerAgent preselected, List<PlayerAgent> browseList = null, bool ownSquad = true)
         {
             CleanupStrayDragGhosts();
 
-            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            if (browseList != null)
+            {
+                inspectSquadPlayers = browseList;
+            }
+            else
+            {
+                AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+                inspectSquadPlayers = new List<PlayerAgent>(team.StartingEleven);
+                inspectSquadPlayers.AddRange(team.Bench);
+            }
 
-            inspectSquadPlayers = new List<PlayerAgent>(team.StartingEleven);
-            inspectSquadPlayers.AddRange(team.Bench);
+            inspectIsOwnSquad = ownSquad;
 
             if (inspectSquadPlayers.Count == 0)
             {
@@ -4633,6 +5136,14 @@ namespace Manager
             // active underneath (or on top of, depending on sibling order) Player
             // Detail instead of actually navigating away from it.
             if (squadBrowsePanel != null) squadBrowsePanel.SetActive(false);
+            // Same gap, hit again (session 9 live bug report): scoutingPanel/
+            // transferMarketPanel didn't exist when this method was first written
+            // either, so clicking a name on either screen correctly opened Player
+            // Detail underneath, but the still-active source panel stayed on top and
+            // visually hid it - confirmed live: it only appeared after pressing that
+            // screen's own Back button, which hid the panel actually covering it.
+            if (scoutingPanel != null) scoutingPanel.SetActive(false);
+            if (transferMarketPanel != null) transferMarketPanel.SetActive(false);
             if (playerInspectPanel != null) playerInspectPanel.SetActive(true);
 
             RefreshPlayerInspectUI();
@@ -4730,6 +5241,14 @@ namespace Manager
                     playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
                     OnOpenSquadListClicked();
                     break;
+                case PlayerInspectReturnTarget.Scouting:
+                    playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
+                    OnOpenScoutingClicked();
+                    break;
+                case PlayerInspectReturnTarget.TransferMarket:
+                    playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
+                    OnOpenTransferMarketClicked();
+                    break;
                 default:
                     playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
                     ShowSeasonHub();
@@ -4761,7 +5280,12 @@ namespace Manager
             spawnedInspectElements.Clear();
 
             PlayerAgent player = inspectSquadPlayers[inspectPlayerIndex];
-            string squadStatus = player.IsStartingEleven ? "Starting XI" : "Bench";
+            // player.IsStartingEleven/Bench membership is meaningless for a browsed
+            // Scouting/Transfer target that isn't part of the managed squad at all -
+            // would otherwise misleadingly default to "Bench" for everyone.
+            string squadStatus = !inspectIsOwnSquad
+                ? (playerInspectReturnTarget == PlayerInspectReturnTarget.Scouting ? "Scouting Target" : "Transfer Target")
+                : player.IsStartingEleven ? "Starting XI" : "Bench";
 
             // Centered max-width:1600px content region within the full-stretch 1920-wide
             // container, matching the mockup's centered layout instead of edge-to-edge.
@@ -4841,7 +5365,8 @@ namespace Manager
             metaRect.pivot = new Vector2(0f, 1f);
             metaRect.sizeDelta = new Vector2(-420f, 34f);
             metaRect.anchoredPosition = new Vector2(300f, -116f);
-            string metaText = $"{player.Role}  ·  {player.Age} yrs  ·  {player.Height:F0}cm  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
+            string nationalityName = ManagerPlayerNationality.GetNationality(player).Name;
+            string metaText = $"{player.Role}  ·  {nationalityName}  ·  {player.Age} yrs  ·  {player.Height:F0}cm  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
             TextMeshProUGUI metaTMP = ManagerUITheme.BuildLabel(metaLabel.transform, metaText, 21, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
             if (weakFootStarSpriteAsset != null) metaTMP.spriteAsset = weakFootStarSpriteAsset;
 
@@ -4877,6 +5402,29 @@ namespace Manager
             ovrCaptionRect.anchoredPosition = new Vector2(-36f, -106f);
             ManagerUITheme.BuildLabel(ovrCaption.transform, $"OVERALL ({player.PrimaryPosition})", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
 
+            // Season-over-season delta (career arc backlog item, session 9) - a small
+            // badge tucked into the top-right corner of the OVR number itself (live
+            // feedback: a full "+3 LAST SEASON" text line read as too heavy - just the
+            // signed number, right where you're already looking, reads faster). Hidden
+            // entirely rather than showing "+0", since a brand-new player (just
+            // scouted/signed/promoted) genuinely has no prior season to compare against
+            // yet, and "+0" would misleadingly read as "no growth this season" instead.
+            int overallDelta = ManagerPlayerDevelopment.GetLastSeasonOverallDelta(player);
+            if (overallDelta != 0)
+            {
+                GameObject ovrDelta = new GameObject("OvrDelta", typeof(RectTransform));
+                ovrDelta.transform.SetParent(headerBand.transform, false);
+                RectTransform ovrDeltaRect = ovrDelta.GetComponent<RectTransform>();
+                ovrDeltaRect.anchorMin = new Vector2(1f, 1f);
+                ovrDeltaRect.anchorMax = new Vector2(1f, 1f);
+                ovrDeltaRect.pivot = new Vector2(1f, 1f);
+                ovrDeltaRect.sizeDelta = new Vector2(44f, 22f);
+                ovrDeltaRect.anchoredPosition = new Vector2(-8f, -18f);
+                string deltaSign = overallDelta > 0 ? "+" : "";
+                Color deltaColor = overallDelta > 0 ? ManagerUITheme.Accent : ManagerUITheme.Danger;
+                ManagerUITheme.BuildLabel(ovrDelta.transform, $"{deltaSign}{overallDelta}", 17, deltaColor, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+            }
+
             // Captain/vice-captain/penalty/free-kick/corner-taker assignment moved to the
             // Tactics screen (see BuildTacticsScreenChrome) - a centralized dropdown-
             // picker layout reads better than clicking into each individual player's own
@@ -4888,20 +5436,41 @@ namespace Manager
             ManagerUITheme.AnchorTopStretch(rolesBand, headerBandHeight, rolesBandHeight, contentMargin);
             spawnedInspectElements.Add(rolesBand);
 
-            ManagerSquadRoles squadRoles = GetOrCreateSquadRoles(managedTeamName);
-            AttackDefendRole currentAttackDefendRole = squadRoles.GetRole(player);
-
-            // Which leanings even make tactical sense varies by position - a winger
-            // "defending" or a centre-back "attacking" isn't a real football instruction
-            // the way it is for a fullback or a central midfielder. Restricted per
-            // position rather than offering all three everywhere; goalkeepers don't get
-            // the control at all, since it doesn't apply to them.
-            AttackDefendRole[] allowedRoles = GetAllowedAttackDefendRoles(player.PrimaryPosition);
-            float roleX = 0f;
-
-            foreach (AttackDefendRole allowedRole in allowedRoles)
+            // Captaincy/set-piece/attack-defend assignment only makes sense for a player
+            // you actually manage - a Scouting/Transfer target browsed via
+            // OpenPlayerInspect's browseList (session 9) isn't part of the managed squad
+            // at all, so ManagerSquadRoles has no real state for them and toggling a role
+            // here would incorrectly start tracking one. Same band height reserved either
+            // way (see attributeGridRect below) so the layout doesn't shift.
+            if (inspectIsOwnSquad)
             {
-                roleX = BuildRoleToggleButton(rolesBand.transform, allowedRole.ToString().ToUpperInvariant(), roleX, currentAttackDefendRole == allowedRole, () => SetAttackDefendRole(player, allowedRole));
+                ManagerSquadRoles squadRoles = GetOrCreateSquadRoles(managedTeamName);
+                AttackDefendRole currentAttackDefendRole = squadRoles.GetRole(player);
+
+                // Which leanings even make tactical sense varies by position - a winger
+                // "defending" or a centre-back "attacking" isn't a real football
+                // instruction the way it is for a fullback or a central midfielder.
+                // Restricted per position rather than offering all three everywhere;
+                // goalkeepers don't get the control at all, since it doesn't apply to
+                // them.
+                AttackDefendRole[] allowedRoles = GetAllowedAttackDefendRoles(player.PrimaryPosition);
+                float roleX = 0f;
+
+                foreach (AttackDefendRole allowedRole in allowedRoles)
+                {
+                    roleX = BuildRoleToggleButton(rolesBand.transform, allowedRole.ToString().ToUpperInvariant(), roleX, currentAttackDefendRole == allowedRole, () => SetAttackDefendRole(player, allowedRole));
+                }
+
+                // Loan system (session 9) - right-anchored so it sits at the far edge of
+                // the band regardless of how many attack/defend toggles are on the left
+                // (goalkeepers get none at all - see GetAllowedAttackDefendRoles).
+                Button loanButton = ManagerUITheme.BuildButton(rolesBand.transform, "LOAN OUT", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+                ManagerUITheme.SetPointAnchor(loanButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-16f, 0f), new Vector2(130f, 40f));
+                loanButton.onClick.AddListener(() => OnLoanOutClicked(player));
+            }
+            else
+            {
+                ManagerUITheme.BuildLabel(rolesBand.transform, "NOT ON YOUR SQUAD - VIEW ONLY", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             }
 
             GameObject attributeGrid = new GameObject("AttributeGrid", typeof(RectTransform));
@@ -6376,6 +6945,58 @@ namespace Manager
                 RecordFormResult(homeTeamId, 'D');
                 RecordFormResult(awayTeamId, 'D');
             }
+
+            ApplyMatchFormBonusForManagedTeam(fixture, result);
+        }
+
+        // Form-based development bonus (session 9 backlog item) - has to live here,
+        // post-match, rather than in ApplyMatchdayConditionAndInjuries (which runs
+        // pre-match, before the result exists at all - see SimulateFixture's ordering).
+        // Managed team only, same scope limit as every other per-player development
+        // signal this session (AI clubs only get a flat assumed playing-time factor,
+        // no real per-match tracking). Matches scorer names against the managed
+        // Starting XI specifically (not the whole league) to minimise the same-name
+        // collision risk that AgentMatchEvent.ScorerName already carries everywhere
+        // else it's used (see the match log's own goal list) - a small squad is a much
+        // narrower name-collision surface than 20 clubs' worth of players.
+        private void ApplyMatchFormBonusForManagedTeam(OpenFootballMatch fixture, AgentMatchSimulator.AgentMatchResult result)
+        {
+            bool isManagedHome = fixture.HomeTeam == managedTeamName;
+            bool isManagedAway = fixture.AwayTeam == managedTeamName;
+
+            if (!isManagedHome && !isManagedAway)
+            {
+                return;
+            }
+
+            int managedGoals = isManagedHome ? result.HomeGoals : result.AwayGoals;
+            int opponentGoals = isManagedHome ? result.AwayGoals : result.HomeGoals;
+
+            ManagerPlayerDevelopment.MatchFormOutcome outcome = managedGoals > opponentGoals
+                ? ManagerPlayerDevelopment.MatchFormOutcome.Win
+                : managedGoals < opponentGoals
+                    ? ManagerPlayerDevelopment.MatchFormOutcome.Loss
+                    : ManagerPlayerDevelopment.MatchFormOutcome.Draw;
+
+            AgentTeam managedTeam = GetOrCreateAgentTeam(managedTeamName);
+            HashSet<PlayerAgent> playedThisMatch = new HashSet<PlayerAgent>(managedTeam.StartingEleven);
+
+            Dictionary<string, int> goalsByScorerName = new Dictionary<string, int>();
+            foreach (AgentMatchSimulator.AgentMatchEvent evt in result.Events)
+            {
+                if (!evt.IsGoal || string.IsNullOrEmpty(evt.ScorerName))
+                {
+                    continue;
+                }
+
+                goalsByScorerName[evt.ScorerName] = goalsByScorerName.TryGetValue(evt.ScorerName, out int count) ? count + 1 : 1;
+            }
+
+            foreach (PlayerAgent player in playedThisMatch)
+            {
+                int goalsThisMatch = goalsByScorerName.TryGetValue(player.Name, out int goals) ? goals : 0;
+                ManagerPlayerDevelopment.ApplyMatchFormBonus(player, goalsThisMatch, outcome);
+            }
         }
 
         // Manager-Mode-only last-5-results tracker backing the Hub league table's Form
@@ -6506,6 +7127,12 @@ namespace Manager
             matchSimulator.ManagedTeamName = managedTeamName;
             matchSimulator.ManagedTeamTacticalSliders = tacticalSliders;
 
+            // Fresh match, fresh substitution clock - see AgentMatchSimulator.
+            // ClearSubstitutions' own comment. SimulateFixture runs exactly once per
+            // match (mid-match resimulation calls SimulateFromMinute directly, never
+            // this method again), so this is the one correct place to reset it.
+            matchSimulator.ClearSubstitutions();
+
             return matchSimulator.SimulateMatch(fitAdjustedHomeTeam, fitAdjustedAwayTeam, expectedHomeGoals, expectedAwayGoals);
         }
 
@@ -6561,6 +7188,49 @@ namespace Manager
             return best;
         }
 
+        // Loan system (session 9) - "any squad player" per Thomas's own answer, so a
+        // starter can be loaned out too. If they were starting, backfills the slot the
+        // same way an injury already does (FindFitBenchReplacement, falling back to
+        // CallUpReservePlayer) rather than leaving a hole in the XI - a genuine squad
+        // crisis only if no cover exists anywhere, same as the injury path.
+        private void OnLoanOutClicked(PlayerAgent player)
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            bool wasStarting = team.StartingEleven.Contains(player);
+
+            if (wasStarting)
+            {
+                ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+                PlayerAgent replacement = FindFitBenchReplacement(team, roles, player.PrimaryPosition)
+                    ?? CallUpReservePlayer(managedTeamName, player.PrimaryPosition);
+
+                if (replacement != null)
+                {
+                    team.SubstitutePlayer(player, replacement);
+                    team.Bench.Remove(player);
+                }
+                else
+                {
+                    team.StartingEleven.Remove(player);
+                }
+            }
+            else
+            {
+                team.Bench.Remove(player);
+            }
+
+            team.Players.Remove(player);
+
+            // No cross-screen status label to report into here (Player Detail is
+            // reachable from several different origin screens, each with its own
+            // status mechanism or none at all) - the player disappearing from the
+            // squad list on return is the confirmation for this first version. A
+            // proper toast/confirmation would be a follow-up polish item.
+            loanTracker.SendOnLoan(player, managedTeamName);
+
+            OnInspectBackClicked();
+        }
+
         private void ApplyMatchdayConditionAndInjuries(AgentTeam team)
         {
             ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
@@ -6581,6 +7251,13 @@ namespace Manager
                     roles.RecordAppearance(player);
                     TryRollInjury(roles, player, preMatchCondition);
                 }
+
+                // Per-matchday development tick (session 9 backlog item) - same hook
+                // Condition already uses, same played/not-played signal computed above.
+                // Whole squad, not just starters - a benched player still ticks (at the
+                // 0.7x floor rate), same as the old season-lump version's playing-time
+                // floor.
+                ManagerPlayerDevelopment.ApplyMatchdayProgression(player, played);
             }
         }
 
@@ -7352,9 +8029,16 @@ namespace Manager
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
             pool = new List<PlayerAgent>();
 
+            // DefenceStrength is inverted in AgentSquadGenerator (defenceMultiplier =
+            // 1/defenceStrength - lower DefenceStrength means fewer goals conceded, i.e.
+            // a BETTER defence), so a genuine discount divides it rather than multiplying
+            // like AttackStrength does. Multiplying it (the old code) accidentally made
+            // reserve-pool defenders progressively BETTER the harder they were meant to
+            // be discounted - confirmed live (see HANDOFF): discounting to 0.5x pushed a
+            // CB's average Defending from 72.5 to 95.7, not down.
             foreach (PlayerPosition position in ReservePoolPositions)
             {
-                pool.Add(squadGenerator.GenerateReservePlayer(position, strength.AttackStrength * 0.85f, strength.DefenceStrength * 0.85f));
+                pool.Add(squadGenerator.GenerateReservePlayer(position, strength.AttackStrength * 0.85f, strength.DefenceStrength / 0.85f));
             }
 
             reservePoolByTeamName[teamName] = pool;

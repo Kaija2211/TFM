@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using Sim;
 
@@ -21,6 +22,242 @@ namespace Manager
     {
         private const int VeteranRetirementAge = 35;
 
+        // Growth glide-path targets (session 9 fix - see HANDOFF) - by PeakDevelopmentAge,
+        // a linear "remaining headroom / remaining seasons" schedule guarantees closure
+        // regardless of playing time, instead of the old youthFactor-tapering-to-zero-at-
+        // 24 shape, which could (and did, confirmed by live simulation) leave a real
+        // wonderkid permanently several points short of their own Potential once
+        // youthFactor hit exactly zero. GrowthEligibleUntilAge matches where
+        // veteranFactor first turns nonzero below, so growth and decline hand off
+        // cleanly with no age gap where neither applies.
+        private const float PeakDevelopmentAge = 26f;
+        private const int GrowthEligibleUntilAge = 30;
+
+        // Elite aging curve extension (session 9 - Thomas: "I'd say Harry Kane has only
+        // gotten better since turning 30" - a genuine elite player's whole career
+        // timeline should shift later, not just decline on the same schedule as an
+        // average pro). Scales with CURRENT Overall, not Potential - Potential can now
+        // shrink from neglect erosion, so it no longer cleanly reflects genuine talent
+        // tier the way current ability does. A player at Overall<=80 gets zero
+        // extension (identical to every formula below as it was before this change); a
+        // genuine 95+ Overall superstar gets the full +5 years tacked onto every age
+        // threshold - still growing until ~35, peaking around 31, not declining until
+        // ~34, instead of the flat 29/30 cutoff everyone used to share.
+        private const float EliteAgingExtensionYears = 5f;
+
+        private static float GetAgingCurveOffset(PlayerAgent player)
+        {
+            float eliteFactor = Mathf.Clamp01((player.GetOverallRating() - 80f) / 15f);
+            return eliteFactor * EliteAgingExtensionYears;
+        }
+
+        private static float GetGrowthEligibleUntilAge(PlayerAgent player)
+        {
+            return GrowthEligibleUntilAge + GetAgingCurveOffset(player);
+        }
+
+        private static float GetPeakDevelopmentAge(PlayerAgent player)
+        {
+            return PeakDevelopmentAge + GetAgingCurveOffset(player);
+        }
+
+        // Same 8-year decline ramp shape as before, just with the onset age (was a flat
+        // 29 for everyone) shifted later for elite players.
+        private static float GetVeteranFactor(PlayerAgent player)
+        {
+            float declineOnsetAge = 29f + GetAgingCurveOffset(player);
+            return Mathf.Clamp01((player.Age - declineOnsetAge) / 8f);
+        }
+
+        // Potential erosion (session 9 - explicit design call from Thomas: a wonderkid
+        // genuinely starved of game time for years shouldn't just develop slower, they
+        // should permanently never become what they once could have - real stakes for
+        // neglecting a prospect instead of loaning them out or giving them minutes).
+        // 0.3 == roughly 8 appearances in a season (playingTimeFactor is appearances/25,
+        // see ManagerPrototypeController's season-rollover loop) - confirmed with Thomas
+        // as the right bar: normal squad rotation/cup games clear it easily, only a
+        // player frozen out of the matchday squad all season triggers erosion. Above
+        // this playing-time factor, no erosion at all.
+        private const float NeglectPlayingTimeThreshold = 0.3f;
+        private const float MaxPotentialErosionPerSeason = 1.5f;
+
+        // Delta display (career arc backlog item, session 9) - keyed by PlayerAgent
+        // reference rather than a PlayerAgent field, following the same "new Manager-
+        // only per-player state lives in a Manager-namespace class, never on
+        // PlayerAgent" pattern as ManagerScouting's scoutedPlayers/assignmentResolveMatchday
+        // (see PROJECT_CONTEXT_FOR_AI.md). Not persisted through save/load - a fresh
+        // "no change yet" state after loading a career is an acceptable, already-
+        // precedented scope limit (Condition/injuries/appearances reset the same way).
+        // Stored in DISPLAY-rating terms (the stretched value the UI actually shows next
+        // to a player's OVR), not raw GetOverallRating() - duplicates ManagerPrototype
+        // Controller.GetDisplayRating's tiny stretch formula rather than sharing it,
+        // same precedent as ClampAllAttributes below mirroring AgentSquadGenerator's
+        // clamp logic instead of exposing it.
+        private static readonly Dictionary<PlayerAgent, int> lastSeasonOverallDelta = new();
+
+        public static int GetLastSeasonOverallDelta(PlayerAgent player)
+        {
+            return lastSeasonOverallDelta.TryGetValue(player, out int delta) ? delta : 0;
+        }
+
+        // Per-matchday ticks (session 9 backlog item - Thomas: spread growth across the
+        // season instead of one lump at rollover). Only the managed squad gets ticked
+        // this way (see ApplyMatchdayConditionAndInjuries, the same per-matchday hook
+        // Condition already uses) - AI clubs/reserves/youth pools have no real per-
+        // matchday signal, so they keep going through the original once-a-season
+        // ApplySeasonProgression below, completely unchanged.
+        //
+        // Since ticking decouples "when growth happens" from "when the season-delta
+        // badge gets measured," delta tracking is split into its own snapshot/finalize
+        // pair (SnapshotSeasonStart/FinalizeSeasonDelta) rather than living inside the
+        // growth call itself - the managed team's season-rollover loop calls Finalize
+        // (closing out the season that just ended) then Snapshot (opening the next one)
+        // for every player, regardless of whether their growth came from ticks or a
+        // lump sum.
+        private const int AssumedMatchdaysPerSeason = 38;
+        private static readonly Dictionary<PlayerAgent, int> seasonStartDisplayRating = new();
+
+        public static void SnapshotSeasonStart(PlayerAgent player)
+        {
+            seasonStartDisplayRating[player] = GetDisplayRating(player.GetOverallRating());
+        }
+
+        public static void FinalizeSeasonDelta(PlayerAgent player)
+        {
+            int before = seasonStartDisplayRating.TryGetValue(player, out int b) ? b : GetDisplayRating(player.GetOverallRating());
+            lastSeasonOverallDelta[player] = GetDisplayRating(player.GetOverallRating()) - before;
+        }
+
+        // Growth/decline only - NOT erosion. Erosion (ApplySeasonEndErosion below) stays
+        // a season-END-only calculation using the season's true aggregate playing time,
+        // deliberately not translated to a per-matchday check: a player who starts 20 of
+        // 38 games has 18 "unplayed" matchdays, and a naive per-matchday erosion check
+        // would treat every one of those as neglect, savaging a normally-rotated
+        // player's Potential for no real reason. Growth/decline don't have that failure
+        // mode - decline was already playing-time-INDEPENDENT even in the original
+        // formula, and growth's playing-time multiplier only ever swings between 0.7x-
+        // 1.0x (the same floor-protected shape as the season version), so ticking it off
+        // a single match's played/not-played signal is safe.
+        public static void ApplyMatchdayProgression(PlayerAgent player, bool playedThisMatchday)
+        {
+            float headroom = player.Potential - player.GetOverallRating();
+            bool isGoalkeeper = player.PrimaryPosition == PlayerPosition.GK;
+
+            if (headroom > 0f && player.Age < GetGrowthEligibleUntilAge(player))
+            {
+                float matchdayPlayingTimeFactor = playedThisMatchday ? 1f : 0f;
+                float seasonsRemainingToPeak = Mathf.Max(1f, GetPeakDevelopmentAge(player) - player.Age + 1f);
+                float seasonGrowth = (headroom / seasonsRemainingToPeak) * (0.7f + matchdayPlayingTimeFactor * 0.3f);
+                float growth = seasonGrowth / AssumedMatchdaysPerSeason;
+
+                if (isGoalkeeper) GrowGoalkeeperAttributes(player, growth);
+                else GrowOutfieldAttributes(player, growth);
+            }
+            else
+            {
+                float veteranFactor = GetVeteranFactor(player);
+
+                if (veteranFactor > 0f)
+                {
+                    float seasonDecline = 3f + veteranFactor * 5f;
+                    float decline = seasonDecline / AssumedMatchdaysPerSeason;
+
+                    if (isGoalkeeper) DeclineGoalkeeperAttributes(player, decline, veteranFactor);
+                    else DeclineOutfieldAttributes(player, decline, veteranFactor);
+                }
+
+                // Prime-age noise deliberately NOT ticked here - a ±1.5 random nudge
+                // applied 38 times a season would just add variance, not a meaningful
+                // signal. Still applied once at season rollover instead, see
+                // ApplySeasonEndNoiseIfPrimeAge.
+            }
+
+            ClampAllAttributes(player);
+        }
+
+        public enum MatchFormOutcome { Win, Draw, Loss }
+
+        // Cheap match-performance proxy (session 9 backlog item - Thomas: scale growth
+        // speed with match *performance*, not just playing time). No live in-match
+        // rating system exists yet, so this uses the two signals the match sim already
+        // produces: goals scored (AgentMatchEvent.ScorerName) and the team result while
+        // the player was on the pitch - not the fuller "goals/assists/team result"
+        // wishlist, since assists aren't tracked anywhere in the sim and adding that
+        // felt like a bigger, separate change from just wiring up what already exists.
+        //
+        // A small ADDITIVE nudge on top of whatever ApplyMatchdayProgression already
+        // ticked for this same matchday (called separately, post-match, from
+        // ApplyFixtureResult - the pre-match tick can't know the result yet). Deliberately
+        // small relative to the base weekly tick (a hat-trick in a win is roughly a
+        // strong week, not a whole extra season) and floor-clamped at zero - a bad
+        // result never actively erodes progress on top of a loss, it just withholds the
+        // bonus. Only applies to players still in their growth window, so a veteran's
+        // hot streak doesn't reverse their decline.
+        public static void ApplyMatchFormBonus(PlayerAgent player, int goalsThisMatch, MatchFormOutcome outcome)
+        {
+            float headroom = player.Potential - player.GetOverallRating();
+
+            if (headroom <= 0f || player.Age >= GetGrowthEligibleUntilAge(player))
+            {
+                return;
+            }
+
+            float bonus = goalsThisMatch * 0.03f;
+            bonus += outcome == MatchFormOutcome.Win ? 0.02f : outcome == MatchFormOutcome.Loss ? -0.015f : 0f;
+            bonus = Mathf.Max(0f, bonus);
+
+            if (bonus <= 0f)
+            {
+                return;
+            }
+
+            if (player.PrimaryPosition == PlayerPosition.GK) GrowGoalkeeperAttributes(player, bonus);
+            else GrowOutfieldAttributes(player, bonus);
+
+            ClampAllAttributes(player);
+        }
+
+        // Extracted from the erosion block that used to live inside ApplySeasonProgression
+        // - same exact formula, called once per season at rollover for the managed team
+        // (which now gets growth via matchday ticks instead) using the real final
+        // seasonPlayingTimeFactor, instead of every matchday off a binary signal (see
+        // ApplyMatchdayProgression's comment for why that would be wrong).
+        public static void ApplySeasonEndErosion(PlayerAgent player, float seasonPlayingTimeFactor)
+        {
+            seasonPlayingTimeFactor = Mathf.Clamp01(seasonPlayingTimeFactor);
+
+            if (seasonPlayingTimeFactor < NeglectPlayingTimeThreshold && player.Age < GetGrowthEligibleUntilAge(player) && player.Potential > player.GetOverallRating())
+            {
+                float neglectFactor = (NeglectPlayingTimeThreshold - seasonPlayingTimeFactor) / NeglectPlayingTimeThreshold;
+                player.Potential = Mathf.Max(player.GetOverallRating(), player.Potential - neglectFactor * MaxPotentialErosionPerSeason);
+            }
+        }
+
+        // Mirrors ApplySeasonProgression's own "else" branch exactly - a managed-team
+        // player who's already closed their headroom (or aged out of the growth window)
+        // but isn't yet in decline gets the same once-a-season noise nudge as everyone
+        // else, since matchday ticks deliberately skip it (see ApplyMatchdayProgression).
+        public static void ApplySeasonEndNoiseIfPrimeAge(PlayerAgent player)
+        {
+            float headroom = player.Potential - player.GetOverallRating();
+            bool stillGrowing = headroom > 0f && player.Age < GetGrowthEligibleUntilAge(player);
+
+            if (stillGrowing)
+            {
+                return;
+            }
+
+            float veteranFactor = GetVeteranFactor(player);
+
+            if (veteranFactor > 0f)
+            {
+                return;
+            }
+
+            ApplySmallPrimeAgeNoise(player, player.PrimaryPosition == PlayerPosition.GK);
+            ClampAllAttributes(player);
+        }
+
         // playingTimeFactor is 0-1, supplied by the caller since only the managed
         // team's appearances are actually tracked (see ManagerSquadRoles) - callers pass
         // a real per-player value for the managed squad and a flat assumed value for
@@ -30,18 +267,39 @@ namespace Manager
         {
             playingTimeFactor = Mathf.Clamp01(playingTimeFactor);
 
-            float youthFactor = Mathf.Clamp01((24f - player.Age) / 6f);
-            float veteranFactor = Mathf.Clamp01((player.Age - 29f) / 8f);
+            int displayedOverallBefore = GetDisplayRating(player.GetOverallRating());
+
+            float veteranFactor = GetVeteranFactor(player);
+
+            // Erode Potential itself before computing this season's headroom - real
+            // neglect (bench-warming, never loaned out) permanently shrinks the ceiling,
+            // it doesn't just slow the approach to it. Scales with how far below the
+            // threshold playing time was (near-zero minutes erodes fastest); stops
+            // entirely once real minutes resume, or once there's no headroom left to
+            // erode. Confirmed live: 10 seasons of zero playing time eroded a 90
+            // Potential down to 75 while Overall only reached 74.6 - a real, permanent
+            // cost, not a cosmetic slowdown (see HANDOFF).
+            if (playingTimeFactor < NeglectPlayingTimeThreshold && player.Age < GetGrowthEligibleUntilAge(player) && player.Potential > player.GetOverallRating())
+            {
+                float neglectFactor = (NeglectPlayingTimeThreshold - playingTimeFactor) / NeglectPlayingTimeThreshold;
+                player.Potential = Mathf.Max(player.GetOverallRating(), player.Potential - neglectFactor * MaxPotentialErosionPerSeason);
+            }
+
             float headroom = player.Potential - player.GetOverallRating();
 
             bool isGoalkeeper = player.PrimaryPosition == PlayerPosition.GK;
 
-            if (youthFactor > 0f && headroom > 0f)
+            if (headroom > 0f && player.Age < GetGrowthEligibleUntilAge(player))
             {
-                // Capped at half the remaining headroom per season, even for a perfect
-                // storm of youth/minutes/huge ceiling - "reaching potential" should read
-                // as a multi-season arc, not something that can happen in one.
-                float growth = Mathf.Min(headroom * 0.5f, 6f) * youthFactor * (0.4f + playingTimeFactor * 0.6f);
+                // Linear glide-path: divide remaining headroom by remaining seasons to
+                // PeakDevelopmentAge, so the required rate ramps up automatically if
+                // early seasons under-delivered, converging on full closure of WHATEVER
+                // headroom remains instead of decaying toward it forever. Playing time
+                // still shapes how much of that season's target actually lands (0.7-1.0x)
+                // on top of the erosion above - a neglected player still grows toward
+                // their (now-shrunk) ceiling, just doesn't get to keep the original one.
+                float seasonsRemainingToPeak = Mathf.Max(1f, GetPeakDevelopmentAge(player) - player.Age + 1f);
+                float growth = (headroom / seasonsRemainingToPeak) * (0.7f + playingTimeFactor * 0.3f);
 
                 if (isGoalkeeper) GrowGoalkeeperAttributes(player, growth);
                 else GrowOutfieldAttributes(player, growth);
@@ -59,6 +317,22 @@ namespace Manager
             }
 
             ClampAllAttributes(player);
+
+            lastSeasonOverallDelta[player] = GetDisplayRating(player.GetOverallRating()) - displayedOverallBefore;
+        }
+
+        // Mirrors ManagerPrototypeController.GetDisplayRating exactly (same midpoint/
+        // stretch) - duplicated rather than shared since that method is UI-layer private,
+        // and the delta above needs to be in the same display terms as the OVR number
+        // it's shown next to, not raw GetOverallRating() terms.
+        private static int GetDisplayRating(float trueRating)
+        {
+            const float midpoint = 50f;
+            const float stretch = 1.15f;
+
+            float displayed = midpoint + (trueRating - midpoint) * stretch;
+
+            return Mathf.RoundToInt(Mathf.Clamp(displayed, 1f, 99f));
         }
 
         // Age-scaled chance, starting small right at the threshold and climbing toward

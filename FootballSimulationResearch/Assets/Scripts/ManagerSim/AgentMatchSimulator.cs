@@ -47,6 +47,34 @@ namespace Manager
         // original weighted-random pick with zero extra Random calls.
         public readonly Dictionary<string, (string Left, string Right)> CornerTakerNamesByTeamName = new();
 
+        // Manager Mode-only: tracks which minute each substitute actually entered the
+        // match (session 9 bug fix - see feedback in HANDOFF). Without this,
+        // GetFatigueMultiplier judged every player purely by the absolute match clock,
+        // so a substitute brought on at minute 88 was fatigued identically to the
+        // starter they replaced instead of getting the "fresh legs" benefit that's the
+        // entire point of making the change - confirmed live (yellow low-stamina border
+        // persisted on the incoming sub, not just cosmetically - the same multiplier
+        // feeds the actual chance-creation math below). Keyed by PlayerAgent reference,
+        // safe here specifically because SimulateFromMinute (the only path that can ever
+        // populate this, via a genuine mid-match substitution) always runs against the
+        // real GetOrCreateAgentTeam instances, never the throwaway fit-adjusted clones
+        // SimulateFixture's very first full-match call uses - by the time any
+        // substitution could exist, resimulation has already moved to the real
+        // instances. Cleared once per match (see ClearSubstitutions, called from
+        // ManagerPrototypeController.SimulateFixture) so a player subbed on late in one
+        // match doesn't carry a stale entry minute into their next start.
+        private readonly Dictionary<PlayerAgent, int> substituteEntryMinute = new();
+
+        public void ClearSubstitutions()
+        {
+            substituteEntryMinute.Clear();
+        }
+
+        public void RegisterSubstitution(PlayerAgent player, int entryMinute)
+        {
+            substituteEntryMinute[player] = entryMinute;
+        }
+
         public class AgentMatchEvent
         {
             public int Minute;
@@ -1497,14 +1525,22 @@ namespace Manager
                 return 1f;
             }
 
+            // A substitute's fatigue clock starts at their own entry minute, not
+            // kickoff - see substituteEntryMinute above. Falls back to the raw match
+            // minute for every starter (the never-substituted default), unchanged from
+            // before this fix.
+            int minutesOnPitch = substituteEntryMinute.TryGetValue(player, out int entryMinute)
+                ? Mathf.Max(0, minute - entryMinute)
+                : minute;
+
             // No real fatigue early.
-            if (minute <= 45)
+            if (minutesOnPitch <= 45)
             {
                 return 1f;
             }
 
             float staminaNormalised = Mathf.Clamp01(player.Stamina / 100f);
-            float matchProgressAfterHalfTime = Mathf.InverseLerp(45f, 90f, minute);
+            float matchProgressAfterHalfTime = Mathf.InverseLerp(45f, 90f, minutesOnPitch);
 
             // Low stamina players lose more effectiveness late.
             float fatigueLoss = (1f - staminaNormalised) * matchProgressAfterHalfTime * 0.28f;

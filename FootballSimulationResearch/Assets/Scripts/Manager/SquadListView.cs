@@ -89,10 +89,10 @@ namespace Manager
         // role badges like " <color=...>C VC</color>" - see ManagerPrototypeController.
         // BuildRoleBadgeSuffix) - empty by default so callers that don't care about roles
         // are unaffected.
-        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "")
+        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false)
         {
             EnsureLayoutComponents();
-            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix));
+            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix, isInjured));
         }
 
         // Generic N-column grid row/header - unlike the fixed Pos/Player/OVR/Rating grid
@@ -102,16 +102,30 @@ namespace Manager
         // in length. Real columns, not one concatenated label - the same "stat columns
         // didn't actually align" fix already applied to the Tactics screen's dropdown
         // options (session 7).
-        public void AddCustomGridHeaderRow(string[] headers, float[] columnFractions)
+        // onColumnClicked (optional) makes every header cell clickable, passing its
+        // column index back to the caller - the caller owns sort state/logic entirely,
+        // this just renders the click target and the active-column indicator.
+        // activeSortColumn/sortDescending draw a plain "v"/"^" suffix (not a Unicode
+        // arrow glyph - Oswald SDF has no symbol glyphs at all, same reason the Tactics
+        // Board's formation dropdown uses a plain "v") on whichever column is currently
+        // sorted, in the sort's actual direction.
+        public void AddCustomGridHeaderRow(string[] headers, float[] columnFractions, Action<int> onColumnClicked = null, int activeSortColumn = -1, bool sortDescending = false)
         {
             EnsureLayoutComponents();
-            spawnedRows.Add(BuildCustomGridHeaderRow(headers, columnFractions));
+            spawnedRows.Add(BuildCustomGridHeaderRow(headers, columnFractions, onColumnClicked, activeSortColumn, sortDescending));
         }
 
-        public void AddCustomGridRow(PlayerAgent player, string[] cellTexts, float[] columnFractions, Action<PlayerAgent> onRowClicked)
+        // onNameClicked (optional) makes column 0 (always the player's name by
+        // convention across every caller) its own independent click target - e.g.
+        // "click a Transfer/Scouting target's name to see full stats" without that
+        // click also firing the rest of the row's onRowClicked (bid/scout/sell). The
+        // name cell renders on top of the row's own full-row Button as a later-added
+        // child, so it naturally intercepts clicks within its own bounds - Unity's
+        // event system resolves a click to the topmost raycast target, not both.
+        public void AddCustomGridRow(PlayerAgent player, string[] cellTexts, float[] columnFractions, Action<PlayerAgent> onRowClicked, Action<PlayerAgent> onNameClicked = null)
         {
             EnsureLayoutComponents();
-            spawnedRows.Add(BuildCustomGridRow(player, cellTexts, columnFractions, onRowClicked));
+            spawnedRows.Add(BuildCustomGridRow(player, cellTexts, columnFractions, onRowClicked, onNameClicked));
         }
 
         private GameObject BuildGridHeaderRow()
@@ -144,7 +158,7 @@ namespace Manager
             return row;
         }
 
-        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "")
+        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false)
         {
             bool clickable = onRowClicked != null;
 
@@ -185,8 +199,36 @@ namespace Manager
             BuildGridCell(row.transform, x, GridColumnFractions[0], position, fontSize, ManagerUITheme.Accent, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             x += GridColumnFractions[0];
 
-            // Player
-            BuildGridCell(row.transform, x, GridColumnFractions[1], player.Name + badgeSuffix, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            // Player - a fixed-width icon gutter is always reserved to the left of the
+            // name (whether or not this particular row is injured) so columns don't
+            // visibly shift between injured and healthy rows; the icon itself is just
+            // toggled inactive when not needed.
+            const float injuryIconSize = 18f;
+            GameObject nameCell = new GameObject("Cell", typeof(RectTransform));
+            nameCell.transform.SetParent(row.transform, false);
+            RectTransform nameCellRect = nameCell.GetComponent<RectTransform>();
+            nameCellRect.anchorMin = new Vector2(x, 0f);
+            nameCellRect.anchorMax = new Vector2(x + GridColumnFractions[1], 1f);
+            nameCellRect.offsetMin = new Vector2(10f, 0f);
+            nameCellRect.offsetMax = new Vector2(-10f, 0f);
+
+            GameObject injuryIcon = ManagerUITheme.BuildInjuryCrossIcon(nameCell.transform, injuryIconSize);
+            RectTransform injuryIconRect = injuryIcon.GetComponent<RectTransform>();
+            injuryIconRect.anchorMin = new Vector2(0f, 0.5f);
+            injuryIconRect.anchorMax = new Vector2(0f, 0.5f);
+            injuryIconRect.pivot = new Vector2(0f, 0.5f);
+            injuryIconRect.anchoredPosition = Vector2.zero;
+            injuryIcon.SetActive(isInjured);
+
+            GameObject nameLabelObj = new GameObject("Label", typeof(RectTransform));
+            nameLabelObj.transform.SetParent(nameCell.transform, false);
+            RectTransform nameLabelRect = nameLabelObj.GetComponent<RectTransform>();
+            nameLabelRect.anchorMin = new Vector2(0f, 0f);
+            nameLabelRect.anchorMax = new Vector2(1f, 1f);
+            nameLabelRect.offsetMin = new Vector2(injuryIconSize + 8f, 0f);
+            nameLabelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.BuildLabel(nameLabelObj.transform, player.Name + badgeSuffix, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+
             x += GridColumnFractions[1];
 
             // OVR
@@ -220,7 +262,7 @@ namespace Manager
             ManagerUITheme.BuildLabel(cell.transform, text, size, color, alignment, style);
         }
 
-        private GameObject BuildCustomGridHeaderRow(string[] headers, float[] columnFractions)
+        private GameObject BuildCustomGridHeaderRow(string[] headers, float[] columnFractions, Action<int> onColumnClicked, int activeSortColumn, bool sortDescending)
         {
             GameObject row = new GameObject("CustomGridHeader", typeof(RectTransform), typeof(LayoutElement));
             row.transform.SetParent(rowContainer, false);
@@ -232,14 +274,59 @@ namespace Manager
             float x = 0f;
             for (int i = 0; i < headers.Length; i++)
             {
-                BuildGridCell(row.transform, x, columnFractions[i], headers[i], 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                bool isActiveSortColumn = i == activeSortColumn;
+                string text = isActiveSortColumn ? $"{headers[i]} {(sortDescending ? "v" : "^")}" : headers[i];
+                Color color = isActiveSortColumn ? ManagerUITheme.Accent : ManagerUITheme.TextMuted;
+
+                if (onColumnClicked != null)
+                {
+                    BuildClickableHeaderCell(row.transform, x, columnFractions[i], text, color, i, onColumnClicked);
+                }
+                else
+                {
+                    BuildGridCell(row.transform, x, columnFractions[i], text, 12, color, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                }
+
                 x += columnFractions[i];
             }
 
             return row;
         }
 
-        private GameObject BuildCustomGridRow(PlayerAgent player, string[] cellTexts, float[] columnFractions, Action<PlayerAgent> onRowClicked)
+        // Same rect/inset shape as BuildGridCell, but the outer object itself carries
+        // the Image/Button so the whole column header (not just the text) is a click
+        // target - matches how BuildCustomGridRow makes the whole row clickable rather
+        // than just its label.
+        private void BuildClickableHeaderCell(Transform parent, float x, float widthFraction, string text, Color color, int columnIndex, Action<int> onColumnClicked)
+        {
+            GameObject cell = new GameObject($"HeaderCell_{columnIndex}", typeof(RectTransform), typeof(Image), typeof(Button));
+            cell.transform.SetParent(parent, false);
+
+            RectTransform cellRect = cell.GetComponent<RectTransform>();
+            cellRect.anchorMin = new Vector2(x, 0f);
+            cellRect.anchorMax = new Vector2(x + widthFraction, 1f);
+            cellRect.offsetMin = Vector2.zero;
+            cellRect.offsetMax = Vector2.zero;
+
+            Image background = cell.GetComponent<Image>();
+            background.color = new Color(0f, 0f, 0f, 0f);
+
+            Button button = cell.GetComponent<Button>();
+            button.targetGraphic = background;
+            button.onClick.AddListener(() => onColumnClicked(columnIndex));
+
+            GameObject labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(cell.transform, false);
+            RectTransform labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(10f, 0f);
+            labelRect.offsetMax = new Vector2(-10f, 0f);
+
+            ManagerUITheme.BuildLabel(labelObj.transform, text, 12, color, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+        }
+
+        private GameObject BuildCustomGridRow(PlayerAgent player, string[] cellTexts, float[] columnFractions, Action<PlayerAgent> onRowClicked, Action<PlayerAgent> onNameClicked)
         {
             bool clickable = onRowClicked != null;
 
@@ -274,11 +361,52 @@ namespace Manager
             float x = 0f;
             for (int i = 0; i < cellTexts.Length; i++)
             {
-                BuildGridCell(row.transform, x, columnFractions[i], cellTexts[i], fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+                if (i == 0 && onNameClicked != null)
+                {
+                    BuildClickableNameCell(row.transform, x, columnFractions[i], cellTexts[i], player, onNameClicked);
+                }
+                else
+                {
+                    BuildGridCell(row.transform, x, columnFractions[i], cellTexts[i], fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+                }
+
                 x += columnFractions[i];
             }
 
             return row;
+        }
+
+        // Accent-colored (matching the established "this cell is special/interactive"
+        // convention already used for the Pos cell in BuildPlayerGridRow) rather than
+        // plain text, so it visually reads as its own click target distinct from the
+        // rest of the row.
+        private void BuildClickableNameCell(Transform parent, float x, float widthFraction, string text, PlayerAgent player, Action<PlayerAgent> onNameClicked)
+        {
+            GameObject cell = new GameObject("NameCell", typeof(RectTransform), typeof(Image), typeof(Button));
+            cell.transform.SetParent(parent, false);
+
+            RectTransform cellRect = cell.GetComponent<RectTransform>();
+            cellRect.anchorMin = new Vector2(x, 0f);
+            cellRect.anchorMax = new Vector2(x + widthFraction, 1f);
+            cellRect.offsetMin = Vector2.zero;
+            cellRect.offsetMax = Vector2.zero;
+
+            Image background = cell.GetComponent<Image>();
+            background.color = new Color(0f, 0f, 0f, 0f);
+
+            Button button = cell.GetComponent<Button>();
+            button.targetGraphic = background;
+            button.onClick.AddListener(() => onNameClicked(player));
+
+            GameObject labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(cell.transform, false);
+            RectTransform labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(10f, 0f);
+            labelRect.offsetMax = new Vector2(-10f, 0f);
+
+            ManagerUITheme.BuildLabel(labelObj.transform, text, fontSize, ManagerUITheme.Accent, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
         }
 
         public void Clear()

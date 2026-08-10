@@ -165,10 +165,12 @@ namespace Manager.Save
         public float BoardBoost;
     }
 
+    // TeamName renamed to Region (world-scattered scouting rework, session 9) - scouted
+    // prospects are pooled by region now, not tied to a real club at all.
     [Serializable]
     public class YouthPoolSaveData
     {
-        public string TeamName;
+        public string Region;
         public List<PlayerAgentSaveData> Prospects = new();
     }
 
@@ -206,5 +208,18 @@ namespace Manager.Save
         public List<SeasonRecordSaveData> CareerHistory = new();
         public List<YouthPoolSaveData> YouthPools = new();
         public List<string> ScoutedPlayerIds = new();
+
+        // Loan system (session 9) - a loaned-out player is removed from ManagedSquad
+        // entirely (they're not on your bench, they're playing elsewhere), so without
+        // this list, saving mid-loan would silently lose that player forever on the
+        // next load - neither the squad save nor anywhere else would have them.
+        // Destination flavor text isn't preserved (re-rolled fresh on load) - cosmetic
+        // only, not worth the extra DTO fields.
+        public List<PlayerAgentSaveData> LoanedOutPlayers = new();
+
+        // Youth academy (session 9) - same reasoning as LoanedOutPlayers above: academy
+        // prospects aren't in ManagedSquad/ManagedReservePool at all, so without this
+        // list they'd be silently lost on save/load.
+        public List<PlayerAgentSaveData> AcademyPool = new();
     }
 }

@@ -313,7 +313,8 @@ namespace Manager
             string ratingText,
             int ratingFontSize,
             string labelText,
-            int labelFontSize)
+            int labelFontSize,
+            bool showInjuryIcon = false)
         {
             float labelHeight = labelFontSize + 8f;
             float labelWidth = circleSize + 70f;
@@ -358,6 +359,16 @@ namespace Manager
             badgeObj.GetComponent<Image>().color = CardNeutralAlt;
             BuildLabel(badgeObj.transform, ratingText, ratingFontSize, TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
 
+            // Overlaps the badge's bottom-right corner slightly (a small outward
+            // overhang, like a notification badge) - matches where Thomas circled it on
+            // the design mockup's own "69" square example, not literally flush inside
+            // the corner.
+            if (showInjuryIcon)
+            {
+                GameObject injuryIcon = BuildInjuryCrossIcon(badgeBorderObj.transform, circleSize * 0.4f);
+                injuryIcon.GetComponent<RectTransform>().anchoredPosition = new Vector2(6f, -6f);
+            }
+
             GameObject labelObj = new GameObject("Label", typeof(RectTransform));
             labelObj.transform.SetParent(pinObj.transform, false);
             RectTransform labelRect = labelObj.GetComponent<RectTransform>();
@@ -369,6 +380,46 @@ namespace Manager
             BuildLabel(labelObj.transform, labelText, labelFontSize, TextPrimary, TextAlignmentOptions.Center);
 
             return pinObj;
+        }
+
+        // Injury cross badge - a small red square (Danger, matching the design mockup's
+        // own #c0392b exactly) with a white medical-cross plus mark, built from two
+        // crossed rectangles rather than an actual sprite asset (same flat-rectangles-
+        // only constraint as the pin border above - no rounded corners either, for the
+        // same reason). anchor/pivot both (1,0) so callers get bottom-right placement
+        // for free by just setting anchoredPosition; pass a different anchor/pivot
+        // after the call for any other corner.
+        public static GameObject BuildInjuryCrossIcon(Transform parent, float size)
+        {
+            GameObject iconObj = new GameObject("InjuryCross", typeof(RectTransform), typeof(Image));
+            iconObj.transform.SetParent(parent, false);
+
+            RectTransform iconRect = iconObj.GetComponent<RectTransform>();
+            iconRect.anchorMin = new Vector2(1f, 0f);
+            iconRect.anchorMax = new Vector2(1f, 0f);
+            iconRect.pivot = new Vector2(1f, 0f);
+            iconRect.sizeDelta = new Vector2(size, size);
+            iconObj.GetComponent<Image>().color = Danger;
+
+            GameObject verticalBar = new GameObject("Vertical", typeof(RectTransform), typeof(Image));
+            verticalBar.transform.SetParent(iconObj.transform, false);
+            RectTransform verticalRect = verticalBar.GetComponent<RectTransform>();
+            verticalRect.anchorMin = new Vector2(0.5f, 0.5f);
+            verticalRect.anchorMax = new Vector2(0.5f, 0.5f);
+            verticalRect.pivot = new Vector2(0.5f, 0.5f);
+            verticalRect.sizeDelta = new Vector2(size * 0.15f, size * 0.7f);
+            verticalBar.GetComponent<Image>().color = TextPrimary;
+
+            GameObject horizontalBar = new GameObject("Horizontal", typeof(RectTransform), typeof(Image));
+            horizontalBar.transform.SetParent(iconObj.transform, false);
+            RectTransform horizontalRect = horizontalBar.GetComponent<RectTransform>();
+            horizontalRect.anchorMin = new Vector2(0.5f, 0.5f);
+            horizontalRect.anchorMax = new Vector2(0.5f, 0.5f);
+            horizontalRect.pivot = new Vector2(0.5f, 0.5f);
+            horizontalRect.sizeDelta = new Vector2(size * 0.7f, size * 0.15f);
+            horizontalBar.GetComponent<Image>().color = TextPrimary;
+
+            return iconObj;
         }
 
         // Unity UI has no native CSS-style linear-gradient - this bakes a small diagonal
