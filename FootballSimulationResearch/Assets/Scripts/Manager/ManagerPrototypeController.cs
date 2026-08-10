@@ -894,9 +894,9 @@ namespace Manager
             titleRect.anchorMin = new Vector2(0f, 1f);
             titleRect.anchorMax = new Vector2(1f, 1f);
             titleRect.pivot = new Vector2(0f, 1f);
-            titleRect.sizeDelta = new Vector2(-2f * contentLeft, 34f);
+            titleRect.sizeDelta = new Vector2(-2f * contentLeft, 40f);
             titleRect.anchoredPosition = new Vector2(contentLeft, -22f);
-            ManagerUITheme.BuildLabel(titleObj.transform, "NEW CAREER", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(titleObj.transform, "NEW CAREER", 30, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject subtitleObj = new GameObject("Subtitle", typeof(RectTransform));
             subtitleObj.transform.SetParent(header.transform, false);
@@ -904,12 +904,12 @@ namespace Manager
             subtitleRect.anchorMin = new Vector2(0f, 1f);
             subtitleRect.anchorMax = new Vector2(1f, 1f);
             subtitleRect.pivot = new Vector2(0f, 1f);
-            subtitleRect.sizeDelta = new Vector2(-2f * contentLeft, 20f);
-            subtitleRect.anchoredPosition = new Vector2(contentLeft, -58f);
+            subtitleRect.sizeDelta = new Vector2(-2f * contentLeft, 24f);
+            subtitleRect.anchoredPosition = new Vector2(contentLeft, -60f);
             // Placeholder text - RefreshTeamSelectStepUI overwrites this immediately
             // (ShowTeamSelect calls it right after this method) with the real per-step
             // "Step 1 of 2"/"Step 2 of 2" text.
-            ManagerUITheme.BuildLabel(subtitleObj.transform, "Step 1 of 2 · Manager Name", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            ManagerUITheme.BuildLabel(subtitleObj.transform, "Step 1 of 2 · Manager Name", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
             teamSelectSubtitleObj = subtitleObj;
 
             ManagerUITheme.BuildAccentBand(teamSelectPanel.transform, topBand: false, height: bandHeight);
@@ -920,8 +920,8 @@ namespace Manager
             nameCaptionRect.anchorMin = new Vector2(0f, 1f);
             nameCaptionRect.anchorMax = new Vector2(0f, 1f);
             nameCaptionRect.pivot = new Vector2(0f, 1f);
-            nameCaptionRect.sizeDelta = new Vector2(nameColumnWidth, 18f);
-            ManagerUITheme.BuildLabel(nameCaption.transform, "MANAGER NAME", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            nameCaptionRect.sizeDelta = new Vector2(nameColumnWidth, 22f);
+            ManagerUITheme.BuildLabel(nameCaption.transform, "MANAGER NAME", 15, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
             nameCaption.transform.SetAsFirstSibling();
             teamSelectNameCaption = nameCaption;
 
@@ -1055,7 +1055,7 @@ namespace Manager
                 Button button = cell.GetComponent<Button>();
                 button.targetGraphic = image;
 
-                ManagerUITheme.BuildLabel(cell.transform, availableTeamNames[i].ToUpperInvariant(), 12, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.Bold, noWrap: false);
+                ManagerUITheme.BuildLabel(cell.transform, availableTeamNames[i].ToUpperInvariant(), 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.Bold, noWrap: false);
 
                 int capturedIndex = i;
                 button.onClick.AddListener(() => OnTeamGridTileClicked(capturedIndex));
@@ -5514,12 +5514,18 @@ namespace Manager
                     matchdayPrepPitchContainer,
                     $"OpponentPin_{player.Name}",
                     anchor,
+                    // circleSize stays at the original 48 (not bumped alongside the font
+                    // sizes) - it directly drives labelWidth (circleSize + 70), and a
+                    // wider box was enough to tip two closely-spaced CM pins into visual
+                    // overlap in some formations (confirmed live). Keeping the same box
+                    // width and only growing the text inside it gets the readability win
+                    // without the collision risk.
                     circleSize: 48f,
                     borderColor: ManagerUITheme.Danger,
                     ratingText: GetDisplayRating(player.GetOverallRating()).ToString(),
-                    ratingFontSize: 12,
+                    ratingFontSize: 14,
                     labelText: $"{player.Name} · {slot}",
-                    labelFontSize: 12);
+                    labelFontSize: 14);
             }
         }
 
@@ -5651,7 +5657,7 @@ namespace Manager
             goalsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             ManagerUITheme.SetPointAnchor(goalsCaptionObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(halfMargin, goalsBlockTop), new Vector2(400f, 20f));
             goalsCaptionObj.GetComponent<RectTransform>().pivot = new Vector2(0f, 1f);
-            ManagerUITheme.BuildLabel(goalsCaptionObj.transform, "GOALS", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(goalsCaptionObj.transform, "GOALS", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             // Side-by-side columns (not stacked) - each list is self-labeled with its own
             // team name (see PopulateGoalScorerLists) since position alone doesn't imply
@@ -5723,7 +5729,7 @@ namespace Manager
             keyMomentsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             matchKeyMomentsCaptionRect = keyMomentsCaptionObj.GetComponent<RectTransform>();
             ManagerUITheme.SetPointAnchor(matchKeyMomentsCaptionRect, new Vector2(0f, 1f), new Vector2(40f, -(headerHeight + 28f)), new Vector2(400f, 20f));
-            ManagerUITheme.BuildLabel(keyMomentsCaptionObj.transform, "MATCH LOG", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(keyMomentsCaptionObj.transform, "MATCH LOG", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             if (eventFeedText != null)
             {
@@ -5820,7 +5826,7 @@ namespace Manager
             ContentSizeFitter subsLogFitter = subsLogObj.AddComponent<ContentSizeFitter>();
             subsLogFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            Button makeChangesButton = ManagerUITheme.BuildButton(matchdayPanel.transform, "MAKE CHANGES", ManagerUITheme.CardNeutral, ManagerUITheme.TextPrimary, 13);
+            Button makeChangesButton = ManagerUITheme.BuildButton(matchdayPanel.transform, "MAKE CHANGES", ManagerUITheme.CardNeutral, ManagerUITheme.TextPrimary, 15);
             RectTransform makeChangesRect = makeChangesButton.GetComponent<RectTransform>();
             ManagerUITheme.SetPointAnchor(makeChangesRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 148f)), new Vector2(300f, 42f));
             makeChangesRect.pivot = new Vector2(0f, 1f);
@@ -5842,7 +5848,7 @@ namespace Manager
             matchStatsCaptionRect = statsCaptionRect2;
             ManagerUITheme.SetPointAnchor(statsCaptionRect2, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 210f)), new Vector2(360f, 20f));
             statsCaptionRect2.pivot = new Vector2(0f, 1f);
-            matchStatsCaptionLabel = ManagerUITheme.BuildLabel(statsCaptionObj.transform, "MATCH STATS", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            matchStatsCaptionLabel = ManagerUITheme.BuildLabel(statsCaptionObj.transform, "MATCH STATS", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject statsBarsObj = new GameObject("MatchStatsBars", typeof(RectTransform));
             statsBarsObj.transform.SetParent(matchdayPanel.transform, false);
@@ -6065,7 +6071,7 @@ namespace Manager
             labelRect.offsetMax = Vector2.zero;
             TextMeshProUGUI labelText = labelObj.AddComponent<TextMeshProUGUI>();
             labelText.text = $"{label}   {homeValue}{valueSuffix} / {awayValue}{valueSuffix}";
-            labelText.fontSize = 14;
+            labelText.fontSize = 16;
             labelText.color = ManagerUITheme.TextBody;
             labelText.alignment = TextAlignmentOptions.MidlineLeft;
             labelText.textWrappingMode = TextWrappingModes.NoWrap;
@@ -6164,7 +6170,7 @@ namespace Manager
             labelRect.offsetMax = Vector2.zero;
             TextMeshProUGUI text = labelObj.AddComponent<TextMeshProUGUI>();
             text.text = $"{homeValue}{valueSuffix}   {label}   {awayValue}{valueSuffix}";
-            text.fontSize = 18;
+            text.fontSize = 19;
             text.color = ManagerUITheme.TextBody;
             text.alignment = TextAlignmentOptions.MidlineLeft;
             text.textWrappingMode = TextWrappingModes.NoWrap;
