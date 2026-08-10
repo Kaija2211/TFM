@@ -199,7 +199,6 @@ namespace Manager
         private readonly HashSet<int> simulatedMatchdays = new();
 
         private OpenFootballMatch currentFixture;
-        private ManagerMentality mentalityUsedForCurrentMatch;
         private bool skipToResultsRequested;
 
         private bool matchdayPrepChromeBuilt;
@@ -298,6 +297,14 @@ namespace Manager
         // no separate off-then-on picker flow or per-match sub limit anymore. ---
         private bool tacticsBoardOpenedMidMatch;
         private readonly List<(string offName, string offPosition, string onName, string onPosition, int minute)> matchSubsLog = new();
+
+        // Live in-match player ratings (session 10) - managed team only, reset at
+        // kickoff (see OnSimulateMatchClicked) and applied one event at a time in sync
+        // with the event feed reveal in ReplayMatchCoroutine, so the ratings grid ticks
+        // at the same pace the user is already watching the match log update.
+        private readonly ManagerMatchRatings matchRatings = new();
+        private RectTransform matchRatingsGridContainer;
+
         private int currentMatchMinute;
         private int liveHomeGoalsSoFar;
         private int liveAwayGoalsSoFar;
@@ -1296,7 +1303,6 @@ namespace Manager
 
             lastExpectedHomeGoals = expectedHomeGoals;
             lastExpectedAwayGoals = expectedAwayGoals;
-            mentalityUsedForCurrentMatch = selectedMentality;
 
             TriggerMidMatchResimulation();
         }
@@ -4782,6 +4788,14 @@ namespace Manager
                 // GetFatigueMultiplier's own comment on why this was missing before.
                 matchSimulator.RegisterSubstitution(benchPlayer, currentMatchMinute);
                 TriggerMidMatchResimulation();
+
+                // Live ratings (session 10) - the incoming sub starts at the same
+                // baseline everyone kicks off at (EnsureTracked no-ops if somehow already
+                // tracked). The grid itself still only shows the current 11, so
+                // RefreshMatchRatingsGrid picks up the swap immediately rather than
+                // waiting for this player's first rated event.
+                matchRatings.EnsureTracked(benchPlayer.Name);
+                RefreshMatchRatingsGrid();
             }
 
             RefreshTacticsBoardUI();
@@ -5517,6 +5531,27 @@ namespace Manager
                 conditionRect.sizeDelta = new Vector2(180f, 18f);
                 conditionRect.anchoredPosition = new Vector2(-36f, -126f);
                 ManagerUITheme.BuildLabel(conditionCaption.transform, $"CONDITION {condition:F0}%", 13, conditionColor, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+
+                // Morale (session 10) - same placement/treatment as Condition directly
+                // above it, same inspectIsOwnSquad gate for the same reason (only the
+                // managed squad ever has real morale tracked - see
+                // ApplyMatchMoraleForManagedTeam).
+                float morale = GetOrCreateSquadRoles(managedTeamName).GetMorale(player);
+                Color moraleColor = morale >= 70f
+                    ? ManagerUITheme.Accent
+                    : morale >= 40f
+                        ? ManagerUITheme.Warning
+                        : ManagerUITheme.Danger;
+
+                GameObject moraleCaption = new GameObject("MoraleCaption", typeof(RectTransform));
+                moraleCaption.transform.SetParent(headerBand.transform, false);
+                RectTransform moraleRect = moraleCaption.GetComponent<RectTransform>();
+                moraleRect.anchorMin = new Vector2(1f, 1f);
+                moraleRect.anchorMax = new Vector2(1f, 1f);
+                moraleRect.pivot = new Vector2(1f, 1f);
+                moraleRect.sizeDelta = new Vector2(180f, 18f);
+                moraleRect.anchoredPosition = new Vector2(-36f, -146f);
+                ManagerUITheme.BuildLabel(moraleCaption.transform, $"MORALE {morale:F0}", 13, moraleColor, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
             }
 
             // In-season delta (career arc backlog item, session 9/10) - a small badge
@@ -6357,6 +6392,17 @@ namespace Manager
             const float headerHeight = 170f;
             const float footerHeight = 90f;
 
+            // Live ratings grid (session 10) - a full-width band of 11 player cards
+            // sitting just above the footer. The gap it lives in wasn't actually free
+            // space - it was the Match Log's own reserved scroll area, which simply
+            // hadn't filled up with enough events yet to visually reach the bottom early
+            // in a match. Genuinely claiming this height (shrinking the event feed mask
+            // below) rather than just drawing on top of it, so the two never overlap
+            // once the log grows.
+            const float ratingsGridHeight = 108f;
+            const float ratingsGridGap = 16f;
+            const float ratingsGridBottomOffset = footerHeight + ratingsGridGap;
+
             ManagerUITheme.BuildAccentBand(matchdayPanel.transform, topBand: true, height: headerHeight);
             GameObject footerBand = ManagerUITheme.BuildAccentBand(matchdayPanel.transform, topBand: false, height: footerHeight);
 
@@ -6535,7 +6581,9 @@ namespace Manager
                 RectTransform maskRect = maskObj.GetComponent<RectTransform>();
                 maskRect.anchorMin = new Vector2(0f, 0f);
                 maskRect.anchorMax = new Vector2(0.55f, 1f);
-                maskRect.offsetMin = new Vector2(40f, footerHeight + 24f);
+                // Bottom edge raised from footerHeight+24 to clear the ratings grid band
+                // now sitting between this and the footer - see ratingsGridBottomOffset.
+                maskRect.offsetMin = new Vector2(40f, ratingsGridBottomOffset + ratingsGridHeight + ratingsGridGap);
                 maskRect.offsetMax = new Vector2(-20f, -(headerHeight + 56f));
 
                 eventFeedText.transform.SetParent(maskRect, false);
@@ -6653,6 +6701,45 @@ namespace Manager
             // Grown from 140 (1 row: Shots) to fit 4 rows (Possession/Chances Created/
             // Shots/Shots on Target) at 36px pitch each.
             matchStatsBarsContainer.sizeDelta = new Vector2(360f, 190f);
+
+            // --- Live ratings grid: full-width strip of 11 player cards, bottom-anchored
+            // just above the footer (see ratingsGridHeight/ratingsGridBottomOffset at the
+            // top of this method). Live-only (session 10 fix, live bug report) - the
+            // original design kept this visible through Full Time as a "final ratings"
+            // readout, but Full Time's own layout (goal timeline + scorer lists) uses
+            // that same bottom region and the two overlapped in practice. Added to
+            // matchLiveOnlyElements below, same as Subs Made/Make Changes, so it's gone
+            // by the time Full Time's layout takes over.
+            GameObject ratingsGridCaptionObj = new GameObject("RatingsGridCaption", typeof(RectTransform));
+            ratingsGridCaptionObj.transform.SetParent(matchdayPanel.transform, false);
+            RectTransform ratingsGridCaptionRect = ratingsGridCaptionObj.GetComponent<RectTransform>();
+            ratingsGridCaptionRect.anchorMin = new Vector2(0f, 0f);
+            ratingsGridCaptionRect.anchorMax = new Vector2(0f, 0f);
+            ratingsGridCaptionRect.pivot = new Vector2(0f, 0f);
+            ratingsGridCaptionRect.anchoredPosition = new Vector2(halfMargin, ratingsGridBottomOffset + ratingsGridHeight + 6f);
+            ratingsGridCaptionRect.sizeDelta = new Vector2(400f, 20f);
+            ManagerUITheme.BuildLabel(ratingsGridCaptionObj.transform, "PLAYER RATINGS", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject ratingsGridObj = new GameObject("RatingsGrid", typeof(RectTransform));
+            ratingsGridObj.transform.SetParent(matchdayPanel.transform, false);
+            matchRatingsGridContainer = ratingsGridObj.GetComponent<RectTransform>();
+            matchRatingsGridContainer.anchorMin = new Vector2(0f, 0f);
+            matchRatingsGridContainer.anchorMax = new Vector2(1f, 0f);
+            matchRatingsGridContainer.pivot = new Vector2(0f, 0f);
+            matchRatingsGridContainer.offsetMin = new Vector2(halfMargin, ratingsGridBottomOffset);
+            matchRatingsGridContainer.offsetMax = new Vector2(-halfMargin, ratingsGridBottomOffset + ratingsGridHeight);
+
+            HorizontalLayoutGroup ratingsGridLayout = ratingsGridObj.AddComponent<HorizontalLayoutGroup>();
+            ratingsGridLayout.childForceExpandWidth = true;
+            ratingsGridLayout.childForceExpandHeight = true;
+            ratingsGridLayout.childControlWidth = true;
+            ratingsGridLayout.childControlHeight = true;
+            ratingsGridLayout.spacing = 8f;
+
+            System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
+            matchLiveOnlyElements[^1] = ratingsGridCaptionObj;
+            System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
+            matchLiveOnlyElements[^1] = ratingsGridObj;
 
             // --- Footer: live Mentality pills (left, real - reused from Matchday Prep,
             // which no longer needs them since it's scouting-only now; now genuinely
@@ -6777,6 +6864,62 @@ namespace Manager
             // Rows are cleared and rebuilt fresh every time this runs - same rapid
             // destroy/recreate churn as the Tactics Board's pins/bench.
             StartCoroutine(RecoverBlankLabelsNextFrame(matchSubsLogContainer));
+        }
+
+        // Live ratings grid (session 10) - one card per CURRENT managed-team starter
+        // (so a mid-match substitution swaps the card, not just the number inside it),
+        // rebuilt fresh on every call same as RefreshMatchSubsMadeList above - called
+        // once per revealed event during ReplayMatchCoroutine, so this genuinely does
+        // run a lot over the course of a match; destroy/recreate at this frequency is
+        // already the established pattern for this screen's other live lists, and 11
+        // small cards is cheap.
+        private void RefreshMatchRatingsGrid()
+        {
+            if (matchRatingsGridContainer == null)
+            {
+                return;
+            }
+
+            foreach (Transform child in matchRatingsGridContainer)
+            {
+                Destroy(child.gameObject);
+            }
+
+            AgentTeam managedTeam = GetOrCreateAgentTeam(managedTeamName);
+
+            foreach (PlayerAgent player in managedTeam.StartingEleven)
+            {
+                float rating = matchRatings.GetRating(player.Name);
+
+                GameObject card = new GameObject($"RatingCard_{player.Name}", typeof(RectTransform), typeof(Image));
+                card.transform.SetParent(matchRatingsGridContainer, false);
+                card.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+                GameObject nameObj = new GameObject("Name", typeof(RectTransform));
+                nameObj.transform.SetParent(card.transform, false);
+                RectTransform nameRect = nameObj.GetComponent<RectTransform>();
+                nameRect.anchorMin = new Vector2(0f, 1f);
+                nameRect.anchorMax = new Vector2(1f, 1f);
+                nameRect.pivot = new Vector2(0.5f, 1f);
+                nameRect.offsetMin = new Vector2(4f, -36f);
+                nameRect.offsetMax = new Vector2(-4f, -6f);
+                TextMeshProUGUI nameLabel = ManagerUITheme.BuildLabel(nameObj.transform, player.Name, 12, ManagerUITheme.TextMuted, TextAlignmentOptions.Top, FontStyles.Bold);
+                nameLabel.enableAutoSizing = true;
+                nameLabel.fontSizeMin = 9;
+                nameLabel.fontSizeMax = 12;
+                nameLabel.textWrappingMode = TextWrappingModes.NoWrap;
+
+                GameObject ratingObj = new GameObject("Rating", typeof(RectTransform));
+                ratingObj.transform.SetParent(card.transform, false);
+                RectTransform ratingRect = ratingObj.GetComponent<RectTransform>();
+                ratingRect.anchorMin = new Vector2(0f, 0f);
+                ratingRect.anchorMax = new Vector2(1f, 1f);
+                ratingRect.offsetMin = new Vector2(4f, 8f);
+                ratingRect.offsetMax = new Vector2(-4f, -38f);
+                ManagerUITheme.BuildLabel(ratingObj.transform, rating.ToString("F1"), 26, ManagerUITheme.RatingColor(rating * 10f), TextAlignmentOptions.Center, FontStyles.Bold);
+            }
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(matchRatingsGridContainer));
         }
 
         // Opens the Tactics Board mid-match so subs can be made via the same drag-drop
@@ -6929,18 +7072,6 @@ namespace Manager
             y = BuildFullTimeStatRow("SHOTS", homeShots, awayShots, y);
             y = BuildFullTimeStatRow("SHOTS ON TARGET", homeShotsOnTarget, awayShotsOnTarget, y);
             y = BuildFullTimeStatRow("GOALS", homeGoals, awayGoals, y);
-
-            GameObject mentalityLineObj = new GameObject("MentalityUsedLine", typeof(RectTransform));
-            mentalityLineObj.transform.SetParent(matchStatsBarsContainer, false);
-            RectTransform mentalityLineRect = mentalityLineObj.GetComponent<RectTransform>();
-            mentalityLineRect.anchorMin = new Vector2(0f, 1f);
-            mentalityLineRect.anchorMax = new Vector2(1f, 1f);
-            mentalityLineRect.pivot = new Vector2(0f, 1f);
-            mentalityLineRect.anchoredPosition = new Vector2(0f, -y - 8f);
-            mentalityLineRect.sizeDelta = new Vector2(0f, 22f);
-            // Centered, matching the design's Full-Time Summary board (it centers this
-            // line under the stat bars rather than left-aligning it).
-            ManagerUITheme.BuildLabel(mentalityLineObj.transform, $"Mentality used: {mentalityUsedForCurrentMatch}", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
         }
 
         private float BuildFullTimeStatRow(string label, int homeValue, int awayValue, float y, string valueSuffix = "")
@@ -6993,8 +7124,6 @@ namespace Manager
 
         public void OnSimulateMatchClicked()
         {
-            mentalityUsedForCurrentMatch = selectedMentality;
-
             AgentMatchSimulator.AgentMatchResult result = SimulateFixture(currentFixture);
 
             lastSimulatedResult = result;
@@ -7025,6 +7154,14 @@ namespace Manager
             matchSubsLog.Clear();
             RefreshMatchSubsMadeList();
             if (matchFullTimeCaptionGroup != null) matchFullTimeCaptionGroup.SetActive(false);
+
+            // Live ratings (session 10) - seeded with whichever XI SimulateFixture just
+            // locked in (post EnsureNoInjuredStarters) for the managed team specifically,
+            // same managed-team-only scope as Condition/appearances/form bonus.
+            List<string> ratingsPlayerNames = new List<string>();
+            foreach (PlayerAgent p in GetOrCreateAgentTeam(managedTeamName).StartingEleven) ratingsPlayerNames.Add(p.Name);
+            matchRatings.ResetForMatch(ratingsPlayerNames);
+            RefreshMatchRatingsGrid();
 
             // Undo everything ShowFullTimeResults did to these shared elements for the
             // previous match - without this, the second matchday inherited the first
@@ -7171,6 +7308,7 @@ namespace Manager
             }
 
             ApplyMatchFormBonusForManagedTeam(fixture, result);
+            ApplyMatchMoraleForManagedTeam(fixture, result);
         }
 
         // Form-based development bonus (session 9 backlog item) - has to live here,
@@ -7220,6 +7358,41 @@ namespace Manager
             {
                 int goalsThisMatch = goalsByScorerName.TryGetValue(player.Name, out int goals) ? goals : 0;
                 ManagerPlayerDevelopment.ApplyMatchFormBonus(player, goalsThisMatch, outcome);
+            }
+        }
+
+        // Morale (session 10 - Thomas: doesn't affect performance, affects development
+        // instead - see ManagerSquadRoles.ApplyPostMatchMorale/GetMoraleGrowthMultiplier).
+        // Deliberately loops the WHOLE squad (team.Players, StartingEleven + Bench), not
+        // just playedThisMatch like the form bonus above - a benched player's morale
+        // needs to react to being overlooked, which means iterating players who did NOT
+        // play, not just the ones who did.
+        private void ApplyMatchMoraleForManagedTeam(OpenFootballMatch fixture, AgentMatchSimulator.AgentMatchResult result)
+        {
+            bool isManagedHome = fixture.HomeTeam == managedTeamName;
+            bool isManagedAway = fixture.AwayTeam == managedTeamName;
+
+            if (!isManagedHome && !isManagedAway)
+            {
+                return;
+            }
+
+            int managedGoals = isManagedHome ? result.HomeGoals : result.AwayGoals;
+            int opponentGoals = isManagedHome ? result.AwayGoals : result.HomeGoals;
+
+            ManagerPlayerDevelopment.MatchFormOutcome outcome = managedGoals > opponentGoals
+                ? ManagerPlayerDevelopment.MatchFormOutcome.Win
+                : managedGoals < opponentGoals
+                    ? ManagerPlayerDevelopment.MatchFormOutcome.Loss
+                    : ManagerPlayerDevelopment.MatchFormOutcome.Draw;
+
+            AgentTeam managedTeam = GetOrCreateAgentTeam(managedTeamName);
+            HashSet<PlayerAgent> playedThisMatch = new HashSet<PlayerAgent>(managedTeam.StartingEleven);
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+
+            foreach (PlayerAgent player in managedTeam.Players)
+            {
+                roles.ApplyPostMatchMorale(player, playedThisMatch.Contains(player), outcome);
             }
         }
 
@@ -7482,8 +7655,9 @@ namespace Manager
                 // 0.7x floor rate), same as the old season-lump version's playing-time
                 // floor. Deliberately still the binary `played` flag here, not
                 // minutesPlayed - growth ticks were never the reported issue, only
-                // Condition was, so left unchanged to keep this fix minimal.
-                ManagerPlayerDevelopment.ApplyMatchdayProgression(player, played);
+                // Condition was, so left unchanged to keep this fix minimal. Morale
+                // multiplier (session 10) rides along on this same call.
+                ManagerPlayerDevelopment.ApplyMatchdayProgression(player, played, roles.GetMoraleGrowthMultiplier(player));
             }
         }
 
@@ -7660,6 +7834,16 @@ namespace Manager
                     RefreshLiveMatchStats(homeShots, awayShots, homeShotsOnTarget, awayShotsOnTarget, homeAttackEvents, awayAttackEvents);
 
                     AppendMatchEventRow(minute, matchEvent);
+
+                    // Live ratings (session 10) - ApplyEvent silently no-ops for any name
+                    // not seeded into this match's tracked set (i.e. every opponent
+                    // player), so it's safe to call for every event regardless of which
+                    // side was attacking. A mid-match resimulation (TriggerMidMatchResimulation)
+                    // mutates this same result.Events list in place, so replayed/regenerated
+                    // tail events flow through this exact loop and get rated normally -
+                    // no special-casing needed.
+                    matchRatings.ApplyEvent(matchEvent);
+                    RefreshMatchRatingsGrid();
                 }
             }
 

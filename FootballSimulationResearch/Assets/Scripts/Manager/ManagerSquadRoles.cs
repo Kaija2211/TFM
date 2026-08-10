@@ -143,16 +143,72 @@ namespace Manager
             appearancesThisSeason[player] = GetAppearancesThisSeason(player) + 1;
         }
 
-        // Season rollover (career-arc addition) - condition/injuries/appearances reset
-        // for the new season's fresh fixture list; Captain/ViceCaptain/set-piece takers
-        // and the attack/defend leanings deliberately survive untouched, since re-
-        // picking your captain every single season would be busywork, not a real
+        // Morale (session 10 - Thomas: doesn't affect match performance, affects
+        // development instead). Same 0-100 shape as Condition, but a happy 70 default
+        // rather than a maxed 100 - resets every season (Thomas: "assume the players
+        // went off to a beach somewhere during the summer and are in good moods again"),
+        // not a permanently-scarred-forever trait. 70 leaves headroom both directions:
+        // a good season can push it up toward the 85-100 real-boost range, a bad one can
+        // grind it down through neutral (50) into actual penalty territory.
+        private const float DefaultMorale = 70f;
+        private readonly Dictionary<PlayerAgent, float> morale = new();
+
+        public float GetMorale(PlayerAgent player)
+        {
+            return morale.TryGetValue(player, out float value) ? value : DefaultMorale;
+        }
+
+        // Two cheap, already-available signals (same "no new tracking, reuse what a
+        // match result already tells you" philosophy as ApplyMatchFormBonus) - playing
+        // time and team result. A benched player drifts down a little regardless of
+        // outcome (overlooked, not miserable); a player who actually featured swings
+        // with the result - winning lifts morale more than a loss drags it down, and a
+        // draw is a small net positive ("at least didn't lose") rather than neutral,
+        // matching how a real dressing room reacts to a hard-fought point more warmly
+        // than to inactivity.
+        public void ApplyPostMatchMorale(PlayerAgent player, bool played, ManagerPlayerDevelopment.MatchFormOutcome outcome)
+        {
+            float delta;
+
+            if (!played)
+            {
+                delta = -0.5f;
+            }
+            else
+            {
+                delta = outcome switch
+                {
+                    ManagerPlayerDevelopment.MatchFormOutcome.Win => 2f,
+                    ManagerPlayerDevelopment.MatchFormOutcome.Loss => -2f,
+                    _ => 0.3f
+                };
+            }
+
+            morale[player] = Mathf.Clamp(GetMorale(player) + delta, 0f, 100f);
+        }
+
+        // 0.85x at Morale 0, 1.15x at Morale 100 - a happy player develops meaningfully
+        // faster, a miserable one meaningfully slower, but neither extreme dominates the
+        // existing playing-time-driven growth rate ApplyMatchdayProgression already
+        // computes. Deliberately only plugged into the GROWTH side of development (see
+        // ApplyMatchdayProgression's own moraleGrowthMultiplier parameter) - decline/
+        // aging is a biological process, not a motivational one, so morale doesn't touch it.
+        public float GetMoraleGrowthMultiplier(PlayerAgent player)
+        {
+            return 0.85f + (GetMorale(player) / 100f) * 0.3f;
+        }
+
+        // Season rollover (career-arc addition) - condition/injuries/appearances/morale
+        // reset for the new season's fresh fixture list; Captain/ViceCaptain/set-piece
+        // takers and the attack/defend leanings deliberately survive untouched, since
+        // re-picking your captain every single season would be busywork, not a real
         // decision.
         public void ResetForNewSeason()
         {
             condition.Clear();
             injuryReturnMatchday.Clear();
             appearancesThisSeason.Clear();
+            morale.Clear();
         }
     }
 }

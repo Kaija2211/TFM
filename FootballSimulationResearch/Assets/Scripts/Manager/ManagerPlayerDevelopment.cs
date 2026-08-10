@@ -153,7 +153,15 @@ namespace Manager
         // formula, and growth's playing-time multiplier only ever swings between 0.7x-
         // 1.0x (the same floor-protected shape as the season version), so ticking it off
         // a single match's played/not-played signal is safe.
-        public static void ApplyMatchdayProgression(PlayerAgent player, bool playedThisMatchday)
+        // moraleGrowthMultiplier (session 10 - Thomas: morale shouldn't touch match
+        // performance, it should touch development) - optional and defaulted to 1f
+        // (no effect) so this stays a pure no-op for any caller that doesn't have real
+        // morale data to pass; only the managed team's own per-matchday tick (the only
+        // caller of this method - see ApplyMatchdayConditionAndInjuries) ever passes a
+        // real value, from ManagerSquadRoles.GetMoraleGrowthMultiplier. Only applied to
+        // the GROWTH branch below, never decline - see GetMoraleGrowthMultiplier's own
+        // comment for why.
+        public static void ApplyMatchdayProgression(PlayerAgent player, bool playedThisMatchday, float moraleGrowthMultiplier = 1f)
         {
             float headroom = player.Potential - player.GetOverallRating();
             bool isGoalkeeper = player.PrimaryPosition == PlayerPosition.GK;
@@ -163,7 +171,7 @@ namespace Manager
                 float matchdayPlayingTimeFactor = playedThisMatchday ? 1f : 0f;
                 float seasonsRemainingToPeak = Mathf.Max(1f, GetPeakDevelopmentAge(player) - player.Age + 1f);
                 float seasonGrowth = (headroom / seasonsRemainingToPeak) * (0.7f + matchdayPlayingTimeFactor * 0.3f);
-                float growth = seasonGrowth / AssumedMatchdaysPerSeason;
+                float growth = (seasonGrowth / AssumedMatchdaysPerSeason) * moraleGrowthMultiplier;
 
                 if (isGoalkeeper) GrowGoalkeeperAttributes(player, growth);
                 else GrowOutfieldAttributes(player, growth);

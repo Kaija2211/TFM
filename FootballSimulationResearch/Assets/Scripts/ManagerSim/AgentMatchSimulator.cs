@@ -101,6 +101,22 @@ namespace Manager
             // exact point IsGoal is set - the actual scorer, not parsed from Description).
             // Purely additive, same as HomeTeamAttacking above.
             public string ScorerName;
+
+            // Live match ratings (session 10) - ResolveAttack already picks a creator/
+            // shooter/defender/goalkeeper for every chance to compute chanceCreation/
+            // defensiveResistance and build the event's Description text, then used to
+            // just throw those identities away. These four fields preserve them on the
+            // event instead, so ManagerMatchRatings can attribute a rating swing to the
+            // right player without re-deriving anything from free text. CreatorName/
+            // DefenderName/GoalkeeperName are set on every event (those three roles are
+            // always resolved before any early-return in ResolveAttack); ShooterName is
+            // only set once a shot is actually attempted (not on a chance stopped before
+            // the shooter ever got to shoot) - see ResolveAttack for exactly which of the
+            // four add-sites sets which.
+            public string CreatorName;
+            public string ShooterName;
+            public string DefenderName;
+            public string GoalkeeperName;
         }
 
         public class AgentMatchResult
@@ -407,7 +423,10 @@ namespace Manager
                         chanceType,
                         creatorFatigue
                     ),
-                    HomeTeamAttacking = homeAttacks
+                    HomeTeamAttacking = homeAttacks,
+                    CreatorName = creator.Name,
+                    DefenderName = defender.Name,
+                    GoalkeeperName = goalkeeper.Name
                 });
 
                 return;
@@ -438,7 +457,11 @@ namespace Manager
                         shooterFatigue
                     ),
                     IsShot = true,
-                    HomeTeamAttacking = homeAttacks
+                    HomeTeamAttacking = homeAttacks,
+                    CreatorName = creator.Name,
+                    ShooterName = shooter.Name,
+                    DefenderName = defender.Name,
+                    GoalkeeperName = goalkeeper.Name
                 });
 
                 return;
@@ -508,7 +531,11 @@ namespace Manager
                     IsShot = true,
                     IsOnTarget = true,
                     HomeTeamAttacking = homeAttacks,
-                    ScorerName = shooter.Name
+                    ScorerName = shooter.Name,
+                    CreatorName = creator.Name,
+                    ShooterName = shooter.Name,
+                    DefenderName = defender.Name,
+                    GoalkeeperName = goalkeeper.Name
                 });
             }
             else
@@ -524,7 +551,11 @@ namespace Manager
                     ),
                     IsShot = true,
                     IsOnTarget = true,
-                    HomeTeamAttacking = homeAttacks
+                    HomeTeamAttacking = homeAttacks,
+                    CreatorName = creator.Name,
+                    ShooterName = shooter.Name,
+                    DefenderName = defender.Name,
+                    GoalkeeperName = goalkeeper.Name
                 });
             }
         }
