@@ -6,6 +6,7 @@ using UnityEngine.UI;
 using TMPro;
 using Data;
 using Sim;
+using Manager.Save;
 
 namespace Manager
 {
@@ -144,6 +145,11 @@ namespace Manager
         private readonly LeagueTable playableTable = new();
         private readonly Dictionary<string, AgentTeam> squadsByTeamName = new();
         private readonly Dictionary<string, ManagerSquadRoles> squadRolesByTeamName = new();
+        private readonly ManagerScouting scouting = new();
+        private readonly ManagerClubFinance finance = new();
+        private readonly ManagerCareerHistory careerHistory = new();
+        private SeasonRecord lastSeasonRecord;
+        private bool seasonEndRewardsAppliedForCurrentSeason;
         private readonly AgentSquadGenerator squadGenerator = new();
         private readonly AgentMatchSimulator matchSimulator = new();
 
@@ -211,6 +217,14 @@ namespace Manager
         private TextMeshProUGUI hubClubNameLabel;
         private TextMeshProUGUI hubBylineLabel;
         private Coroutine hubBylineRecreateCoroutine;
+
+        // --- Season loop (career-arc addition, replaces the old dead end where fixtures
+        // just ran out and Next Matchday/Simulate Season quietly disabled forever) ---
+        private int currentSeason = 1;
+        private bool endOfSeasonChromeBuilt;
+        private GameObject endOfSeasonPanel;
+        private RectTransform endOfSeasonContentContainer;
+        private readonly List<GameObject> spawnedEndOfSeasonElements = new();
 
         // --- Squad: Tactics Board (pitch view, drag-to-sub, formation switching) ---
         private bool tacticsBoardChromeBuilt;
@@ -423,6 +437,12 @@ namespace Manager
 
         public void OnExitToTitleClicked()
         {
+            // Real now (career-arc addition, session 8, Phase 5) - this button used to
+            // have "nothing to actually commit" (see the old comment on the Tactics
+            // screen's own SAVE button, same era). Only reachable from the Hub, which
+            // means a career is always genuinely in progress here - no guard needed.
+            ManagerSaveService.Save(BuildSaveData());
+
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
 
             ShowTitleScreen();
@@ -543,8 +563,26 @@ namespace Manager
             loadCareerObj.GetComponent<Image>().color = ManagerUITheme.CardNeutral;
             Button loadCareerButton = loadCareerObj.GetComponent<Button>();
             loadCareerButton.targetGraphic = loadCareerObj.GetComponent<Image>();
+
+            // Real now (career-arc addition, session 8, Phase 5) - only enabled when a
+            // save file actually exists, same "don't fake a feature that doesn't have
+            // anything behind it yet" reasoning that kept it disabled before.
+            // BuildLabel must run in BOTH branches - NormalizeButtonLabel (which
+            // SetDisabledPlaceholder calls internally) only ever UPDATES an existing
+            // label via GetComponentInChildren, it never creates one. Splitting this
+            // into an if/else and only keeping BuildLabel in the "has save" branch left
+            // the common "no save yet" case with a completely unlabeled button - the
+            // exact bug Thomas spotted live.
             ManagerUITheme.BuildLabel(loadCareerObj.transform, "LOAD CAREER", 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
-            ManagerUITheme.SetDisabledPlaceholder(loadCareerButton, "LOAD CAREER");
+
+            if (ManagerSaveService.HasSaveFile())
+            {
+                loadCareerButton.onClick.AddListener(OnLoadCareerClicked);
+            }
+            else
+            {
+                ManagerUITheme.SetDisabledPlaceholder(loadCareerButton, "LOAD CAREER");
+            }
 
             GameObject settingsObj = new GameObject("SettingsButton", typeof(RectTransform), typeof(Image), typeof(Button));
             settingsObj.transform.SetParent(titleContentContainer, false);
@@ -841,12 +879,11 @@ namespace Manager
             const float bandHeight = 90f;
 
             // Mockup's body is a max-width:1500px column centered in the 1920-wide panel
-            // (`margin:0 auto`), not edge-to-edge - contentLeft/contentRight mark that
-            // centered region's horizontal bounds, matching the panel's new width-wide
-            // 1920x1080 canvas instead of the old 24px-from-edge layout tuned for 960x540.
+            // (`margin:0 auto`), not edge-to-edge - contentLeft marks that centered
+            // region's left bound, matching the panel's new width-wide 1920x1080 canvas
+            // instead of the old 24px-from-edge layout tuned for 960x540.
             const float contentWidth = 1700f;
             const float contentLeft = (1920f - contentWidth) / 2f;
-            const float contentRight = 1920f - contentLeft;
             const float nameColumnWidth = 340f;
 
             GameObject header = ManagerUITheme.BuildAccentBand(teamSelectPanel.transform, topBand: true, height: bandHeight);
@@ -1439,11 +1476,51 @@ namespace Manager
 
             if (transfersButton != null)
             {
+                // Real now (career-arc addition, session 8, Phase 3) - was a disabled
+                // placeholder with no backing system; StyleHubActionButton/
+                // NormalizeButtonLabel match viewSquadButton's own normal (non-disabled)
+                // styling instead of SetDisabledPlaceholder.
                 ManagerUITheme.SetPointAnchor(transfersButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -transfersTop), new Vector2(menuWidth, subRowHeight));
-                ManagerUITheme.SetDisabledPlaceholder(transfersButton, "TRANSFERS");
+                StyleHubActionButton(transfersButton);
+                ManagerUITheme.NormalizeButtonLabel(transfersButton, "TRANSFERS", ManagerUITheme.TextBody, 17);
+                transfersButton.onClick.AddListener(OnOpenTransferMarketClicked);
             }
 
-            float inboxTop = transfersTop + subRowHeight + rowGap;
+            // SCOUTING (career-arc addition, session 8, Phase 2) - real, unlike the
+            // placeholders around it, so built with the same normal-button styling as
+            // viewSquadButton rather than SetDisabledPlaceholder.
+            float scoutingTop = transfersTop + subRowHeight + rowGap;
+
+            GameObject scoutingObj = new GameObject("ScoutingButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            scoutingObj.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(scoutingObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -scoutingTop), new Vector2(menuWidth, subRowHeight));
+            Button scoutingButton = scoutingObj.GetComponent<Button>();
+            scoutingButton.targetGraphic = scoutingObj.GetComponent<Image>();
+            // BuildLabel first - StyleHubActionButton/NormalizeButtonLabel only ever
+            // UPDATE an existing label via GetComponentInChildren, they never create
+            // one, unlike viewSquadButton/transfersButton which already had an
+            // Editor-placed label to update. A brand-new code-built button has nothing
+            // for them to find, so it rendered with no text at all.
+            ManagerUITheme.BuildLabel(scoutingObj.transform, "SCOUTING", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
+            StyleHubActionButton(scoutingButton);
+            ManagerUITheme.NormalizeButtonLabel(scoutingButton, "SCOUTING", ManagerUITheme.TextBody, 17);
+            scoutingButton.onClick.AddListener(OnOpenScoutingClicked);
+
+            // TROPHY ROOM (career-arc addition, session 8, Phase 4) - real, same styling
+            // as Squad/Transfers/Scouting rather than a disabled placeholder.
+            float trophyRoomTop = scoutingTop + subRowHeight + rowGap;
+
+            GameObject trophyRoomObj = new GameObject("TrophyRoomButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            trophyRoomObj.transform.SetParent(seasonHubPanel.transform, false);
+            ManagerUITheme.SetPointAnchor(trophyRoomObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -trophyRoomTop), new Vector2(menuWidth, subRowHeight));
+            Button trophyRoomButton = trophyRoomObj.GetComponent<Button>();
+            trophyRoomButton.targetGraphic = trophyRoomObj.GetComponent<Image>();
+            ManagerUITheme.BuildLabel(trophyRoomObj.transform, "TROPHY ROOM", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
+            StyleHubActionButton(trophyRoomButton);
+            ManagerUITheme.NormalizeButtonLabel(trophyRoomButton, "TROPHY ROOM", ManagerUITheme.TextBody, 17);
+            trophyRoomButton.onClick.AddListener(OnOpenTrophyRoomClicked);
+
+            float inboxTop = trophyRoomTop + subRowHeight + rowGap;
 
             // "Inbox" is new copy from the mockup with no backing inbox system anywhere
             // in Manager Mode - treated as a disabled placeholder, same as
@@ -1550,6 +1627,12 @@ namespace Manager
                 simulateSeasonButton.interactable = hasNextFixture;
             }
 
+            if (!hasNextFixture)
+            {
+                ShowEndOfSeasonPanel();
+                return;
+            }
+
             if (leagueTableView != null)
             {
                 int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
@@ -1560,6 +1643,1498 @@ namespace Manager
                 // pins/bench, same TMP mesh-generation flakiness risk.
                 StartCoroutine(RecoverBlankLabelsNextFrame(leagueTableView.transform));
             }
+        }
+
+        // --- End of Season (career-arc addition): shown automatically once
+        // managedTeamFixtures runs out, in place of the old dead end where Next
+        // Matchday/Simulate Season just quietly disabled forever. "Start New Season"
+        // performs the full rollover - see OnStartNewSeasonClicked. Built the same
+        // code-built-panel/chrome-built-guard/Refresh pattern as the Tactics screen. ---
+
+        private void ShowEndOfSeasonPanel()
+        {
+            if (!endOfSeasonChromeBuilt)
+            {
+                BuildEndOfSeasonChrome();
+                endOfSeasonChromeBuilt = true;
+            }
+
+            // Guarded so re-entering this panel (e.g. RefreshHubUI firing again before
+            // Start New Season is clicked) can't pay out prize money/board boost twice
+            // for the same season - applied exactly once, the first time the season
+            // actually ends.
+            if (!seasonEndRewardsAppliedForCurrentSeason)
+            {
+                ApplySeasonEndRewards();
+                seasonEndRewardsAppliedForCurrentSeason = true;
+            }
+
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (endOfSeasonPanel != null) endOfSeasonPanel.SetActive(true);
+
+            RefreshEndOfSeasonUI();
+        }
+
+        // Career-arc addition, Phase 4 (session 8) - league finish prize money and a
+        // separate board confidence budget boost, both position-scaled (see
+        // ManagerCareerHistory), both land in the same transfer budget Phase 3 spends
+        // from. Recorded as a SeasonRecord for the Trophy Room regardless of amount -
+        // even a poor season's minimal prize money is worth a row in the history.
+        private void ApplySeasonEndRewards()
+        {
+            List<LeagueTable.Entry> finalTable = playableTable.Sorted();
+            int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
+            int finalPosition = finalTable.Count;
+
+            for (int i = 0; i < finalTable.Count; i++)
+            {
+                if (finalTable[i].TeamId == managedTeamId)
+                {
+                    finalPosition = i + 1;
+                    break;
+                }
+            }
+
+            float prizeMoney = ManagerCareerHistory.GetPrizeMoney(finalPosition);
+            float boardBoost = ManagerCareerHistory.GetBoardBoost(finalPosition);
+
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+            finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
+            finance.AdjustBudget(managedTeamName, prizeMoney + boardBoost);
+
+            lastSeasonRecord = new SeasonRecord
+            {
+                Season = currentSeason,
+                FinalPosition = finalPosition,
+                IsChampion = finalPosition == 1,
+                PrizeMoney = prizeMoney,
+                BoardBoost = boardBoost
+            };
+
+            careerHistory.AddRecord(lastSeasonRecord);
+        }
+
+        private void BuildEndOfSeasonChrome()
+        {
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
+            {
+                return;
+            }
+
+            endOfSeasonPanel = new GameObject("EndOfSeasonPanel", typeof(RectTransform));
+            endOfSeasonPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = endOfSeasonPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(endOfSeasonPanel);
+            ManagerUITheme.ApplyDiagonalGradientBackground(endOfSeasonPanel, ManagerUITheme.Background, ManagerUITheme.GradientEnd);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(endOfSeasonPanel.transform, topBand: true, height: 100f);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -32f), new Vector2(700f, 40f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "SEASON COMPLETE", 30, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform));
+            contentObj.transform.SetParent(endOfSeasonPanel.transform, false);
+            endOfSeasonContentContainer = contentObj.GetComponent<RectTransform>();
+            endOfSeasonContentContainer.anchorMin = new Vector2(0.5f, 0.5f);
+            endOfSeasonContentContainer.anchorMax = new Vector2(0.5f, 0.5f);
+            endOfSeasonContentContainer.pivot = new Vector2(0.5f, 0.5f);
+            endOfSeasonContentContainer.sizeDelta = new Vector2(700f, 400f);
+            endOfSeasonContentContainer.anchoredPosition = new Vector2(0f, 40f);
+
+            ManagerUITheme.BuildAccentBand(endOfSeasonPanel.transform, topBand: false, height: 110f);
+
+            Button startNewSeasonButton = ManagerUITheme.BuildButton(endOfSeasonPanel.transform, "START NEW SEASON", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 17);
+            ManagerUITheme.SetPointAnchor(startNewSeasonButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(0f, 30f), new Vector2(320f, 52f));
+            startNewSeasonButton.onClick.AddListener(OnStartNewSeasonClicked);
+
+            endOfSeasonPanel.SetActive(false);
+        }
+
+        // Content (final position, and from Phase 4 onward prize money/board boost/
+        // trophy) is rebuilt fresh every time this screen opens, same destroy/recreate
+        // pattern as the Tactics screen's dropdown rows - cheap here since it only runs
+        // once per season, not on a hot path.
+        private void RefreshEndOfSeasonUI()
+        {
+            if (endOfSeasonContentContainer == null)
+            {
+                return;
+            }
+
+            foreach (GameObject element in spawnedEndOfSeasonElements)
+            {
+                if (element != null) Destroy(element);
+            }
+            spawnedEndOfSeasonElements.Clear();
+
+            List<LeagueTable.Entry> finalTable = playableTable.Sorted();
+            int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
+            int finalPosition = 0;
+            for (int i = 0; i < finalTable.Count; i++)
+            {
+                if (finalTable[i].TeamId == managedTeamId)
+                {
+                    finalPosition = i + 1;
+                    break;
+                }
+            }
+
+            GameObject seasonLabelObj = new GameObject("SeasonLabel", typeof(RectTransform));
+            seasonLabelObj.transform.SetParent(endOfSeasonContentContainer, false);
+            RectTransform seasonLabelRect = seasonLabelObj.GetComponent<RectTransform>();
+            seasonLabelRect.anchorMin = new Vector2(0.5f, 1f);
+            seasonLabelRect.anchorMax = new Vector2(0.5f, 1f);
+            seasonLabelRect.pivot = new Vector2(0.5f, 1f);
+            seasonLabelRect.sizeDelta = new Vector2(700f, 30f);
+            seasonLabelRect.anchoredPosition = Vector2.zero;
+            ManagerUITheme.BuildLabel(seasonLabelObj.transform, $"SEASON {currentSeason}", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.Center, FontStyles.Bold);
+            spawnedEndOfSeasonElements.Add(seasonLabelObj);
+
+            string positionSuffix = GetOrdinalSuffix(finalPosition);
+            GameObject positionObj = new GameObject("Position", typeof(RectTransform));
+            positionObj.transform.SetParent(endOfSeasonContentContainer, false);
+            RectTransform positionRect = positionObj.GetComponent<RectTransform>();
+            positionRect.anchorMin = new Vector2(0.5f, 1f);
+            positionRect.anchorMax = new Vector2(0.5f, 1f);
+            positionRect.pivot = new Vector2(0.5f, 1f);
+            positionRect.sizeDelta = new Vector2(700f, 90f);
+            positionRect.anchoredPosition = new Vector2(0f, -46f);
+            Color positionColor = finalPosition == 1 ? ManagerUITheme.Accent : ManagerUITheme.TextPrimary;
+            string positionText = finalPosition == 1
+                ? $"CHAMPIONS! {managedTeamName.ToUpperInvariant()} WIN THE LEAGUE"
+                : $"{managedTeamName.ToUpperInvariant()} FINISHED {finalPosition}{positionSuffix}";
+            ManagerUITheme.BuildLabel(positionObj.transform, positionText, 26, positionColor, TextAlignmentOptions.Center, FontStyles.Bold, noWrap: false);
+            spawnedEndOfSeasonElements.Add(positionObj);
+
+            // Prize money and board boost (career-arc addition, Phase 4) - kept as two
+            // explicitly separate lines, matching how Thomas framed these as distinct
+            // mechanisms even though both land in the same transfer budget.
+            if (lastSeasonRecord != null && lastSeasonRecord.Season == currentSeason)
+            {
+                GameObject prizeObj = new GameObject("PrizeMoney", typeof(RectTransform));
+                prizeObj.transform.SetParent(endOfSeasonContentContainer, false);
+                RectTransform prizeRect = prizeObj.GetComponent<RectTransform>();
+                prizeRect.anchorMin = new Vector2(0.5f, 1f);
+                prizeRect.anchorMax = new Vector2(0.5f, 1f);
+                prizeRect.pivot = new Vector2(0.5f, 1f);
+                prizeRect.sizeDelta = new Vector2(700f, 26f);
+                prizeRect.anchoredPosition = new Vector2(0f, -130f);
+                ManagerUITheme.BuildLabel(prizeObj.transform, $"Prize money:  £{lastSeasonRecord.PrizeMoney:F1}m", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
+                spawnedEndOfSeasonElements.Add(prizeObj);
+
+                GameObject boostObj = new GameObject("BoardBoost", typeof(RectTransform));
+                boostObj.transform.SetParent(endOfSeasonContentContainer, false);
+                RectTransform boostRect = boostObj.GetComponent<RectTransform>();
+                boostRect.anchorMin = new Vector2(0.5f, 1f);
+                boostRect.anchorMax = new Vector2(0.5f, 1f);
+                boostRect.pivot = new Vector2(0.5f, 1f);
+                boostRect.sizeDelta = new Vector2(700f, 26f);
+                boostRect.anchoredPosition = new Vector2(0f, -160f);
+                string boostText = lastSeasonRecord.BoardBoost > 0f
+                    ? $"Board have boosted your transfer budget:  £{lastSeasonRecord.BoardBoost:F1}m"
+                    : "Board: no additional backing this season";
+                ManagerUITheme.BuildLabel(boostObj.transform, boostText, 17, lastSeasonRecord.BoardBoost > 0f ? ManagerUITheme.Accent : ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
+                spawnedEndOfSeasonElements.Add(boostObj);
+
+                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+                float budget = finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
+
+                GameObject budgetObj = new GameObject("BudgetTotal", typeof(RectTransform));
+                budgetObj.transform.SetParent(endOfSeasonContentContainer, false);
+                RectTransform budgetRect = budgetObj.GetComponent<RectTransform>();
+                budgetRect.anchorMin = new Vector2(0.5f, 1f);
+                budgetRect.anchorMax = new Vector2(0.5f, 1f);
+                budgetRect.pivot = new Vector2(0.5f, 1f);
+                budgetRect.sizeDelta = new Vector2(700f, 26f);
+                budgetRect.anchoredPosition = new Vector2(0f, -196f);
+                ManagerUITheme.BuildLabel(budgetObj.transform, $"Transfer budget:  £{budget:F1}m", 19, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+                spawnedEndOfSeasonElements.Add(budgetObj);
+            }
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(endOfSeasonContentContainer));
+        }
+
+        private static string GetOrdinalSuffix(int n)
+        {
+            int lastTwo = n % 100;
+            if (lastTwo >= 11 && lastTwo <= 13)
+            {
+                return "TH";
+            }
+
+            switch (n % 10)
+            {
+                case 1: return "ST";
+                case 2: return "ND";
+                case 3: return "RD";
+                default: return "TH";
+            }
+        }
+
+        public void OnStartNewSeasonClicked()
+        {
+            currentSeason++;
+            seasonEndRewardsAppliedForCurrentSeason = false;
+
+            AgeAndReloadFixturesForNewSeason();
+
+            // Reads this season's now-final appearance counts (managed team only) before
+            // ResetForNewSeason wipes them below - order matters here.
+            ApplyPlayerDevelopmentAndRetirements();
+
+            DeductManagedTeamWageBill();
+
+            playableTable.Reset();
+            foreach (string teamName in availableTeamNames)
+            {
+                playableTable.EnsureTeam(teamRegistry.GetTeamId(teamName));
+            }
+
+            currentFixtureIndex = 0;
+            simulatedMatchdays.Clear();
+            scouting.ForceResolveAllPending();
+
+            foreach (ManagerSquadRoles roles in squadRolesByTeamName.Values)
+            {
+                roles.ResetForNewSeason();
+            }
+
+            if (endOfSeasonPanel != null) endOfSeasonPanel.SetActive(false);
+
+            ShowSeasonHub();
+        }
+
+        // Ages every already-generated player (squads and reserve pools alike) by one
+        // year, then reloads next season's real fixture calendar - cycling through
+        // seasonFile + trainingSeasonFiles (both already real Premier League season
+        // files used elsewhere in this controller) rather than replaying the exact same
+        // 380 fixtures every year. Falls back to the career's original seasonFile if no
+        // pool candidate actually features managedTeamName (a genuine historical season
+        // it wasn't in the top flight for), since an empty managedTeamFixtures would
+        // otherwise silently break the whole matchday loop.
+        private void AgeAndReloadFixturesForNewSeason()
+        {
+            foreach (AgentTeam team in squadsByTeamName.Values)
+            {
+                foreach (PlayerAgent player in team.StartingEleven) player.Age += 1;
+                foreach (PlayerAgent player in team.Bench) player.Age += 1;
+            }
+
+            foreach (List<PlayerAgent> reservePool in reservePoolByTeamName.Values)
+            {
+                foreach (PlayerAgent player in reservePool) player.Age += 1;
+            }
+
+            // Unsigned youth prospects keep developing whether or not you've scouted
+            // them yet - procrastinate and a hidden wonderkid becomes obviously great
+            // (and obviously expensive) by the time you finally look, real tension for
+            // the "discover them early" fantasy.
+            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            {
+                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(teamName, squadGenerator, 1f, 1f))
+                {
+                    player.Age += 1;
+                }
+            }
+
+            List<TextAsset> seasonFilePool = new List<TextAsset>();
+            if (seasonFile != null) seasonFilePool.Add(seasonFile);
+
+            if (trainingSeasonFiles != null)
+            {
+                foreach (TextAsset file in trainingSeasonFiles)
+                {
+                    if (file == null) continue;
+
+                    bool alreadyInPool = false;
+                    foreach (TextAsset existing in seasonFilePool)
+                    {
+                        if (existing.name == file.name) { alreadyInPool = true; break; }
+                    }
+
+                    if (!alreadyInPool) seasonFilePool.Add(file);
+                }
+            }
+
+            for (int attempt = 0; attempt < seasonFilePool.Count; attempt++)
+            {
+                int index = (currentSeason - 1 + attempt) % seasonFilePool.Count;
+                TextAsset candidate = seasonFilePool[index];
+                List<OpenFootballMatch> candidateFixtures = OpenFootballTextParser.ParseSeasonFile(candidate.text, candidate.name);
+                List<OpenFootballMatch> candidateManagedFixtures = candidateFixtures.FindAll(m =>
+                    m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
+
+                if (candidateManagedFixtures.Count > 0)
+                {
+                    allSeasonFixtures = candidateFixtures;
+                    managedTeamFixtures = candidateManagedFixtures;
+                    availableTeamNames = BuildAvailableTeamNames();
+                    return;
+                }
+            }
+
+            allSeasonFixtures = OpenFootballTextParser.ParseSeasonFile(seasonFile.text, seasonFile.name);
+            managedTeamFixtures = allSeasonFixtures.FindAll(m =>
+                m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
+            availableTeamNames = BuildAvailableTeamNames();
+        }
+
+        // Applied league-wide (every already-generated club, not just managedTeamName) -
+        // otherwise only the user's own squad would ever improve and the league would
+        // go static, the opposite of how real football ages. Only the managed team's
+        // appearances are actually tracked (see ManagerSquadRoles), so everyone else
+        // gets a flat assumed playing-time factor rather than real per-player data -
+        // still moves Overall in a realistic direction, just without the extra
+        // precision that data doesn't exist for.
+        private const float AssumedPlayingTimeFactorAiFirstTeam = 0.65f;
+        private const float AssumedPlayingTimeFactorUncalledReserve = 0.15f;
+        private const float AssumedPlayingTimeFactorYouthProspect = 0.1f;
+
+        private void ApplyPlayerDevelopmentAndRetirements()
+        {
+            foreach (KeyValuePair<string, AgentTeam> entry in squadsByTeamName)
+            {
+                string teamName = entry.Key;
+                AgentTeam team = entry.Value;
+                bool isManagedTeam = teamName == managedTeamName;
+                ManagerSquadRoles roles = isManagedTeam ? GetOrCreateSquadRoles(teamName) : null;
+
+                foreach (PlayerAgent player in team.Players)
+                {
+                    float playingTimeFactor = isManagedTeam
+                        ? Mathf.Clamp01(roles.GetAppearancesThisSeason(player) / 25f)
+                        : AssumedPlayingTimeFactorAiFirstTeam;
+
+                    ManagerPlayerDevelopment.ApplySeasonProgression(player, playingTimeFactor);
+                }
+
+                ApplyRetirementsForTeam(teamName, team);
+            }
+
+            foreach (KeyValuePair<string, List<PlayerAgent>> entry in reservePoolByTeamName)
+            {
+                foreach (PlayerAgent player in entry.Value)
+                {
+                    ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorUncalledReserve);
+                }
+            }
+
+            // Unsigned youth prospects (session 8, Phase 2) - no real matches at all, so
+            // the lowest playing-time assumption of any pool.
+            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            {
+                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(teamName, squadGenerator, 1f, 1f))
+                {
+                    ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect);
+                }
+            }
+        }
+
+        // Replaces any retiree in place (whichever list/index they were in - starter,
+        // bench, or Players) with a freshly generated player at the same position and
+        // current team strength, rather than removing and leaving a hole. Preserves
+        // StartingEleven slot order, which the Tactics Board relies on (see AgentTeam.
+        // SubstitutePlayer's own comment on the same constraint).
+        private void ApplyRetirementsForTeam(string teamName, AgentTeam team)
+        {
+            List<PlayerAgent> retirees = new List<PlayerAgent>();
+
+            foreach (PlayerAgent player in team.Players)
+            {
+                if (ManagerPlayerDevelopment.RollRetirement(player))
+                {
+                    retirees.Add(player);
+                }
+            }
+
+            if (retirees.Count == 0)
+            {
+                return;
+            }
+
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+
+            foreach (PlayerAgent retiree in retirees)
+            {
+                PlayerAgent replacement = squadGenerator.GenerateReservePlayer(retiree.PrimaryPosition, strength.AttackStrength, strength.DefenceStrength);
+
+                int startingIndex = team.StartingEleven.IndexOf(retiree);
+                int benchIndex = team.Bench.IndexOf(retiree);
+                int playersIndex = team.Players.IndexOf(retiree);
+
+                if (startingIndex >= 0)
+                {
+                    team.StartingEleven[startingIndex] = replacement;
+                    replacement.IsStartingEleven = true;
+                }
+                else if (benchIndex >= 0)
+                {
+                    team.Bench[benchIndex] = replacement;
+                    replacement.IsStartingEleven = false;
+                }
+
+                if (playersIndex >= 0)
+                {
+                    team.Players[playersIndex] = replacement;
+                }
+            }
+        }
+
+        // Only the managed team's budget is ever spent or displayed (see the Transfer
+        // Market screen below) - AI clubs never buy or sell anything (explicit scope
+        // boundary, see HANDOFF), so there's no point maintaining an accurate wage bill
+        // for squads nobody ever checks the finances of.
+        private void DeductManagedTeamWageBill()
+        {
+            if (!squadsByTeamName.TryGetValue(managedTeamName, out AgentTeam team))
+            {
+                return;
+            }
+
+            float totalWage = 0f;
+            foreach (PlayerAgent player in team.Players)
+            {
+                totalWage += ManagerClubFinance.GetAnnualWage(player);
+            }
+
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+            finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
+            finance.AdjustBudget(managedTeamName, -totalWage);
+        }
+
+        // --- Save / load (career-arc addition, session 8, Phase 5) - see
+        // Manager/Save/ManagerSaveData.cs for the deliberate scope limits (managed team
+        // only; condition/injuries/appearances reset). BuildSaveData/ApplySaveData are
+        // the only places that translate between live state and the DTOs - everywhere
+        // else in this file is untouched by save/load existing at all. ---
+
+        private ManagerSaveData BuildSaveData()
+        {
+            AgentTeam managedTeam = GetOrCreateAgentTeam(managedTeamName);
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+            float budget = finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
+
+            ManagerSaveData data = new ManagerSaveData
+            {
+                ManagerName = managerName,
+                ManagedTeamName = managedTeamName,
+                CurrentSeason = currentSeason,
+                CurrentFixtureIndex = currentFixtureIndex,
+                ActiveSeasonFileName = allSeasonFixtures.Count > 0 ? allSeasonFixtures[0].Season : seasonFile.name,
+                ManagedSquad = AgentTeamSaveData.FromTeam(managedTeam),
+                ManagedBudget = budget,
+                ManagedRoles = new ManagerSquadRolesSaveData
+                {
+                    CaptainId = roles.Captain?.PlayerId,
+                    ViceCaptainId = roles.ViceCaptain?.PlayerId,
+                    PenaltyTakerId = roles.PenaltyTaker?.PlayerId,
+                    FreeKickTakerId = roles.FreeKickTaker?.PlayerId,
+                    LeftCornerTakerId = roles.LeftCornerTaker?.PlayerId,
+                    RightCornerTakerId = roles.RightCornerTaker?.PlayerId
+                }
+            };
+
+            foreach (PlayerAgent player in managedTeam.Players)
+            {
+                AttackDefendRole role = roles.GetRole(player);
+                if (role == AttackDefendRole.Attacking) data.ManagedRoles.AttackingRolePlayerIds.Add(player.PlayerId);
+                else if (role == AttackDefendRole.Defensive) data.ManagedRoles.DefensiveRolePlayerIds.Add(player.PlayerId);
+            }
+
+            if (reservePoolByTeamName.TryGetValue(managedTeamName, out List<PlayerAgent> reserves))
+            {
+                foreach (PlayerAgent p in reserves) data.ManagedReservePool.Add(PlayerAgentSaveData.FromPlayer(p));
+            }
+
+            foreach (LeagueTable.Entry entry in playableTable.Sorted())
+            {
+                data.TableEntries.Add(new LeagueTableEntrySaveData
+                {
+                    TeamId = entry.TeamId,
+                    Played = entry.Played,
+                    Wins = entry.Wins,
+                    Draws = entry.Draws,
+                    Losses = entry.Losses,
+                    GoalsFor = entry.GoalsFor,
+                    GoalsAgainst = entry.GoalsAgainst,
+                    Points = entry.Points
+                });
+            }
+
+            foreach (SeasonRecord record in careerHistory.Records)
+            {
+                data.CareerHistory.Add(new SeasonRecordSaveData
+                {
+                    Season = record.Season,
+                    FinalPosition = record.FinalPosition,
+                    IsChampion = record.IsChampion,
+                    PrizeMoney = record.PrizeMoney,
+                    BoardBoost = record.BoardBoost
+                });
+            }
+
+            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            {
+                YouthPoolSaveData poolData = new YouthPoolSaveData { TeamName = teamName };
+
+                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(teamName, squadGenerator, 1f, 1f))
+                {
+                    poolData.Prospects.Add(PlayerAgentSaveData.FromPlayer(prospect));
+
+                    if (scouting.IsScouted(prospect))
+                    {
+                        data.ScoutedPlayerIds.Add(prospect.PlayerId);
+                    }
+                }
+
+                data.YouthPools.Add(poolData);
+            }
+
+            return data;
+        }
+
+        // Rebuilds every piece of state BuildSaveData captured, then jumps straight to
+        // the Season Hub - a loaded career resumes exactly where Save & Exit left it,
+        // not back at team select.
+        private void ApplySaveData(ManagerSaveData data)
+        {
+            managerName = data.ManagerName;
+            managedTeamName = data.ManagedTeamName;
+            currentSeason = data.CurrentSeason;
+            currentFixtureIndex = data.CurrentFixtureIndex;
+
+            TextAsset activeFile = FindSeasonFileAssetByName(data.ActiveSeasonFileName) ?? seasonFile;
+            allSeasonFixtures = OpenFootballTextParser.ParseSeasonFile(activeFile.text, activeFile.name);
+            availableTeamNames = BuildAvailableTeamNames();
+            managedTeamFixtures = allSeasonFixtures.FindAll(m =>
+                m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
+
+            playableTable.Reset();
+            foreach (string teamName in availableTeamNames)
+            {
+                playableTable.EnsureTeam(teamRegistry.GetTeamId(teamName));
+            }
+            foreach (LeagueTableEntrySaveData entry in data.TableEntries)
+            {
+                playableTable.SetEntry(entry.TeamId, entry.Played, entry.Wins, entry.Draws, entry.Losses, entry.GoalsFor, entry.GoalsAgainst, entry.Points);
+            }
+
+            squadsByTeamName.Clear();
+            reservePoolByTeamName.Clear();
+            squadRolesByTeamName.Clear();
+            simulatedMatchdays.Clear();
+
+            AgentTeam managedTeam = data.ManagedSquad.ToTeam();
+            squadsByTeamName[managedTeamName] = managedTeam;
+
+            Dictionary<string, PlayerAgent> managedPlayersById = new();
+            foreach (PlayerAgent p in managedTeam.Players) managedPlayersById[p.PlayerId] = p;
+
+            List<PlayerAgent> restoredReserves = new();
+            foreach (PlayerAgentSaveData dto in data.ManagedReservePool) restoredReserves.Add(dto.ToPlayer());
+            reservePoolByTeamName[managedTeamName] = restoredReserves;
+
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            ManagerSquadRolesSaveData rolesData = data.ManagedRoles;
+
+            if (rolesData != null)
+            {
+                roles.Captain = ResolvePlayerById(managedPlayersById, rolesData.CaptainId);
+                roles.ViceCaptain = ResolvePlayerById(managedPlayersById, rolesData.ViceCaptainId);
+                roles.PenaltyTaker = ResolvePlayerById(managedPlayersById, rolesData.PenaltyTakerId);
+                roles.FreeKickTaker = ResolvePlayerById(managedPlayersById, rolesData.FreeKickTakerId);
+                roles.LeftCornerTaker = ResolvePlayerById(managedPlayersById, rolesData.LeftCornerTakerId);
+                roles.RightCornerTaker = ResolvePlayerById(managedPlayersById, rolesData.RightCornerTakerId);
+
+                foreach (string id in rolesData.AttackingRolePlayerIds)
+                {
+                    PlayerAgent p = ResolvePlayerById(managedPlayersById, id);
+                    if (p != null) roles.SetRole(p, AttackDefendRole.Attacking);
+                }
+
+                foreach (string id in rolesData.DefensiveRolePlayerIds)
+                {
+                    PlayerAgent p = ResolvePlayerById(managedPlayersById, id);
+                    if (p != null) roles.SetRole(p, AttackDefendRole.Defensive);
+                }
+            }
+
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+            finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
+            finance.AdjustBudget(managedTeamName, data.ManagedBudget - finance.GetBudget(managedTeamName));
+
+            foreach (SeasonRecordSaveData recordData in data.CareerHistory)
+            {
+                careerHistory.AddRecord(new SeasonRecord
+                {
+                    Season = recordData.Season,
+                    FinalPosition = recordData.FinalPosition,
+                    IsChampion = recordData.IsChampion,
+                    PrizeMoney = recordData.PrizeMoney,
+                    BoardBoost = recordData.BoardBoost
+                });
+            }
+
+            HashSet<string> scoutedIds = new HashSet<string>(data.ScoutedPlayerIds);
+
+            foreach (YouthPoolSaveData poolData in data.YouthPools)
+            {
+                List<PlayerAgent> pool = new List<PlayerAgent>();
+
+                foreach (PlayerAgentSaveData dto in poolData.Prospects)
+                {
+                    PlayerAgent prospect = dto.ToPlayer();
+                    pool.Add(prospect);
+
+                    if (scoutedIds.Contains(prospect.PlayerId))
+                    {
+                        scouting.RestoreScoutedPlayer(prospect);
+                    }
+                }
+
+                scouting.RestoreYouthPool(poolData.TeamName, pool);
+            }
+
+            seasonEndRewardsAppliedForCurrentSeason = true;
+
+            ShowSeasonHub();
+        }
+
+        private static PlayerAgent ResolvePlayerById(Dictionary<string, PlayerAgent> playersById, string playerId)
+        {
+            if (string.IsNullOrEmpty(playerId)) return null;
+            return playersById.TryGetValue(playerId, out PlayerAgent p) ? p : null;
+        }
+
+        private TextAsset FindSeasonFileAssetByName(string fileName)
+        {
+            if (seasonFile != null && seasonFile.name == fileName) return seasonFile;
+
+            if (trainingSeasonFiles != null)
+            {
+                foreach (TextAsset file in trainingSeasonFiles)
+                {
+                    if (file != null && file.name == fileName) return file;
+                }
+            }
+
+            return null;
+        }
+
+        public void OnLoadCareerClicked()
+        {
+            ManagerSaveData data = ManagerSaveService.Load();
+            if (data == null)
+            {
+                return;
+            }
+
+            if (titlePanel != null) titlePanel.SetActive(false);
+
+            ApplySaveData(data);
+        }
+
+        // --- Scouting (career-arc addition, session 8, Phase 2): browse every club's
+        // hidden youth-prospect pool, assign a scout to reveal a specific player's real
+        // Potential (fuzzy range until then). Same code-built-panel/scroll-view pattern
+        // as the Squad screen (BuildSquadChrome), reusing SquadListView's flat
+        // Populate rather than the grid variant since the label here is a custom
+        // composite (name/position/age/club/potential/status) rather than fixed columns. ---
+
+        private bool scoutingChromeBuilt;
+        private GameObject scoutingPanel;
+        private SquadListView scoutingListView;
+        // GameObject, not TextMeshProUGUI - see matchdayPrepTitleLabel's comment. This
+        // label starts with text="" at build time (populated later by
+        // RefreshScoutingUI), which is exactly the shape that trips the blank-label
+        // recovery sweep into destroying/recreating it - a cached TextMeshProUGUI
+        // reference would silently start writing to the dead original. Confirmed live
+        // (Thomas: byline stuck at "0/2" while the per-row status text updated fine).
+        private GameObject scoutingBylineObj;
+        private readonly Dictionary<PlayerAgent, string> scoutingProspectClubs = new();
+
+        public void OnOpenScoutingClicked()
+        {
+            if (!scoutingChromeBuilt)
+            {
+                BuildScoutingChrome();
+                scoutingChromeBuilt = true;
+            }
+
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (scoutingPanel != null) scoutingPanel.SetActive(true);
+
+            RefreshScoutingUI();
+        }
+
+        public void OnScoutingBackClicked()
+        {
+            if (scoutingPanel != null) scoutingPanel.SetActive(false);
+
+            ShowSeasonHub();
+        }
+
+        private void BuildScoutingChrome()
+        {
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
+            {
+                return;
+            }
+
+            const float headerHeight = 90f;
+
+            scoutingPanel = new GameObject("ScoutingPanel", typeof(RectTransform));
+            scoutingPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = scoutingPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(scoutingPanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(scoutingPanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "SCOUTING", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject bylineObj = new GameObject("Byline", typeof(RectTransform));
+            bylineObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(bylineObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -58f), new Vector2(1200f, 20f));
+            ManagerUITheme.BuildLabel(bylineObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            scoutingBylineObj = bylineObj;
+
+            Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(200f, 36f));
+            backButton.onClick.AddListener(OnScoutingBackClicked);
+
+            const float contentWidth = 1600f;
+            const float sideMargin = (1920f - contentWidth) / 2f;
+
+            GameObject scrollViewObj = new GameObject("ScoutingScrollView", typeof(RectTransform), typeof(ScrollRect));
+            scrollViewObj.transform.SetParent(scoutingPanel.transform, false);
+            RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scrollViewRect.anchorMin = new Vector2(0f, 0f);
+            scrollViewRect.anchorMax = new Vector2(1f, 1f);
+            scrollViewRect.offsetMin = new Vector2(sideMargin, 40f);
+            scrollViewRect.offsetMax = new Vector2(-(sideMargin + 20f), -(headerHeight + 40f));
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(scrollViewObj.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform), typeof(SquadListView));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            RectTransform contentRect = contentObj.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.anchoredPosition = Vector2.zero;
+            contentRect.sizeDelta = Vector2.zero;
+
+            scoutingListView = contentObj.GetComponent<SquadListView>();
+            scoutingListView.Bind(contentRect);
+
+            ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scrollRect.content = contentRect;
+            scrollRect.viewport = viewportRect;
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = 1f;
+
+            GameObject scrollbarObj = new GameObject("ScoutingScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
+            scrollbarObj.transform.SetParent(scoutingPanel.transform, false);
+            RectTransform scrollbarRect = scrollbarObj.GetComponent<RectTransform>();
+            scrollbarRect.anchorMin = new Vector2(1f, 0f);
+            scrollbarRect.anchorMax = new Vector2(1f, 1f);
+            scrollbarRect.offsetMin = new Vector2(-(sideMargin + 20f), 40f);
+            scrollbarRect.offsetMax = new Vector2(-(sideMargin + 4f), -(headerHeight + 40f));
+            scrollbarObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            GameObject handleAreaObj = new GameObject("SlidingArea", typeof(RectTransform));
+            handleAreaObj.transform.SetParent(scrollbarObj.transform, false);
+            RectTransform handleAreaRect = handleAreaObj.GetComponent<RectTransform>();
+            handleAreaRect.anchorMin = Vector2.zero;
+            handleAreaRect.anchorMax = Vector2.one;
+            handleAreaRect.offsetMin = Vector2.zero;
+            handleAreaRect.offsetMax = Vector2.zero;
+
+            GameObject handleObj = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handleObj.transform.SetParent(handleAreaObj.transform, false);
+            RectTransform handleRect = handleObj.GetComponent<RectTransform>();
+            handleRect.anchorMin = Vector2.zero;
+            handleRect.anchorMax = new Vector2(1f, 0.3f);
+            handleRect.sizeDelta = Vector2.zero;
+            handleRect.offsetMin = Vector2.zero;
+            handleRect.offsetMax = Vector2.zero;
+            handleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handleObj.GetComponent<Image>();
+
+            scrollRect.verticalScrollbar = scrollbar;
+            scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(scoutingPanel.transform));
+        }
+
+        // Generates every club's youth pool the first time this screen is opened (cheap -
+        // object allocation only, no RNG-safety concern this deep into live play) so the
+        // list has full league breadth rather than only clubs already encountered via
+        // fixtures. Rebuilt fresh every open, same destroy/recreate pattern as every
+        // other dynamic list in this file.
+        private void RefreshScoutingUI()
+        {
+            if (scoutingListView == null)
+            {
+                return;
+            }
+
+            scoutingProspectClubs.Clear();
+            List<PlayerAgent> allProspects = new List<PlayerAgent>();
+
+            foreach (string teamName in availableTeamNames)
+            {
+                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+                List<PlayerAgent> pool = scouting.GetOrCreateYouthPool(teamName, squadGenerator, strength.AttackStrength, strength.DefenceStrength);
+
+                foreach (PlayerAgent prospect in pool)
+                {
+                    scoutingProspectClubs[prospect] = teamName;
+                    allProspects.Add(prospect);
+                }
+            }
+
+            if (scoutingBylineObj != null)
+            {
+                TextMeshProUGUI bylineTMP = scoutingBylineObj.GetComponentInChildren<TextMeshProUGUI>();
+                if (bylineTMP != null)
+                {
+                    bylineTMP.text = $"{scouting.ActiveAssignmentCount}/{ManagerScouting.MaxConcurrentAssignments} scouts assigned   ·   reports land after one matchday   ·   click a prospect to assign";
+                }
+            }
+
+            scoutingListView.Clear();
+            scoutingListView.AddCustomGridHeaderRow(ScoutingColumnHeaders, ScoutingColumnFractions);
+
+            foreach (PlayerAgent prospect in allProspects)
+            {
+                string club = scoutingProspectClubs.TryGetValue(prospect, out string teamName) ? teamName : "?";
+                string status = scouting.IsScouted(prospect) ? "<color=#3ddc84>SCOUTED</color>"
+                    : scouting.IsAssigned(prospect) ? "<color=#e8c547>SCOUTING...</color>"
+                    : "";
+
+                string[] cells =
+                {
+                    prospect.Name,
+                    prospect.PrimaryPosition.ToString(),
+                    prospect.Age.ToString(),
+                    club,
+                    prospect.GetOverallRating().ToString("F0"),
+                    scouting.GetDisplayPotential(prospect),
+                    status
+                };
+
+                scoutingListView.AddCustomGridRow(prospect, cells, ScoutingColumnFractions, OnScoutingProspectClicked);
+            }
+        }
+
+        private static readonly string[] ScoutingColumnHeaders = { "PROSPECT", "POS", "AGE", "CLUB", "OVR", "POTENTIAL", "STATUS" };
+        private static readonly float[] ScoutingColumnFractions = { 0.20f, 0.07f, 0.07f, 0.22f, 0.09f, 0.14f, 0.21f };
+
+        private void OnScoutingProspectClicked(PlayerAgent prospect)
+        {
+            scouting.TryAssignScout(prospect, currentFixtureIndex);
+            RefreshScoutingUI();
+        }
+
+        // --- Transfer Market (career-arc addition, session 8, Phase 3): Buy tab browses
+        // every other club's squad plus already-scouted youth prospects, one-click bid at
+        // a competitive 1.15x MarketValue; Sell tab lists only your own Bench (Starting
+        // XI deliberately excluded - selling your best XI by a misclick is the one
+        // mistake this screen shouldn't let you make casually), one-click sell at 0.9x
+        // MarketValue. No AI-vs-AI transfer activity (explicit scope boundary, see
+        // HANDOFF) - rival squads only change via progression/retirement, never trading
+        // amongst themselves. Same code-built-panel/scroll-view pattern as Squad/
+        // Scouting. ---
+
+        private bool transferMarketChromeBuilt;
+        private GameObject transferMarketPanel;
+        private SquadListView transferMarketListView;
+        // GameObject, not TextMeshProUGUI - same reasoning/gotcha as
+        // scoutingBylineObj: both start with text="" at build time, which trips the
+        // blank-label recovery sweep into destroying/recreating them.
+        private GameObject transferMarketBylineObj;
+        private GameObject transferMarketStatusLabelObj;
+        private Button transferMarketBuyTabButton;
+        private Button transferMarketSellTabButton;
+        private bool transferMarketShowingBuyTab = true;
+        private const float TransferBidMultiplier = 1.15f;
+
+        public void OnOpenTransferMarketClicked()
+        {
+            if (!transferMarketChromeBuilt)
+            {
+                BuildTransferMarketChrome();
+                transferMarketChromeBuilt = true;
+            }
+
+            transferMarketShowingBuyTab = true;
+
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (transferMarketPanel != null) transferMarketPanel.SetActive(true);
+
+            RefreshTransferMarketUI();
+        }
+
+        public void OnTransferMarketBackClicked()
+        {
+            if (transferMarketPanel != null) transferMarketPanel.SetActive(false);
+
+            ShowSeasonHub();
+        }
+
+        private void OnTransferMarketBuyTabClicked()
+        {
+            transferMarketShowingBuyTab = true;
+            RefreshTransferMarketUI();
+        }
+
+        private void OnTransferMarketSellTabClicked()
+        {
+            transferMarketShowingBuyTab = false;
+            RefreshTransferMarketUI();
+        }
+
+        private void BuildTransferMarketChrome()
+        {
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
+            {
+                return;
+            }
+
+            const float headerHeight = 110f;
+
+            transferMarketPanel = new GameObject("TransferMarketPanel", typeof(RectTransform));
+            transferMarketPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = transferMarketPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(transferMarketPanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(transferMarketPanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "TRANSFERS", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject bylineObj = new GameObject("Byline", typeof(RectTransform));
+            bylineObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(bylineObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -58f), new Vector2(1200f, 20f));
+            ManagerUITheme.BuildLabel(bylineObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            transferMarketBylineObj = bylineObj;
+
+            GameObject statusObj = new GameObject("StatusLabel", typeof(RectTransform));
+            statusObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(statusObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -84f), new Vector2(1200f, 20f));
+            ManagerUITheme.BuildLabel(statusObj.transform, "", 14, ManagerUITheme.Accent, TextAlignmentOptions.MidlineLeft);
+            transferMarketStatusLabelObj = statusObj;
+
+            Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(200f, 36f));
+            backButton.onClick.AddListener(OnTransferMarketBackClicked);
+
+            transferMarketBuyTabButton = ManagerUITheme.BuildButton(header.transform, "BUY", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
+            ManagerUITheme.SetPointAnchor(transferMarketBuyTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-276f, -27f), new Vector2(120f, 36f));
+            transferMarketBuyTabButton.onClick.AddListener(OnTransferMarketBuyTabClicked);
+
+            transferMarketSellTabButton = ManagerUITheme.BuildButton(header.transform, "SELL", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(transferMarketSellTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-406f, -27f), new Vector2(120f, 36f));
+            transferMarketSellTabButton.onClick.AddListener(OnTransferMarketSellTabClicked);
+
+            const float contentWidth = 1600f;
+            const float sideMargin = (1920f - contentWidth) / 2f;
+
+            GameObject scrollViewObj = new GameObject("TransferScrollView", typeof(RectTransform), typeof(ScrollRect));
+            scrollViewObj.transform.SetParent(transferMarketPanel.transform, false);
+            RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scrollViewRect.anchorMin = new Vector2(0f, 0f);
+            scrollViewRect.anchorMax = new Vector2(1f, 1f);
+            scrollViewRect.offsetMin = new Vector2(sideMargin, 40f);
+            scrollViewRect.offsetMax = new Vector2(-(sideMargin + 20f), -(headerHeight + 40f));
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(scrollViewObj.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform), typeof(SquadListView));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            RectTransform contentRect = contentObj.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.anchoredPosition = Vector2.zero;
+            contentRect.sizeDelta = Vector2.zero;
+
+            transferMarketListView = contentObj.GetComponent<SquadListView>();
+            transferMarketListView.Bind(contentRect);
+
+            ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scrollRect.content = contentRect;
+            scrollRect.viewport = viewportRect;
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = 1f;
+
+            GameObject scrollbarObj = new GameObject("TransferScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
+            scrollbarObj.transform.SetParent(transferMarketPanel.transform, false);
+            RectTransform scrollbarRect = scrollbarObj.GetComponent<RectTransform>();
+            scrollbarRect.anchorMin = new Vector2(1f, 0f);
+            scrollbarRect.anchorMax = new Vector2(1f, 1f);
+            scrollbarRect.offsetMin = new Vector2(-(sideMargin + 20f), 40f);
+            scrollbarRect.offsetMax = new Vector2(-(sideMargin + 4f), -(headerHeight + 40f));
+            scrollbarObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            GameObject handleAreaObj = new GameObject("SlidingArea", typeof(RectTransform));
+            handleAreaObj.transform.SetParent(scrollbarObj.transform, false);
+            RectTransform handleAreaRect = handleAreaObj.GetComponent<RectTransform>();
+            handleAreaRect.anchorMin = Vector2.zero;
+            handleAreaRect.anchorMax = Vector2.one;
+            handleAreaRect.offsetMin = Vector2.zero;
+            handleAreaRect.offsetMax = Vector2.zero;
+
+            GameObject handleObj = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handleObj.transform.SetParent(handleAreaObj.transform, false);
+            RectTransform handleRect = handleObj.GetComponent<RectTransform>();
+            handleRect.anchorMin = Vector2.zero;
+            handleRect.anchorMax = new Vector2(1f, 0.3f);
+            handleRect.sizeDelta = Vector2.zero;
+            handleRect.offsetMin = Vector2.zero;
+            handleRect.offsetMax = Vector2.zero;
+            handleObj.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            Scrollbar scrollbar = scrollbarObj.GetComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handleObj.GetComponent<Image>();
+
+            scrollRect.verticalScrollbar = scrollbar;
+            scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(transferMarketPanel.transform));
+        }
+
+        private readonly Dictionary<PlayerAgent, string> transferMarketRowClubs = new();
+
+        private void RefreshTransferMarketUI()
+        {
+            if (transferMarketListView == null)
+            {
+                return;
+            }
+
+            StatisticalModel.TeamStrength managedStrength = statisticalModel.GetTeamStrength(managedTeamName);
+            float budget = finance.GetOrSeedBudget(managedTeamName, managedStrength.AttackStrength, managedStrength.DefenceStrength);
+
+            if (transferMarketBylineObj != null)
+            {
+                TextMeshProUGUI bylineTMP = transferMarketBylineObj.GetComponentInChildren<TextMeshProUGUI>();
+                if (bylineTMP != null)
+                {
+                    bylineTMP.text = $"Transfer budget: £{budget:F1}m";
+                }
+            }
+
+            if (transferMarketBuyTabButton != null && transferMarketBuyTabButton.TryGetComponent(out Image buyImage))
+            {
+                buyImage.color = transferMarketShowingBuyTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(transferMarketBuyTabButton, "BUY", transferMarketShowingBuyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
+            if (transferMarketSellTabButton != null && transferMarketSellTabButton.TryGetComponent(out Image sellImage))
+            {
+                sellImage.color = !transferMarketShowingBuyTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(transferMarketSellTabButton, "SELL", !transferMarketShowingBuyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
+            transferMarketListView.Clear();
+            transferMarketRowClubs.Clear();
+
+            if (transferMarketShowingBuyTab)
+            {
+                RefreshTransferMarketBuyList(budget);
+            }
+            else
+            {
+                RefreshTransferMarketSellList();
+            }
+        }
+
+        private void RefreshTransferMarketBuyList(float budget)
+        {
+            foreach (string teamName in availableTeamNames)
+            {
+                if (teamName == managedTeamName)
+                {
+                    continue;
+                }
+
+                AgentTeam team = GetOrCreateAgentTeam(teamName);
+
+                foreach (PlayerAgent player in team.Players)
+                {
+                    transferMarketRowClubs[player] = teamName;
+                    AddBuyRow(player, teamName, budget);
+                }
+            }
+
+            foreach (string teamName in scouting.GetTeamNamesWithPools())
+            {
+                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+
+                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(teamName, squadGenerator, strength.AttackStrength, strength.DefenceStrength))
+                {
+                    if (!scouting.IsScouted(prospect))
+                    {
+                        continue;
+                    }
+
+                    transferMarketRowClubs[prospect] = teamName;
+                    AddBuyRow(prospect, teamName, budget);
+                }
+            }
+        }
+
+        private void AddBuyRow(PlayerAgent player, string teamName, float budget)
+        {
+            float value = ManagerClubFinance.GetMarketValue(player);
+            float askingPrice = value * TransferBidMultiplier;
+            string affordability = askingPrice <= budget ? "" : "  <color=#e05a5a>(over budget)</color>";
+
+            string label = $"{player.Name}   {player.PrimaryPosition}   Age {player.Age}   {teamName}   OVR {player.GetOverallRating():F0}   Bid £{askingPrice:F1}m{affordability}";
+            transferMarketListView.AddPlayerRow(player, label, OnBuyRowClicked);
+        }
+
+        private void RefreshTransferMarketSellList()
+        {
+            // GetOrCreateAgentTeam, not a TryGetValue no-op - the managed team's squad
+            // may genuinely not exist yet if Transfers is opened before ever viewing
+            // Squad or playing a match (squads generate lazily), which would otherwise
+            // silently show an empty Sell list instead of your real bench.
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            foreach (PlayerAgent player in team.Bench)
+            {
+                float sellPrice = ManagerClubFinance.GetSellPrice(player);
+                string label = $"{player.Name}   {player.PrimaryPosition}   Age {player.Age}   OVR {player.GetOverallRating():F0}   Sell for £{sellPrice:F1}m";
+                transferMarketListView.AddPlayerRow(player, label, OnSellRowClicked);
+            }
+        }
+
+        private void OnBuyRowClicked(PlayerAgent target)
+        {
+            string sourceTeam = transferMarketRowClubs.TryGetValue(target, out string t) ? t : null;
+
+            StatisticalModel.TeamStrength managedStrength = statisticalModel.GetTeamStrength(managedTeamName);
+            float budget = finance.GetOrSeedBudget(managedTeamName, managedStrength.AttackStrength, managedStrength.DefenceStrength);
+
+            float askingPrice = ManagerClubFinance.GetMarketValue(target) * TransferBidMultiplier;
+
+            if (askingPrice > budget)
+            {
+                SetTransferMarketStatus($"Can't afford {target.Name} - £{askingPrice:F1}m bid exceeds your £{budget:F1}m budget.");
+                return;
+            }
+
+            if (!ManagerClubFinance.TryResolveBid(target, askingPrice))
+            {
+                SetTransferMarketStatus($"{target.Name}'s club rejected your £{askingPrice:F1}m bid.");
+                return;
+            }
+
+            // Move the player onto the managed squad. Scouted youth prospects live in
+            // the scouting pool, not squadsByTeamName - remove from whichever source
+            // they actually came from.
+            bool wasProspect = sourceTeam != null && scouting.GetTeamNamesWithPools().Contains(sourceTeam)
+                && scouting.GetOrCreateYouthPool(sourceTeam, squadGenerator, 1f, 1f).Contains(target);
+
+            if (wasProspect)
+            {
+                scouting.GetOrCreateYouthPool(sourceTeam, squadGenerator, 1f, 1f).Remove(target);
+            }
+            else if (sourceTeam != null && squadsByTeamName.TryGetValue(sourceTeam, out AgentTeam sourceSquad))
+            {
+                sourceSquad.StartingEleven.Remove(target);
+                sourceSquad.Bench.Remove(target);
+                sourceSquad.Players.Remove(target);
+            }
+
+            finance.AdjustBudget(managedTeamName, -askingPrice);
+            GetOrCreateAgentTeam(managedTeamName).AddBenchPlayer(target);
+
+            SetTransferMarketStatus($"Signed {target.Name} for £{askingPrice:F1}m!");
+            RefreshTransferMarketUI();
+        }
+
+        private void OnSellRowClicked(PlayerAgent target)
+        {
+            if (!squadsByTeamName.TryGetValue(managedTeamName, out AgentTeam team) || !team.Bench.Contains(target))
+            {
+                return;
+            }
+
+            float sellPrice = ManagerClubFinance.GetSellPrice(target);
+
+            team.Bench.Remove(target);
+            team.Players.Remove(target);
+            finance.AdjustBudget(managedTeamName, sellPrice);
+
+            SetTransferMarketStatus($"Sold {target.Name} for £{sellPrice:F1}m.");
+            RefreshTransferMarketUI();
+        }
+
+        private void SetTransferMarketStatus(string message)
+        {
+            if (transferMarketStatusLabelObj == null)
+            {
+                return;
+            }
+
+            TextMeshProUGUI statusTMP = transferMarketStatusLabelObj.GetComponentInChildren<TextMeshProUGUI>();
+            if (statusTMP != null)
+            {
+                statusTMP.text = message;
+            }
+        }
+
+        // --- Trophy Room (career-arc addition, session 8, Phase 4): season-by-season
+        // history - final position, prize money, board boost, champion highlight. Same
+        // code-built-panel/scroll-view pattern as Squad/Scouting/Transfers, but rows are
+        // plain labels built directly (SquadListView is PlayerAgent-typed, not
+        // applicable to SeasonRecord) rather than via that shared component. ---
+
+        private bool trophyRoomChromeBuilt;
+        private GameObject trophyRoomPanel;
+        private RectTransform trophyRoomContentContainer;
+        private readonly List<GameObject> spawnedTrophyRoomRows = new();
+
+        public void OnOpenTrophyRoomClicked()
+        {
+            if (!trophyRoomChromeBuilt)
+            {
+                BuildTrophyRoomChrome();
+                trophyRoomChromeBuilt = true;
+            }
+
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (trophyRoomPanel != null) trophyRoomPanel.SetActive(true);
+
+            RefreshTrophyRoomUI();
+        }
+
+        public void OnTrophyRoomBackClicked()
+        {
+            if (trophyRoomPanel != null) trophyRoomPanel.SetActive(false);
+
+            ShowSeasonHub();
+        }
+
+        private void BuildTrophyRoomChrome()
+        {
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
+            {
+                return;
+            }
+
+            const float headerHeight = 90f;
+
+            trophyRoomPanel = new GameObject("TrophyRoomPanel", typeof(RectTransform));
+            trophyRoomPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = trophyRoomPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(trophyRoomPanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(trophyRoomPanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "TROPHY ROOM", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(200f, 36f));
+            backButton.onClick.AddListener(OnTrophyRoomBackClicked);
+
+            const float contentWidth = 1200f;
+            const float sideMargin = (1920f - contentWidth) / 2f;
+
+            GameObject scrollViewObj = new GameObject("TrophyScrollView", typeof(RectTransform), typeof(ScrollRect));
+            scrollViewObj.transform.SetParent(trophyRoomPanel.transform, false);
+            RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scrollViewRect.anchorMin = new Vector2(0f, 0f);
+            scrollViewRect.anchorMax = new Vector2(1f, 1f);
+            scrollViewRect.offsetMin = new Vector2(sideMargin, 40f);
+            scrollViewRect.offsetMax = new Vector2(-sideMargin, -(headerHeight + 40f));
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(scrollViewObj.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            trophyRoomContentContainer = contentObj.GetComponent<RectTransform>();
+            trophyRoomContentContainer.anchorMin = new Vector2(0f, 1f);
+            trophyRoomContentContainer.anchorMax = new Vector2(1f, 1f);
+            trophyRoomContentContainer.pivot = new Vector2(0.5f, 1f);
+            trophyRoomContentContainer.anchoredPosition = Vector2.zero;
+            trophyRoomContentContainer.sizeDelta = Vector2.zero;
+
+            VerticalLayoutGroup layout = contentObj.GetComponent<VerticalLayoutGroup>();
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.childControlHeight = true;
+            layout.childControlWidth = true;
+            layout.spacing = 4f;
+
+            ContentSizeFitter fitter = contentObj.GetComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scrollRect.content = trophyRoomContentContainer;
+            scrollRect.viewport = viewportRect;
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = 1f;
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(trophyRoomPanel.transform));
+        }
+
+        private void RefreshTrophyRoomUI()
+        {
+            if (trophyRoomContentContainer == null)
+            {
+                return;
+            }
+
+            foreach (GameObject row in spawnedTrophyRoomRows)
+            {
+                if (row != null) Destroy(row);
+            }
+            spawnedTrophyRoomRows.Clear();
+
+            spawnedTrophyRoomRows.Add(BuildTrophyRoomHeaderRow());
+
+            if (careerHistory.Records.Count == 0)
+            {
+                GameObject emptyObj = new GameObject("EmptyState", typeof(RectTransform), typeof(LayoutElement));
+                emptyObj.transform.SetParent(trophyRoomContentContainer, false);
+                emptyObj.GetComponent<LayoutElement>().preferredHeight = 60f;
+                ManagerUITheme.BuildLabel(emptyObj.transform, "No seasons completed yet - finish your first season to start the history.", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+                spawnedTrophyRoomRows.Add(emptyObj);
+            }
+            else
+            {
+                // Most recent season first.
+                for (int i = careerHistory.Records.Count - 1; i >= 0; i--)
+                {
+                    spawnedTrophyRoomRows.Add(BuildTrophyRoomRow(careerHistory.Records[i]));
+                }
+            }
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(trophyRoomContentContainer));
+        }
+
+        private static readonly float[] TrophyRoomColumnFractions = { 0.14f, 0.20f, 0.22f, 0.24f, 0.20f };
+
+        private GameObject BuildTrophyRoomHeaderRow()
+        {
+            GameObject row = new GameObject("TrophyHeader", typeof(RectTransform), typeof(LayoutElement));
+            row.transform.SetParent(trophyRoomContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = 30f;
+
+            string[] headers = { "SEASON", "POSITION", "PRIZE MONEY", "BOARD BOOST", "" };
+            float x = 0f;
+            for (int i = 0; i < headers.Length; i++)
+            {
+                GameObject cell = new GameObject($"Header_{i}", typeof(RectTransform));
+                cell.transform.SetParent(row.transform, false);
+                RectTransform cellRect = cell.GetComponent<RectTransform>();
+                cellRect.anchorMin = new Vector2(x, 0f);
+                cellRect.anchorMax = new Vector2(x + TrophyRoomColumnFractions[i], 1f);
+                cellRect.offsetMin = new Vector2(10f, 0f);
+                cellRect.offsetMax = new Vector2(-10f, 0f);
+                ManagerUITheme.BuildLabel(cell.transform, headers[i], 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                x += TrophyRoomColumnFractions[i];
+            }
+
+            return row;
+        }
+
+        private GameObject BuildTrophyRoomRow(SeasonRecord record)
+        {
+            GameObject row = new GameObject($"Season_{record.Season}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            row.transform.SetParent(trophyRoomContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = 44f;
+            row.GetComponent<Image>().color = record.IsChampion ? new Color(ManagerUITheme.Accent.r, ManagerUITheme.Accent.g, ManagerUITheme.Accent.b, 0.12f) : ManagerUITheme.CardNeutralAlt;
+
+            string[] values =
+            {
+                $"Season {record.Season}",
+                $"{record.FinalPosition}{GetOrdinalSuffix(record.FinalPosition)}",
+                $"£{record.PrizeMoney:F1}m",
+                record.BoardBoost > 0f ? $"£{record.BoardBoost:F1}m" : "-",
+                record.IsChampion ? "CHAMPIONS" : ""
+            };
+
+            Color textColor = record.IsChampion ? ManagerUITheme.Accent : ManagerUITheme.TextBody;
+            FontStyles style = record.IsChampion ? FontStyles.Bold : FontStyles.Normal;
+
+            float x = 0f;
+            for (int i = 0; i < values.Length; i++)
+            {
+                GameObject cell = new GameObject($"Cell_{i}", typeof(RectTransform));
+                cell.transform.SetParent(row.transform, false);
+                RectTransform cellRect = cell.GetComponent<RectTransform>();
+                cellRect.anchorMin = new Vector2(x, 0f);
+                cellRect.anchorMax = new Vector2(x + TrophyRoomColumnFractions[i], 1f);
+                cellRect.offsetMin = new Vector2(10f, 0f);
+                cellRect.offsetMax = new Vector2(-10f, 0f);
+                ManagerUITheme.BuildLabel(cell.transform, values[i], 16, textColor, TextAlignmentOptions.MidlineLeft, style);
+                x += TrophyRoomColumnFractions[i];
+            }
+
+            return row;
         }
 
         // --- Squad: Tactics Board (pitch view, position-pinned starters, drag a bench
@@ -2244,7 +3819,11 @@ namespace Manager
             Button dropdownButton = dropdownButtonObj.GetComponent<Button>();
             dropdownButton.targetGraphic = dropdownButtonImage;
 
-            string currentLabel = (currentValue != null ? currentValue.Name : "— None —") + "  ▾";
+            // "v" not "▾" - Oswald SDF has no symbol glyphs at all (same reason the
+            // Tactics Board's own formation dropdown uses "v", see its comment). This
+            // spot was missed when that fix was applied elsewhere, and kept spamming
+            // "character not found" warnings every time this row rebuilt.
+            string currentLabel = (currentValue != null ? currentValue.Name : "— None —") + "  v";
             ManagerUITheme.BuildLabel(dropdownButtonObj.transform, currentLabel, 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
 
             // Two real bugs, found live and fixed together: (1) the dropdown used to be
@@ -3925,6 +5504,12 @@ namespace Manager
                 PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
                 Vector2 anchor = new Vector2(pins[i].x, 1f - pins[i].y);
 
+                // labelFontSize bumped 10->12 - below that read as genuinely too small to
+                // make out a name at a glance (confirmed live, Thomas couldn't read them).
+                // Tactics Board's own pins use circleSize 68/labelFontSize 14 for
+                // comparison - this pitch is deliberately smaller (shares the screen with
+                // the OVR/Rating list), so it gets a smaller but still legible size rather
+                // than matching exactly.
                 ManagerUITheme.BuildPitchPinVisual(
                     matchdayPrepPitchContainer,
                     $"OpponentPin_{player.Name}",
@@ -3934,7 +5519,7 @@ namespace Manager
                     ratingText: GetDisplayRating(player.GetOverallRating()).ToString(),
                     ratingFontSize: 12,
                     labelText: $"{player.Name} · {slot}",
-                    labelFontSize: 10);
+                    labelFontSize: 12);
             }
         }
 
@@ -4719,6 +6304,7 @@ namespace Manager
                 SimulateOtherFixturesInMatchday(fixture.Matchday);
 
                 currentFixtureIndex++;
+                scouting.ResolveDueAssignments(currentFixtureIndex);
             }
 
             RefreshHubUI();
@@ -4986,6 +6572,7 @@ namespace Manager
 
                 if (played)
                 {
+                    roles.RecordAppearance(player);
                     TryRollInjury(roles, player, preMatchCondition);
                 }
             }
@@ -5439,6 +7026,7 @@ namespace Manager
             ApplyFixtureResult(currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
+            scouting.ResolveDueAssignments(currentFixtureIndex);
 
             matchPaused = false;
             Time.timeScale = 1f;

@@ -118,5 +118,34 @@ namespace Manager
         {
             return 0.7f + 0.3f * (GetCondition(player) / 100f);
         }
+
+        // Appearances this season (career-arc addition, Phase 1) - managed-team-only,
+        // same limitation as Condition/injuries above (see ApplyMatchdayConditionAndInjuries,
+        // which is the only place that calls RecordAppearance). Feeds a genuine playing-
+        // time weighting into ManagerPlayerDevelopment.ApplySeasonProgression for the
+        // one squad this data actually exists for.
+        private readonly Dictionary<PlayerAgent, int> appearancesThisSeason = new();
+
+        public int GetAppearancesThisSeason(PlayerAgent player)
+        {
+            return appearancesThisSeason.TryGetValue(player, out int count) ? count : 0;
+        }
+
+        public void RecordAppearance(PlayerAgent player)
+        {
+            appearancesThisSeason[player] = GetAppearancesThisSeason(player) + 1;
+        }
+
+        // Season rollover (career-arc addition) - condition/injuries/appearances reset
+        // for the new season's fresh fixture list; Captain/ViceCaptain/set-piece takers
+        // and the attack/defend leanings deliberately survive untouched, since re-
+        // picking your captain every single season would be busywork, not a real
+        // decision.
+        public void ResetForNewSeason()
+        {
+            condition.Clear();
+            injuryReturnMatchday.Clear();
+            appearancesThisSeason.Clear();
+        }
     }
 }

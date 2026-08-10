@@ -9,6 +9,15 @@ namespace Sim
         public int Age;
         public float Height;
 
+        // Manager Mode career-arc additions (progression/transfers/save-load) - stable
+        // identity for a player across seasons and save files (Name alone can collide -
+        // see the lastNames pool-size comment in AgentSquadGenerator), and a hidden
+        // growth ceiling GetOverallRating() can climb toward over a career. Both inert,
+        // generated once and read elsewhere - Potential only ever mutates existing
+        // attribute fields towards itself, never itself.
+        public string PlayerId;
+        public float Potential;
+
         public PlayerRole Role;
         public PlayerPosition PrimaryPosition;
         public List<PlayerPosition> SecondaryPositions = new();

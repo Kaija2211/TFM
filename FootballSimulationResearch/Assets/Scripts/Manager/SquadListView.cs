@@ -95,6 +95,25 @@ namespace Manager
             spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix));
         }
 
+        // Generic N-column grid row/header - unlike the fixed Pos/Player/OVR/Rating grid
+        // above, this takes arbitrary column text/widths, for callers whose columns
+        // don't match that shape (e.g. the Scouting screen's Name/Pos/Age/Club/OVR/
+        // Potential/Status). columnFractions must sum to 1 and match cellTexts/headers
+        // in length. Real columns, not one concatenated label - the same "stat columns
+        // didn't actually align" fix already applied to the Tactics screen's dropdown
+        // options (session 7).
+        public void AddCustomGridHeaderRow(string[] headers, float[] columnFractions)
+        {
+            EnsureLayoutComponents();
+            spawnedRows.Add(BuildCustomGridHeaderRow(headers, columnFractions));
+        }
+
+        public void AddCustomGridRow(PlayerAgent player, string[] cellTexts, float[] columnFractions, Action<PlayerAgent> onRowClicked)
+        {
+            EnsureLayoutComponents();
+            spawnedRows.Add(BuildCustomGridRow(player, cellTexts, columnFractions, onRowClicked));
+        }
+
         private GameObject BuildGridHeaderRow()
         {
             GameObject row = new GameObject("GridHeader", typeof(RectTransform), typeof(LayoutElement));
@@ -199,6 +218,67 @@ namespace Manager
             cellRect.offsetMax = new Vector2(-10f, 0f);
 
             ManagerUITheme.BuildLabel(cell.transform, text, size, color, alignment, style);
+        }
+
+        private GameObject BuildCustomGridHeaderRow(string[] headers, float[] columnFractions)
+        {
+            GameObject row = new GameObject("CustomGridHeader", typeof(RectTransform), typeof(LayoutElement));
+            row.transform.SetParent(rowContainer, false);
+
+            LayoutElement layoutElement = row.GetComponent<LayoutElement>();
+            layoutElement.preferredHeight = headerHeight;
+            layoutElement.flexibleWidth = 1f;
+
+            float x = 0f;
+            for (int i = 0; i < headers.Length; i++)
+            {
+                BuildGridCell(row.transform, x, columnFractions[i], headers[i], 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                x += columnFractions[i];
+            }
+
+            return row;
+        }
+
+        private GameObject BuildCustomGridRow(PlayerAgent player, string[] cellTexts, float[] columnFractions, Action<PlayerAgent> onRowClicked)
+        {
+            bool clickable = onRowClicked != null;
+
+            GameObject row = clickable
+                ? new GameObject($"Row_{player.Name}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement))
+                : new GameObject($"Row_{player.Name}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            row.transform.SetParent(rowContainer, false);
+
+            LayoutElement layoutElement = row.GetComponent<LayoutElement>();
+            layoutElement.preferredHeight = rowHeight;
+            layoutElement.flexibleWidth = 1f;
+
+            Image background = row.GetComponent<Image>();
+            background.color = new Color(0f, 0f, 0f, 0f);
+
+            if (clickable && row.TryGetComponent(out Button button))
+            {
+                button.targetGraphic = background;
+                button.onClick.AddListener(() => onRowClicked(player));
+            }
+
+            GameObject borderObj = new GameObject("Border", typeof(RectTransform), typeof(Image));
+            borderObj.transform.SetParent(row.transform, false);
+            RectTransform borderRect = borderObj.GetComponent<RectTransform>();
+            borderRect.anchorMin = new Vector2(0f, 0f);
+            borderRect.anchorMax = new Vector2(1f, 0f);
+            borderRect.pivot = new Vector2(0.5f, 0f);
+            borderRect.sizeDelta = new Vector2(0f, 1f);
+            borderRect.anchoredPosition = Vector2.zero;
+            borderObj.GetComponent<Image>().color = ManagerUITheme.BarTrack;
+
+            float x = 0f;
+            for (int i = 0; i < cellTexts.Length; i++)
+            {
+                BuildGridCell(row.transform, x, columnFractions[i], cellTexts[i], fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+                x += columnFractions[i];
+            }
+
+            return row;
         }
 
         public void Clear()

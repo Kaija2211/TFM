@@ -353,6 +353,14 @@ namespace Sim
 
             PlayerAgent player = new PlayerAgent(playerName, role, position);
 
+            // System.Guid doesn't touch UnityEngine.Random, so assigning it here (outside
+            // the Random.State-wrapped block below) can't shift the shared RNG sequence
+            // Research Mode's same-seed comparisons depend on. Fully-qualified rather
+            // than `using System;` - this file uses bare `Random` everywhere to mean
+            // UnityEngine.Random, and that using directive would make every one of those
+            // an ambiguous CS0104 (see feedback_random_namespace_ambiguity).
+            player.PlayerId = System.Guid.NewGuid().ToString();
+
             float attackMultiplier = Mathf.Lerp(1f, attackStrength, 0.35f);
             float defenceMultiplier = Mathf.Lerp(1f, 1f / defenceStrength, 0.35f);
 
@@ -456,6 +464,19 @@ namespace Sim
             float youthFactor = Mathf.Clamp01((24f - player.Age) / 6f);
             float veteranFactor = Mathf.Clamp01((player.Age - 29f) / 8f);
             player.Leadership += (veteranFactor * 12f) - (youthFactor * 10f);
+
+            // Potential (career-arc progression) - a hidden ceiling GetOverallRating()
+            // can climb toward over a career (see ManagerPlayerDevelopment). Every stat
+            // GetOverallRating() actually reads for this position is already final by
+            // this point (position generator + ApplyAgeAndHeight ran before this method),
+            // so the live rating taken here is a genuine "current ability" baseline, not
+            // an estimate. Headroom above it is skewed heavily by youthFactor - an 18-
+            // year-old might have most of a 35-point ceiling above his current level, a
+            // 32-year-old only a sliver - but never zero, since even a veteran's "true"
+            // level is rarely exactly today's rolled number.
+            float currentOverall = player.GetOverallRating();
+            float headroomRoll = RollAttribute(0f, 35f) * (0.3f + (youthFactor * 0.7f));
+            player.Potential = Mathf.Clamp(currentOverall + headroomRoll, currentOverall, 99f);
 
             Random.state = savedState;
         }
