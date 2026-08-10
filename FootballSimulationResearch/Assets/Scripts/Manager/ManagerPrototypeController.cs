@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -233,6 +234,14 @@ namespace Manager
         private Button tacticsBoardFormationButton;
         private GameObject tacticsBoardFormationDropdown;
 
+        // Injury block warning (backlog item, session 10) - the icon alone (session 9)
+        // only made an injured starter visible, it never stopped a manager from
+        // dragging one onto the pitch in the first place. Reuses the header band rather
+        // than adding a whole new toast system - flat red text that fades in, sits for
+        // a few seconds, then clears itself.
+        private TextMeshProUGUI tacticsBoardWarningLabel;
+        private Coroutine tacticsBoardWarningCoroutine;
+
         // Tactics screen (session 7) - reached from the Tactics Board via a new TACTICS
         // button beside FORMATION. Centralizes captaincy/set-piece-taker assignment
         // (moved off Player Detail) alongside the new tactical sliders.
@@ -275,6 +284,12 @@ namespace Manager
         private List<PlayerAgent> inspectSquadPlayers = new();
         private int inspectPlayerIndex;
         private bool inspectIsOwnSquad = true;
+
+        // Academy focus stats (session 10) - distinct from inspectIsOwnSquad (an
+        // academy prospect is never "your own squad" either, same as a Scouting/
+        // Transfer target), needed to tell those apart since only an academy prospect
+        // gets a focus-stats picker instead of the generic "NOT ON YOUR SQUAD" notice.
+        private bool inspectIsAcademyProspect;
 
         // --- Substitutions: pre-match subs happen on the Tactics Board (drag a bench
         // card onto a pin - see OnBenchPlayerDroppedOnPin). Mid-match subs now reuse the
@@ -1906,13 +1921,14 @@ namespace Manager
             // Unsigned youth prospects keep developing whether or not you've scouted
             // them yet - procrastinate and a hidden wonderkid becomes obviously great
             // (and obviously expensive) by the time you finally look, real tension for
-            // the "discover them early" fantasy.
+            // the "discover them early" fantasy. AgeAndExpireProspects (session 10)
+            // folds in expiry/refresh on the same tick - a prospect who ages out
+            // unbought gets swapped for a fresh 16-19-year-old instead of just getting
+            // older forever (see its own comment in ManagerScouting).
             foreach (string region in scouting.GetPoolRegions())
             {
-                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(region, squadGenerator))
-                {
-                    player.Age += 1;
-                }
+                scouting.GetOrCreateYouthPool(region, squadGenerator);
+                scouting.AgeAndExpireProspects(region, squadGenerator);
             }
 
             // Youth academy (session 9) - same "keeps developing whether or not you're
@@ -2037,10 +2053,13 @@ namespace Manager
             // prospects above; reuses ManagerPlayerDevelopment's existing Potential/
             // growth system completely unchanged, exactly as agreed when this was
             // first floated, so academy kids visibly grow before they're even
-            // promotion-eligible.
+            // promotion-eligible. Focus stats (session 10) ride along on the same call -
+            // GetFocusAttributes returns an empty list for a prospect nobody's picked
+            // anything for yet, which ApplySeasonProgression already treats as "no
+            // doubling" the same as a null set.
             foreach (PlayerAgent player in academy.GetAcademyPoolForAging())
             {
-                ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect);
+                ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect, academy.GetFocusAttributes(player));
             }
         }
 
@@ -2760,7 +2779,7 @@ namespace Manager
         private void OpenAcademyProspectDetail(PlayerAgent prospect, List<PlayerAgent> browseList)
         {
             playerInspectReturnTarget = PlayerInspectReturnTarget.Scouting;
-            OpenPlayerInspect(prospect, browseList, ownSquad: false);
+            OpenPlayerInspect(prospect, browseList, ownSquad: false, isAcademyProspect: true);
         }
 
         private void OnScoutingColumnHeaderClicked(int column)
@@ -3731,6 +3750,19 @@ namespace Manager
             Button tacticsScreenButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "TACTICS", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(tacticsScreenButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-598f, -27f), new Vector2(150f, 36f));
             tacticsScreenButton.onClick.AddListener(OnOpenTacticsScreenClicked);
+
+            // Injury block warning (session 10) - centered under the header row, empty
+            // by default (BuildLabel with empty text still reserves the space so it pops
+            // in without shifting anything else when a blocked drop fills it).
+            GameObject warningObj = new GameObject("InjuryWarning", typeof(RectTransform));
+            warningObj.transform.SetParent(tacticsBoardPanel.transform, false);
+            RectTransform warningRect = warningObj.GetComponent<RectTransform>();
+            warningRect.anchorMin = new Vector2(0.5f, 1f);
+            warningRect.anchorMax = new Vector2(0.5f, 1f);
+            warningRect.pivot = new Vector2(0.5f, 1f);
+            warningRect.sizeDelta = new Vector2(700f, 24f);
+            warningRect.anchoredPosition = new Vector2(0f, -headerHeight - 14f);
+            tacticsBoardWarningLabel = ManagerUITheme.BuildLabel(warningObj.transform, "", 15, ManagerUITheme.Danger, TextAlignmentOptions.Center, FontStyles.Bold);
 
             // Body row: pitch (flex, capped at 1320px wide) beside a 300px vertical bench
             // rail, both filling the row band between the header and the panel's own
@@ -4721,6 +4753,19 @@ namespace Manager
                 return;
             }
 
+            // Block, don't just decorate (session 10 - the injury cross icon from
+            // session 9 only made an injured starter visible, it never stopped one being
+            // dragged into the XI). Only checked here, not in OnPinPlayersSwapped - a
+            // pin-to-pin swap never adds anyone to the starting XI who wasn't already in
+            // it, so there's nothing new to block there.
+            ManagerSquadRoles blockRoles = GetOrCreateSquadRoles(managedTeamName);
+            if (blockRoles.IsInjured(benchPlayer, currentFixtureIndex))
+            {
+                ShowTacticsBoardWarning($"{benchPlayer.Name} is injured and can't start");
+                RefreshTacticsBoardUI();
+                return;
+            }
+
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
             bool applied = team.SubstitutePlayer(pinPlayer, benchPlayer);
 
@@ -4765,6 +4810,35 @@ namespace Manager
             }
 
             RefreshTacticsBoardUI();
+        }
+
+        private void ShowTacticsBoardWarning(string message)
+        {
+            if (tacticsBoardWarningLabel == null)
+            {
+                return;
+            }
+
+            tacticsBoardWarningLabel.text = message;
+
+            if (tacticsBoardWarningCoroutine != null)
+            {
+                StopCoroutine(tacticsBoardWarningCoroutine);
+            }
+
+            tacticsBoardWarningCoroutine = StartCoroutine(ClearTacticsBoardWarningAfterDelay());
+        }
+
+        private IEnumerator ClearTacticsBoardWarningAfterDelay()
+        {
+            yield return new WaitForSeconds(3f);
+
+            if (tacticsBoardWarningLabel != null)
+            {
+                tacticsBoardWarningLabel.text = "";
+            }
+
+            tacticsBoardWarningCoroutine = null;
         }
 
         // Regenerates the remainder of the currently-live match (from the minute after
@@ -5061,9 +5135,16 @@ namespace Manager
             return $"  <size=80%><color=#{accentHex}>{string.Join(" ", badges)}</color></size>";
         }
 
-        // Injured takes priority over a plain low-Condition warning - no point showing
-        // "tired" next to a player who's actually out. Quiet by design for anyone fit and
-        // rested (empty string) - the badge is only worth showing when it's actionable.
+        // Injured takes priority over a plain Condition readout - no point showing a
+        // fitness number next to a player who's actually out.
+        //
+        // Always-visible Condition (backlog item, session 10) - this used to only
+        // appear once Condition dropped below 60%, staying an empty string otherwise.
+        // Condition genuinely persists matchday-to-matchday, but hiding the number above
+        // that threshold meant a manager had no way to see it trending down before it
+        // was already a crisis - the whole point of tracking it per-matchday in the
+        // first place. Always shown now; color grading (Accent/Warning/Danger by band)
+        // keeps a fully-fit player's number calm rather than loud, without hiding it.
         private string BuildFitnessBadgeSuffix(PlayerAgent player, ManagerSquadRoles roles)
         {
             if (roles.IsInjured(player, currentFixtureIndex))
@@ -5077,14 +5158,13 @@ namespace Manager
             }
 
             float condition = roles.GetCondition(player);
-
-            if (condition < 60f)
-            {
-                string warningHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Warning);
-                return $"  <size=80%><color=#{warningHex}>FIT {condition:F0}%</color></size>";
-            }
-
-            return string.Empty;
+            Color conditionColor = condition >= 85f
+                ? ManagerUITheme.Accent
+                : condition >= 60f
+                    ? ManagerUITheme.Warning
+                    : ManagerUITheme.Danger;
+            string conditionHex = ColorUtility.ToHtmlStringRGB(conditionColor);
+            return $"  <size=80%><color=#{conditionHex}>FIT {condition:F0}%</color></size>";
         }
 
         // --- Player Inspect (Prev/Next once inside; entry point jumps straight to a
@@ -5098,7 +5178,7 @@ namespace Manager
         // exactly as before. ownSquad also gates the roles band in RefreshPlayerInspectUI
         // - captaincy/set-piece/attack-defend assignment only makes sense for a player
         // you actually manage, not someone else's player you're scouting or bidding on.
-        private void OpenPlayerInspect(PlayerAgent preselected, List<PlayerAgent> browseList = null, bool ownSquad = true)
+        private void OpenPlayerInspect(PlayerAgent preselected, List<PlayerAgent> browseList = null, bool ownSquad = true, bool isAcademyProspect = false)
         {
             CleanupStrayDragGhosts();
 
@@ -5112,6 +5192,8 @@ namespace Manager
                 inspectSquadPlayers = new List<PlayerAgent>(team.StartingEleven);
                 inspectSquadPlayers.AddRange(team.Bench);
             }
+
+            inspectIsAcademyProspect = isAcademyProspect;
 
             inspectIsOwnSquad = ownSquad;
 
@@ -5307,8 +5389,14 @@ namespace Manager
             // A new strip between the header band and the attribute grid for role
             // assignment (captaincy, set-piece takers, attack/defend leaning) - see
             // RolesBand below. Kept as its own band rather than crammed into the header,
-            // which already took two rounds of tuning to fit the bigger photo.
-            const float rolesBandHeight = 56f;
+            // which already took two rounds of tuning to fit the bigger photo. Taller for
+            // an academy prospect (session 10) - the focus-stats picker needs room for a
+            // caption line plus a wrapped 2-row chip grid (up to 18 outfield attributes),
+            // not just the single row of role toggles/LOAN OUT this band was sized for.
+            // Not a const anymore since it now varies, but everything downstream
+            // (attributeGridRect below) already reads it as a variable, so the rest of
+            // the layout adjusts automatically.
+            float rolesBandHeight = inspectIsAcademyProspect ? 130f : 56f;
 
             // Full-width (no contentMargin) unlike the centered stat grid below it - the
             // margined header looked like it wasn't filling the screen, with visible
@@ -5402,14 +5490,48 @@ namespace Manager
             ovrCaptionRect.anchoredPosition = new Vector2(-36f, -106f);
             ManagerUITheme.BuildLabel(ovrCaption.transform, $"OVERALL ({player.PrimaryPosition})", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
 
-            // Season-over-season delta (career arc backlog item, session 9) - a small
-            // badge tucked into the top-right corner of the OVR number itself (live
-            // feedback: a full "+3 LAST SEASON" text line read as too heavy - just the
-            // signed number, right where you're already looking, reads faster). Hidden
-            // entirely rather than showing "+0", since a brand-new player (just
-            // scouted/signed/promoted) genuinely has no prior season to compare against
-            // yet, and "+0" would misleadingly read as "no growth this season" instead.
-            int overallDelta = ManagerPlayerDevelopment.GetLastSeasonOverallDelta(player);
+            // Always-visible Condition (backlog item, session 10) - Squad Browse's own
+            // "FIT XX%" suffix (see BuildFitnessBadgeSuffix) used to be the only place
+            // Condition showed at all, and only once it dropped below 60% - Player
+            // Detail had no raw number anywhere. Gated on inspectIsOwnSquad like the
+            // roles band below: Condition isn't tracked for browsed Scouting/Transfer
+            // targets or other clubs' players (ApplyMatchdayConditionAndInjuries only
+            // ticks the managed squad), so GetCondition would just silently read back
+            // its 100f default for anyone else - showing that as a real number would be
+            // misleading rather than merely absent.
+            if (inspectIsOwnSquad)
+            {
+                float condition = GetOrCreateSquadRoles(managedTeamName).GetCondition(player);
+                Color conditionColor = condition >= 85f
+                    ? ManagerUITheme.Accent
+                    : condition >= 60f
+                        ? ManagerUITheme.Warning
+                        : ManagerUITheme.Danger;
+
+                GameObject conditionCaption = new GameObject("ConditionCaption", typeof(RectTransform));
+                conditionCaption.transform.SetParent(headerBand.transform, false);
+                RectTransform conditionRect = conditionCaption.GetComponent<RectTransform>();
+                conditionRect.anchorMin = new Vector2(1f, 1f);
+                conditionRect.anchorMax = new Vector2(1f, 1f);
+                conditionRect.pivot = new Vector2(1f, 1f);
+                conditionRect.sizeDelta = new Vector2(180f, 18f);
+                conditionRect.anchoredPosition = new Vector2(-36f, -126f);
+                ManagerUITheme.BuildLabel(conditionCaption.transform, $"CONDITION {condition:F0}%", 13, conditionColor, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+            }
+
+            // In-season delta (career arc backlog item, session 9/10) - a small badge
+            // tucked into the top-right corner of the OVR number itself (live feedback:
+            // a full "+3 LAST SEASON" text line read as too heavy - just the signed
+            // number, right where you're already looking, reads faster). Switched from
+            // GetLastSeasonOverallDelta to GetCurrentSeasonOverallDelta (session 10) -
+            // the old one only updated at rollover, so it sat frozen showing last
+            // season's final number for the entire following season even though growth
+            // now ticks per matchday. Live version climbs in real time as ticks land and
+            // resets to 0 right at rollover. Hidden entirely rather than showing "+0",
+            // since a brand-new player (just scouted/signed/promoted) genuinely has no
+            // season-start snapshot to compare against yet, and "+0" would misleadingly
+            // read as "no growth this season" instead.
+            int overallDelta = ManagerPlayerDevelopment.GetCurrentSeasonOverallDelta(player);
             if (overallDelta != 0)
             {
                 GameObject ovrDelta = new GameObject("OvrDelta", typeof(RectTransform));
@@ -5467,6 +5589,10 @@ namespace Manager
                 Button loanButton = ManagerUITheme.BuildButton(rolesBand.transform, "LOAN OUT", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
                 ManagerUITheme.SetPointAnchor(loanButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-16f, 0f), new Vector2(130f, 40f));
                 loanButton.onClick.AddListener(() => OnLoanOutClicked(player));
+            }
+            else if (inspectIsAcademyProspect)
+            {
+                BuildFocusStatsPicker(rolesBand.transform, player);
             }
             else
             {
@@ -5693,6 +5819,104 @@ namespace Manager
                 FontStyles.Bold);
 
             return x + buttonWidth + gap;
+        }
+
+        // Academy focus stats picker (session 10) - up to 3 attributes per prospect,
+        // doubling their growth rate for as long as they stay in the academy (see
+        // ManagerAcademy.ToggleFocusAttribute / ManagerPlayerDevelopment's Focused
+        // helper). Reuses the same RolesBand slot the attack/defend toggles occupy for
+        // an owned-squad player - mutually exclusive with that content (a player is
+        // never both an academy prospect and on your own squad), so no extra layout
+        // region is needed beyond the taller rolesBandHeight already reserved for this
+        // case in RefreshPlayerInspectUI.
+        private void BuildFocusStatsPicker(Transform parent, PlayerAgent prospect)
+        {
+            IReadOnlyList<string> selected = academy.GetFocusAttributes(prospect);
+
+            GameObject captionObj = new GameObject("FocusCaption", typeof(RectTransform));
+            captionObj.transform.SetParent(parent, false);
+            RectTransform captionRect = captionObj.GetComponent<RectTransform>();
+            captionRect.anchorMin = new Vector2(0f, 1f);
+            captionRect.anchorMax = new Vector2(1f, 1f);
+            captionRect.pivot = new Vector2(0f, 1f);
+            captionRect.sizeDelta = new Vector2(0f, 20f);
+            ManagerUITheme.BuildLabel(captionObj.transform, $"FOCUS STATS - {selected.Count}/3 SELECTED (2x GROWTH)", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            string[] focusable = ManagerAcademy.GetFocusableAttributes(prospect.PrimaryPosition);
+
+            const float chipWidth = 140f;
+            const float chipHeight = 30f;
+            const float gapX = 8f;
+            const float gapY = 6f;
+            const int chipsPerRow = 9;
+
+            for (int i = 0; i < focusable.Length; i++)
+            {
+                string attributeName = focusable[i];
+                bool isSelected = selected.Contains(attributeName);
+
+                int row = i / chipsPerRow;
+                int col = i % chipsPerRow;
+                float x = col * (chipWidth + gapX);
+                float y = -28f - row * (chipHeight + gapY);
+
+                GameObject chip = new GameObject($"FocusChip_{attributeName}", typeof(RectTransform), typeof(Image), typeof(Button));
+                chip.transform.SetParent(parent, false);
+                RectTransform chipRect = chip.GetComponent<RectTransform>();
+                chipRect.anchorMin = new Vector2(0f, 1f);
+                chipRect.anchorMax = new Vector2(0f, 1f);
+                chipRect.pivot = new Vector2(0f, 1f);
+                chipRect.sizeDelta = new Vector2(chipWidth, chipHeight);
+                chipRect.anchoredPosition = new Vector2(x, y);
+
+                Image chipImage = chip.GetComponent<Image>();
+                chipImage.color = isSelected ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+
+                Button chipButton = chip.GetComponent<Button>();
+                chipButton.targetGraphic = chipImage;
+                chipButton.onClick.AddListener(() => OnFocusAttributeToggled(prospect, attributeName));
+
+                Color textColor = isSelected ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody;
+                ManagerUITheme.BuildLabel(chip.transform, AbbreviateAttributeName(attributeName), 12, textColor, TextAlignmentOptions.Center, FontStyles.Bold);
+            }
+        }
+
+        private void OnFocusAttributeToggled(PlayerAgent prospect, string attributeName)
+        {
+            academy.ToggleFocusAttribute(prospect, attributeName);
+            RefreshPlayerInspectUI();
+        }
+
+        // Short display labels for the focus-stat chips - full attribute names
+        // ("ThroughBalls", "OffTheBall") don't fit a 140px chip at a readable size,
+        // same abbreviation instinct as the existing role/set-piece badges
+        // (BuildRoleBadgeSuffix's "PK"/"FK"/"CK-L").
+        private static string AbbreviateAttributeName(string attributeName)
+        {
+            switch (attributeName)
+            {
+                case "Finishing": return "FIN";
+                case "Passing": return "PAS";
+                case "Dribbling": return "DRI";
+                case "Crossing": return "CRO";
+                case "Heading": return "HEA";
+                case "LongShots": return "L.SHOT";
+                case "ThroughBalls": return "T.BALL";
+                case "Creativity": return "CREA";
+                case "Positioning": return "POS";
+                case "Composure": return "COMP";
+                case "OffTheBall": return "OTB";
+                case "Defending": return "DEF";
+                case "Tackling": return "TACK";
+                case "Marking": return "MARK";
+                case "Pace": return "PACE";
+                case "Strength": return "STR";
+                case "Stamina": return "STAM";
+                case "Aerial": return "AER";
+                case "Goalkeeping": return "GK";
+                case "Reflexes": return "REFL";
+                default: return attributeName.ToUpperInvariant();
+            }
         }
 
         private static void BuildAttributeColumn(RectTransform parent, int columnIndex, int totalColumns, string title, (string label, float value)[] attributes)
@@ -7234,17 +7458,17 @@ namespace Manager
         private void ApplyMatchdayConditionAndInjuries(AgentTeam team)
         {
             ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
-            HashSet<PlayerAgent> playedThisMatch = new HashSet<PlayerAgent>(team.StartingEleven);
 
             List<PlayerAgent> fullSquad = new List<PlayerAgent>(team.StartingEleven);
             fullSquad.AddRange(team.Bench);
 
             foreach (PlayerAgent player in fullSquad)
             {
-                bool played = playedThisMatch.Contains(player);
+                float minutesPlayed = ComputeMinutesPlayed(player, team);
+                bool played = minutesPlayed > 0f;
                 float preMatchCondition = roles.GetCondition(player);
 
-                roles.ApplyPostMatchCondition(player, played, player.Age, player.Stamina);
+                roles.ApplyPostMatchCondition(player, minutesPlayed, player.Age, player.Stamina);
 
                 if (played)
                 {
@@ -7256,9 +7480,35 @@ namespace Manager
                 // Condition already uses, same played/not-played signal computed above.
                 // Whole squad, not just starters - a benched player still ticks (at the
                 // 0.7x floor rate), same as the old season-lump version's playing-time
-                // floor.
+                // floor. Deliberately still the binary `played` flag here, not
+                // minutesPlayed - growth ticks were never the reported issue, only
+                // Condition was, so left unchanged to keep this fix minimal.
                 ManagerPlayerDevelopment.ApplyMatchdayProgression(player, played);
             }
+        }
+
+        // Real per-player minutes for this match (session 10 fix, see
+        // ManagerSquadRoles.ApplyPostMatchCondition's own comment for the bug this
+        // replaces). matchSubsLog only ever gets an entry for a genuine MID-match
+        // substitution (see OnBenchPlayerDroppedOnPin's tacticsBoardOpenedMidMatch
+        // gate) - a pre-match team-sheet edit made before kickoff isn't logged at all,
+        // but doesn't need to be: team.StartingEleven by kickoff already reflects
+        // whoever the manager actually chose to start, so anyone not touched by a
+        // mid-match sub either played the full 90 (if they started) or didn't feature
+        // at all (if they didn't). Doesn't handle a player being subbed on and then
+        // subbed off again in the same match - the UI has no path to re-introduce a
+        // player who's already come off, so that combination can't happen today.
+        private float ComputeMinutesPlayed(PlayerAgent player, AgentTeam team)
+        {
+            const float matchLengthMinutes = 90f;
+
+            foreach (var sub in matchSubsLog)
+            {
+                if (sub.onName == player.Name) return matchLengthMinutes - sub.minute;
+                if (sub.offName == player.Name) return sub.minute;
+            }
+
+            return team.StartingEleven.Contains(player) ? matchLengthMinutes : 0f;
         }
 
         // Injury risk scales sharply as pre-match Condition drops - a manager who never

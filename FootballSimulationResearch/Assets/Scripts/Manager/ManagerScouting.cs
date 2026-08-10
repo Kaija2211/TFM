@@ -51,48 +51,99 @@ namespace Manager
                 return pool;
             }
 
-            float regionalQuality = GetRegionalQualityMultiplier(region);
             pool = new List<PlayerAgent>();
 
             for (int i = 0; i < ProspectsPerRegion; i++)
             {
                 PlayerPosition position = ProspectPositionCycle[i % ProspectPositionCycle.Length];
-                int prospectAge = Random.Range(MinProspectAge, MaxProspectAge + 1);
-
-                // Softer than the senior reserve pool's own 0.85x (see
-                // ManagerPrototypeController.GetOrCreateReservePool) - a raw 16-19-year-
-                // old prospect being a clear step down from even a senior reserve is the
-                // point, not a bug. Age-scaled rather than a flat factor: a 16-year-old
-                // should look like a genuine long-term project, not already the same
-                // quality step-down a 19-year-old gets. Live-sampled and re-tuned against
-                // realistic club-strength inputs after fixing the DefenceStrength
-                // direction bug below (see HANDOFF) - final numbers verified live.
-                // Age is rolled before generation now (not after, like the old
-                // RerollAgeAndPotentialForYouthProspect did) specifically so this
-                // discount can depend on it.
-                float ageDiscount = Mathf.Lerp(0.6f, 0.78f, (float)(prospectAge - MinProspectAge) / (MaxProspectAge - MinProspectAge));
-
-                // No real club to scale off anymore (world-scattered rework) - baseline
-                // 1.0 (average) combined with the age discount and this region's
-                // quality bias for this career, same combined-factor role a real club's
-                // AttackStrength/DefenceStrength used to play.
-                float combinedFactor = ageDiscount * regionalQuality;
-
-                // DefenceStrength is inverted in AgentSquadGenerator (defenceMultiplier =
-                // 1/defenceStrength - lower DefenceStrength means a BETTER defence), so a
-                // genuine discount divides it rather than multiplying like AttackStrength
-                // does. See the same fix and its live-verified numbers in
-                // ManagerPrototypeController.GetOrCreateReservePool.
-                PlayerAgent prospect = generator.GenerateReservePlayer(position, 1f * combinedFactor, 1f / combinedFactor);
-                ApplyProspectAgeAndPotential(prospect, prospectAge);
-
-                ManagerPlayerNationality.SetNationality(prospect, ManagerPlayerNationality.GetRandomNationInRegion(region));
-
-                pool.Add(prospect);
+                pool.Add(GenerateProspect(region, position, generator));
             }
 
             youthPoolByRegion[region] = pool;
             return pool;
+        }
+
+        // Shared by the pool's initial fill above and the expiry replacement below -
+        // both need "roll a fresh 16-19-year-old for this region, at this region's
+        // current quality bias," just at different times.
+        private PlayerAgent GenerateProspect(string region, PlayerPosition position, AgentSquadGenerator generator)
+        {
+            float regionalQuality = GetRegionalQualityMultiplier(region);
+            int prospectAge = Random.Range(MinProspectAge, MaxProspectAge + 1);
+
+            // Softer than the senior reserve pool's own 0.85x (see
+            // ManagerPrototypeController.GetOrCreateReservePool) - a raw 16-19-year-
+            // old prospect being a clear step down from even a senior reserve is the
+            // point, not a bug. Age-scaled rather than a flat factor: a 16-year-old
+            // should look like a genuine long-term project, not already the same
+            // quality step-down a 19-year-old gets. Live-sampled and re-tuned against
+            // realistic club-strength inputs after fixing the DefenceStrength
+            // direction bug below (see HANDOFF) - final numbers verified live.
+            // Age is rolled before generation now (not after, like the old
+            // RerollAgeAndPotentialForYouthProspect did) specifically so this
+            // discount can depend on it.
+            float ageDiscount = Mathf.Lerp(0.6f, 0.78f, (float)(prospectAge - MinProspectAge) / (MaxProspectAge - MinProspectAge));
+
+            // No real club to scale off anymore (world-scattered rework) - baseline
+            // 1.0 (average) combined with the age discount and this region's
+            // quality bias for this career, same combined-factor role a real club's
+            // AttackStrength/DefenceStrength used to play.
+            float combinedFactor = ageDiscount * regionalQuality;
+
+            // DefenceStrength is inverted in AgentSquadGenerator (defenceMultiplier =
+            // 1/defenceStrength - lower DefenceStrength means a BETTER defence), so a
+            // genuine discount divides it rather than multiplying like AttackStrength
+            // does. See the same fix and its live-verified numbers in
+            // ManagerPrototypeController.GetOrCreateReservePool.
+            PlayerAgent prospect = generator.GenerateReservePlayer(position, 1f * combinedFactor, 1f / combinedFactor);
+            ApplyProspectAgeAndPotential(prospect, prospectAge);
+
+            ManagerPlayerNationality.SetNationality(prospect, ManagerPlayerNationality.GetRandomNationInRegion(region));
+
+            return prospect;
+        }
+
+        // Expiry/refresh (backlog item, floated 2026-08-10 session 9 - Thomas: "I feel
+        // like it should expire, or maybe they get snatched by other clubs if you're
+        // too slow"). Went with age-out-and-replace over fake AI-club poaching, per the
+        // reasoning already recorded when this was floated: poaching would mean
+        // inventing an AI-vs-AI transfer economy from scratch just for this one screen,
+        // when this whole system already has zero AI-vs-AI transfer activity by design.
+        // ExpiryAge (22) is 3 years past MaxProspectAge (19) - long enough that a
+        // prospect genuinely had multiple real chances to be scouted/signed before
+        // aging out, not a hair-trigger churn. Called alongside the existing per-season
+        // aging tick (see ManagerPrototypeController.AgeAndReloadFixturesForNewSeason)
+        // rather than a new hook - reuses the exact cadence Thomas's own phrasing
+        // ("expire") implies: a season-boundary event, not a per-matchday one.
+        private const int ExpiryAge = 22;
+
+        public void AgeAndExpireProspects(string region, AgentSquadGenerator generator)
+        {
+            if (!youthPoolByRegion.TryGetValue(region, out List<PlayerAgent> pool))
+            {
+                return;
+            }
+
+            for (int i = 0; i < pool.Count; i++)
+            {
+                PlayerAgent prospect = pool[i];
+                prospect.Age += 1;
+
+                if (prospect.Age <= ExpiryAge)
+                {
+                    continue;
+                }
+
+                // Clears any scouting knowledge/in-flight assignment on the expiring
+                // prospect - both are keyed by PlayerAgent reference (see scoutedPlayers/
+                // assignmentResolveMatchday above), and the replacement is a genuinely
+                // new, unscouted PlayerAgent instance, not this one with fields reset.
+                scoutedPlayers.Remove(prospect);
+                assignmentResolveMatchday.Remove(prospect);
+
+                PlayerPosition position = ProspectPositionCycle[i % ProspectPositionCycle.Length];
+                pool[i] = GenerateProspect(region, position, generator);
+            }
         }
 
         public List<string> GetPoolRegions()

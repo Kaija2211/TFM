@@ -29,6 +29,68 @@ namespace Manager
 
         private List<PlayerAgent> academyPool;
 
+        // Focus stats (backlog item floated session 9, shipped session 10) - pick up to
+        // 3 attributes per prospect to double their growth rate (see
+        // ManagerPlayerDevelopment.ApplySeasonProgression's focusAttributes parameter).
+        // Keyed by PlayerAgent reference, same "new Manager-only per-player state lives
+        // alongside the system that owns it" pattern as everywhere else in this file -
+        // not persisted through save/load (same already-precedented scope limit as the
+        // OVR delta badge: a fresh "nothing picked yet" state after loading a career is
+        // an acceptable, low-stakes gap here, not worth a new save DTO field for).
+        private const int MaxFocusAttributes = 3;
+        private readonly Dictionary<PlayerAgent, List<string>> focusAttributesByProspect = new();
+
+        public IReadOnlyList<string> GetFocusAttributes(PlayerAgent prospect)
+        {
+            return focusAttributesByProspect.TryGetValue(prospect, out List<string> focus)
+                ? focus
+                : (IReadOnlyList<string>)System.Array.Empty<string>();
+        }
+
+        // Silently no-ops once 3 are already picked, rather than evicting the oldest
+        // choice to make room - an explicit deselect-then-reselect is a clearer,
+        // more deliberate action for the player than a picker that quietly bumps a
+        // prior choice they didn't ask to remove.
+        public void ToggleFocusAttribute(PlayerAgent prospect, string attributeName)
+        {
+            if (!focusAttributesByProspect.TryGetValue(prospect, out List<string> focus))
+            {
+                focus = new List<string>();
+                focusAttributesByProspect[prospect] = focus;
+            }
+
+            if (focus.Contains(attributeName))
+            {
+                focus.Remove(attributeName);
+            }
+            else if (focus.Count < MaxFocusAttributes)
+            {
+                focus.Add(attributeName);
+            }
+        }
+
+        // Restricted to the attributes ManagerPlayerDevelopment's own growth pool
+        // actually touches (see GrowOutfieldAttributes/GrowGoalkeeperAttributes) -
+        // Leadership/FreeKicks/WeakFoot etc. are inert generated traits that growth
+        // ticks never move at all, so offering them as a "focus" pick would silently
+        // do nothing.
+        public static readonly string[] OutfieldFocusableAttributes =
+        {
+            "Finishing", "Passing", "Dribbling", "Crossing", "Heading", "LongShots",
+            "ThroughBalls", "Creativity", "Positioning", "Composure", "OffTheBall",
+            "Defending", "Tackling", "Marking", "Pace", "Strength", "Stamina", "Aerial"
+        };
+
+        public static readonly string[] GoalkeeperFocusableAttributes =
+        {
+            "Goalkeeping", "Reflexes", "Positioning", "Composure", "Passing"
+        };
+
+        public static string[] GetFocusableAttributes(PlayerPosition position)
+        {
+            return position == PlayerPosition.GK ? GoalkeeperFocusableAttributes : OutfieldFocusableAttributes;
+        }
+
         public List<PlayerAgent> GetOrCreateAcademyPool(AgentSquadGenerator generator, float attackStrength, float defenceStrength)
         {
             if (academyPool != null)

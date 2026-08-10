@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using Sim;
 
@@ -126,6 +127,20 @@ namespace Manager
         {
             int before = seasonStartDisplayRating.TryGetValue(player, out int b) ? b : GetDisplayRating(player.GetOverallRating());
             lastSeasonOverallDelta[player] = GetDisplayRating(player.GetOverallRating()) - before;
+        }
+
+        // Live in-season delta (Thomas: "a visual next to their OVR delta badge...
+        // in real time" - the mid-season progress gap called out in HANDOFF). Unlike
+        // GetLastSeasonOverallDelta (frozen at whatever it read at the last rollover,
+        // i.e. stale for the entire following season), this reads straight off the
+        // same seasonStartDisplayRating snapshot FinalizeSeasonDelta uses, computed
+        // fresh on every call instead of cached - so it climbs as matchday growth
+        // ticks land, and drops back to 0 the instant SnapshotSeasonStart re-baselines
+        // for the new season (Finalize then Snapshot run back-to-back at rollover).
+        public static int GetCurrentSeasonOverallDelta(PlayerAgent player)
+        {
+            int before = seasonStartDisplayRating.TryGetValue(player, out int b) ? b : GetDisplayRating(player.GetOverallRating());
+            return GetDisplayRating(player.GetOverallRating()) - before;
         }
 
         // Growth/decline only - NOT erosion. Erosion (ApplySeasonEndErosion below) stays
@@ -263,7 +278,12 @@ namespace Manager
         // a real per-player value for the managed squad and a flat assumed value for
         // everyone else (AI clubs' first team vs. uncalled reserves), rather than this
         // method needing to know which kind of player it's looking at.
-        public static void ApplySeasonProgression(PlayerAgent player, float playingTimeFactor)
+        // focusAttributes (backlog item, session 10) - up to 3 attribute names (see
+        // ManagerAcademy.GetFocusableAttributes) that grow at double rate this season.
+        // Optional and defaulted to null so every non-academy caller (AI first team,
+        // uncalled reserves, unsigned scouting youth) is completely unaffected - only
+        // ManagerAcademy's own prospects ever have a real focus set to pass in.
+        public static void ApplySeasonProgression(PlayerAgent player, float playingTimeFactor, IReadOnlyCollection<string> focusAttributes = null)
         {
             playingTimeFactor = Mathf.Clamp01(playingTimeFactor);
 
@@ -301,8 +321,8 @@ namespace Manager
                 float seasonsRemainingToPeak = Mathf.Max(1f, GetPeakDevelopmentAge(player) - player.Age + 1f);
                 float growth = (headroom / seasonsRemainingToPeak) * (0.7f + playingTimeFactor * 0.3f);
 
-                if (isGoalkeeper) GrowGoalkeeperAttributes(player, growth);
-                else GrowOutfieldAttributes(player, growth);
+                if (isGoalkeeper) GrowGoalkeeperAttributes(player, growth, focusAttributes);
+                else GrowOutfieldAttributes(player, growth, focusAttributes);
             }
             else if (veteranFactor > 0f)
             {
@@ -359,30 +379,41 @@ namespace Manager
         // weighted-average math absorbed nearly all of it. Confirmed live: a tracked
         // 18-year-old only gained +0.8 Overall over 7 simulated seasons with the
         // diluted version; this version is the fix.
-        private static void GrowOutfieldAttributes(PlayerAgent player, float amount)
+        // focusAttributes doubles the per-attribute amount for whichever names are in
+        // the set (see Focused below) - optional and null for every caller except
+        // ApplySeasonProgression's academy path, so ApplyMatchdayProgression/
+        // ApplyMatchFormBonus (the managed team's own growth ticks) are completely
+        // unaffected by this parameter's addition.
+        private static void GrowOutfieldAttributes(PlayerAgent player, float amount, IReadOnlyCollection<string> focusAttributes = null)
         {
-            player.Finishing += amount;
-            player.Passing += amount;
-            player.Dribbling += amount;
-            player.Crossing += amount;
-            player.Heading += amount;
-            player.LongShots += amount;
-            player.ThroughBalls += amount;
-            player.Creativity += amount;
-            player.Positioning += amount;
-            player.Composure += amount;
-            player.OffTheBall += amount;
-            player.Defending += amount;
-            player.Tackling += amount;
-            player.Marking += amount;
+            player.Finishing += Focused(amount, "Finishing", focusAttributes);
+            player.Passing += Focused(amount, "Passing", focusAttributes);
+            player.Dribbling += Focused(amount, "Dribbling", focusAttributes);
+            player.Crossing += Focused(amount, "Crossing", focusAttributes);
+            player.Heading += Focused(amount, "Heading", focusAttributes);
+            player.LongShots += Focused(amount, "LongShots", focusAttributes);
+            player.ThroughBalls += Focused(amount, "ThroughBalls", focusAttributes);
+            player.Creativity += Focused(amount, "Creativity", focusAttributes);
+            player.Positioning += Focused(amount, "Positioning", focusAttributes);
+            player.Composure += Focused(amount, "Composure", focusAttributes);
+            player.OffTheBall += Focused(amount, "OffTheBall", focusAttributes);
+            player.Defending += Focused(amount, "Defending", focusAttributes);
+            player.Tackling += Focused(amount, "Tackling", focusAttributes);
+            player.Marking += Focused(amount, "Marking", focusAttributes);
 
             // Physical attributes develop more slowly than technical/mental as a young
             // player matures - the body was already closer to its ceiling than the
-            // footballing skillset was.
-            player.Pace += amount * 0.5f;
-            player.Strength += amount * 0.6f;
-            player.Stamina += amount * 0.5f;
-            player.Aerial += amount * 0.5f;
+            // footballing skillset was. Focus doubling still applies on top of that
+            // reduced base rate, not the full unreduced amount.
+            player.Pace += Focused(amount * 0.5f, "Pace", focusAttributes);
+            player.Strength += Focused(amount * 0.6f, "Strength", focusAttributes);
+            player.Stamina += Focused(amount * 0.5f, "Stamina", focusAttributes);
+            player.Aerial += Focused(amount * 0.5f, "Aerial", focusAttributes);
+        }
+
+        private static float Focused(float baseAmount, string attributeName, IReadOnlyCollection<string> focusAttributes)
+        {
+            return focusAttributes != null && focusAttributes.Contains(attributeName) ? baseAmount * 2f : baseAmount;
         }
 
         private static void DeclineOutfieldAttributes(PlayerAgent player, float amount, float veteranFactor)
@@ -408,13 +439,13 @@ namespace Manager
             player.Positioning += amount * 0.1f;
         }
 
-        private static void GrowGoalkeeperAttributes(PlayerAgent player, float amount)
+        private static void GrowGoalkeeperAttributes(PlayerAgent player, float amount, IReadOnlyCollection<string> focusAttributes = null)
         {
-            player.Goalkeeping += amount * 1.4f;
-            player.Reflexes += amount * 1.3f;
-            player.Positioning += amount;
-            player.Composure += amount;
-            player.Passing += amount * 0.6f;
+            player.Goalkeeping += Focused(amount * 1.4f, "Goalkeeping", focusAttributes);
+            player.Reflexes += Focused(amount * 1.3f, "Reflexes", focusAttributes);
+            player.Positioning += Focused(amount, "Positioning", focusAttributes);
+            player.Composure += Focused(amount, "Composure", focusAttributes);
+            player.Passing += Focused(amount * 0.6f, "Passing", focusAttributes);
         }
 
         private static void DeclineGoalkeeperAttributes(PlayerAgent player, float amount, float veteranFactor)

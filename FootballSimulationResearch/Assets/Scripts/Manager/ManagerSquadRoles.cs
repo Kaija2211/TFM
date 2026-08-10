@@ -94,19 +94,26 @@ namespace Manager
         // matches) - Stamina already owns the in-match fatigue side via
         // AgentMatchSimulator.GetFatigueMultiplier, so this doesn't duplicate that, it
         // extends the same idea across matchdays instead of just within one match.
-        public void ApplyPostMatchCondition(PlayerAgent player, bool played, int age, float stamina)
+        // minutesPlayed (0-90) rather than a binary played flag (session 10 fix -
+        // Thomas: "what if you bench them, but still sub them on?"). The old bool
+        // version judged everyone by final Starting XI membership only, so a substitute
+        // brought on for the final 10 minutes took the exact same fatigue hit as a
+        // 90-minute starter, while a starter subbed off after 70 minutes got treated as
+        // if they'd never played at all (full rest-day recovery, zero fatigue) - the
+        // same class of bug as the in-match GetFatigueMultiplier fix from session 9,
+        // just in this separate matchday-to-matchday Condition tracker instead of the
+        // live in-match one. minutesFraction blends linearly between the two existing
+        // extremes (0 minutes = old "false" branch exactly, 90 minutes = old "true"
+        // branch exactly), so this is a strict generalization, not a rebalance.
+        public void ApplyPostMatchCondition(PlayerAgent player, float minutesPlayed, int age, float stamina)
         {
             float youthRecoveryFactor = Mathf.Clamp01((28f - age) / 12f);
             float recovery = 8f + youthRecoveryFactor * 6f;
 
-            float delta = recovery;
-
-            if (played)
-            {
-                float staminaFactor = Mathf.Clamp01((100f - stamina) / 100f);
-                float fatigue = 12f + staminaFactor * 13f;
-                delta -= fatigue;
-            }
+            float minutesFraction = Mathf.Clamp01(minutesPlayed / 90f);
+            float staminaFactor = Mathf.Clamp01((100f - stamina) / 100f);
+            float fullMatchFatigue = 12f + staminaFactor * 13f;
+            float delta = recovery - fullMatchFatigue * minutesFraction;
 
             condition[player] = Mathf.Clamp(GetCondition(player) + delta, 0f, 100f);
         }
