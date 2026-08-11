@@ -23,6 +23,13 @@ namespace Manager
 
         private bool isDraggable;
         private bool isDropTarget;
+        // Session 14 (playtest backlog: "bench-to-pitch drag works, pitch-to-bench
+        // doesn't") - isDropTarget alone used to double as "this is a pin" (only pins
+        // were ever drop targets), which OnDrop's branch relied on. Now that bench
+        // cards are drop targets too (so a starter can be dragged onto them), that
+        // conflation broke - isPinCard is the explicit identity flag isDropTarget used
+        // to stand in for.
+        private bool isPinCard;
         private Action<PlayerAgent> onClicked;
         private Action<PlayerAgent, PlayerAgent> onBenchPlayerDroppedOnPin;
         private Action<PlayerAgent, PlayerAgent> onPinSwapped;
@@ -38,7 +45,8 @@ namespace Manager
             bool isDropTarget,
             Action<PlayerAgent> onClicked,
             Action<PlayerAgent, PlayerAgent> onBenchPlayerDroppedOnPin,
-            Action<PlayerAgent, PlayerAgent> onPinSwapped = null)
+            Action<PlayerAgent, PlayerAgent> onPinSwapped = null,
+            bool isPinCard = false)
         {
             Player = player;
             this.isDraggable = isDraggable;
@@ -46,6 +54,7 @@ namespace Manager
             this.onClicked = onClicked;
             this.onBenchPlayerDroppedOnPin = onBenchPlayerDroppedOnPin;
             this.onPinSwapped = onPinSwapped;
+            this.isPinCard = isPinCard;
 
             TryGetComponent(out background);
             rootCanvas = GetComponentInParent<Canvas>()?.rootCanvas;
@@ -150,14 +159,21 @@ namespace Manager
             // never went away after a successful drop.
             draggedCard.EndDragVisual();
 
-            // A pin dragged onto another pin (both isDropTarget) swaps their positions -
-            // both stay in the starting XI. A bench card dragged onto a pin (isDropTarget
-            // false, since bench cards aren't drop targets) substitutes instead.
-            if (draggedCard.isDropTarget)
+            // A pin dragged onto another pin swaps their positions - both stay in the
+            // starting XI. A pin dragged onto a bench card, or a bench card dragged onto
+            // a pin, is the same substitution either way - onBenchPlayerDroppedOnPin
+            // always wants (benchPlayer, pinPlayer) regardless of which one the manager
+            // actually grabbed. A bench card dragged onto another bench card has no
+            // meaningful action (bench reordering isn't a feature) - ignored.
+            if (draggedCard.isPinCard && isPinCard)
             {
                 onPinSwapped?.Invoke(draggedCard.Player, Player);
             }
-            else
+            else if (draggedCard.isPinCard && !isPinCard)
+            {
+                onBenchPlayerDroppedOnPin?.Invoke(Player, draggedCard.Player);
+            }
+            else if (!draggedCard.isPinCard && isPinCard)
             {
                 onBenchPlayerDroppedOnPin?.Invoke(draggedCard.Player, Player);
             }

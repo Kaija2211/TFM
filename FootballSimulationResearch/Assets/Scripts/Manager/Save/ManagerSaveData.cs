@@ -204,7 +204,17 @@ namespace Manager.Save
     // PlayerPosition/Formation living in Sim rather than Manager). Deliberately just
     // Title/Body strings, not a live PlayerAgent reference - see InboxMessage's own
     // comment in ManagerInbox.cs for why a message is a baked snapshot, not a live view.
-    public enum InboxMessageType { ScoutingReport, BidAccepted, BidDeclined }
+    // Session 14 additions (potentialemails.txt Tier 1 batch + playtest-requested
+    // injury/recovery messages + retirement announcement) - all purely a display tag
+    // today, same as the original three (see RefreshInboxUI/BuildInboxMessageRow in
+    // ManagerPrototypeController, which don't branch on Type at all yet).
+    public enum InboxMessageType
+    {
+        ScoutingReport, BidAccepted, BidDeclined,
+        WelcomeCareer, SeasonExpectations, RecruitmentTeaser,
+        PostMatchReaction, FormStreak, MidSeasonReview, EndOfSeason,
+        LowStamina, Injury, Recovery, Retirement
+    }
 
     [Serializable]
     public class InboxMessageSaveData

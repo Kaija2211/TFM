@@ -270,6 +270,28 @@ namespace Manager
         private RectTransform tacticsBoardPitchContainer;
         private RectTransform tacticsBoardBenchContent;
         private Button tacticsBoardFormationButton;
+        // Playtest backlog (session 14) - hidden mid-match (see RefreshTacticsBoardUI),
+        // since replacing the whole XI wholesale mid-game reads as a very different
+        // action from a considered pre-match pick and isn't something a real manager
+        // would reach for once a match is underway.
+        private Button autoPickButton;
+
+        // Per-match tactical override (new feature suggestion, session 14) - Thomas:
+        // formation/lineup changes that apply to just the next fixture without touching
+        // the persistent Tactics default. Additive/opt-in, not a default-behavior
+        // change - a manager who never touches this button gets the exact same
+        // "edits are the new default" behavior the Tactics Board has always had.
+        // Mentality already worked this way (selectedMentality resets to Balanced
+        // before every kickoff, see OnNextMatchdayClicked/OnSimulateSeasonClicked), so
+        // this closes the gap for formation/lineup specifically. Snapshot is
+        // (Formation, StartingEleven) at the moment the toggle is armed - restored via
+        // AgentTeam.ChangeFormation right after that one fixture resolves (see
+        // ResolveNextMatchOnlyOverride, called from the same two matchday-advance sites
+        // as ResolveMatchdayInboxTicks).
+        private Button nextMatchOnlyButton;
+        private bool nextMatchOnlyOverrideActive;
+        private Formation nextMatchOverrideDefaultFormation;
+        private List<PlayerAgent> nextMatchOverrideDefaultStartingEleven;
         private GameObject tacticsBoardFormationDropdown;
 
         // Injury block warning (backlog item, session 10) - the icon alone (session 9)
@@ -1601,9 +1623,38 @@ namespace Manager
                 Debug.LogWarning($"ManagerPrototypeController: no fixtures found for '{managedTeamName}' in {seasonFile.name}.");
             }
 
+            SendCareerStartInboxMessages();
+
             if (teamSelectPanel != null) teamSelectPanel.SetActive(false);
 
             ShowSeasonHub();
+        }
+
+        // Tier 1 potentialemails.txt batch (session 14) - the three career-start
+        // flavour messages (#1 welcome, #2 pre-season expectations, #30 recruitment
+        // teaser) land together the moment a brand new career actually begins, not on
+        // every load - OnConfirmTeamClicked only ever runs once per career, unlike
+        // ShowSeasonHub which also fires on load/return-to-hub. All three are pure
+        // flavour text (no live data to bake in beyond the club name), so there's no
+        // harm sending them at once - Thomas can read them whenever he opens the Inbox.
+        private void SendCareerStartInboxMessages()
+        {
+            inbox.Add(InboxMessageType.WelcomeCareer, $"Welcome to {managedTeamName}",
+                $"Welcome to {managedTeamName}. The board is pleased to confirm your appointment ahead of the new season. " +
+                "Our expectations are simple: establish a clear identity, manage the squad responsibly, and ensure the club remains competitive over the full campaign. " +
+                "You'll have immediate access to the squad screen, upcoming fixtures, tactical setup, and matchday controls. Good luck - the season starts now.",
+                0);
+
+            inbox.Add(InboxMessageType.SeasonExpectations, "Season Expectations",
+                "Before the season begins, the board wants to outline its expectations. " +
+                "We'll primarily judge performance through league position, consistency of results, and squad development. Individual defeats won't define your future, but long poor runs of form will naturally increase pressure. " +
+                "We expect tactical decisions that reflect the strength of the squad and the quality of upcoming opposition.",
+                0);
+
+            inbox.Add(InboxMessageType.RecruitmentTeaser, "Player Recruitment Report Available",
+                "The recruitment department has begun compiling reports on potential squad improvements. " +
+                "This system isn't currently active, but future versions could let you review targets, compare player attributes, and strengthen weak areas of the squad.",
+                0);
         }
 
         private void TrainStatisticalModel()
@@ -2112,6 +2163,17 @@ namespace Manager
             };
 
             careerHistory.AddRecord(lastSeasonRecord);
+
+            // Tier 1 potentialemails.txt batch (#28/#29, session 14) - a top-half finish
+            // reads as season success, bottom-half as disappointment. Simple top-half
+            // cutoff rather than anything tied to pre-season expectations (there's no
+            // real "expected finish" concept in this prototype to compare against).
+            bool isTopHalf = finalPosition <= Mathf.Max(1, finalTable.Count / 2);
+            inbox.Add(InboxMessageType.EndOfSeason, "Season Review",
+                isTopHalf
+                    ? $"The season has concluded, and the board is pleased with the progress made. Finishing {finalPosition}{GetOrdinalSuffix(finalPosition)} reflects good management, tactical decision-making, and effective squad use. This has been a strong foundation to build on."
+                    : $"The season has concluded, and results have fallen short of expectations. A {finalPosition}{GetOrdinalSuffix(finalPosition)}-place finish had positive moments, but not enough consistency across the campaign. The board will review the situation carefully before deciding the next steps.",
+                currentFixtureIndex);
         }
 
         private void BuildEndOfSeasonChrome()
@@ -2307,6 +2369,25 @@ namespace Manager
             // club new to this season's fixture file correctly showed blank, making the
             // mismatch obvious side-by-side.
             recentFormByTeamId.Clear();
+
+            // Season-scoped Inbox-tick state (session 14) - same reasoning as
+            // recentFormByTeamId just above: everything here is either "once per
+            // season" (mid-season review) or keyed off a streak/cooldown that no longer
+            // means anything once the fixture list and matchday count reset to 0.
+            // injuredPlayersTracked specifically mirrors ManagerSquadRoles.ResetForNewSeason
+            // clearing injuryReturnMatchday for every squad's roles right below.
+            midSeasonReviewSentForCurrentSeason = false;
+            lastPostMatchReactionMatchday = -PostMatchReactionMinGapMatchdays;
+            lastLowStaminaWarningMatchday = -LowStaminaWarningCooldownMatchdays;
+            poorRunMessageSentForCurrentStreak = false;
+            strongRunMessageSentForCurrentStreak = false;
+            injuredPlayersTracked.Clear();
+
+            // A still-armed next-match-only override has nothing left to revert to once
+            // the fixture list itself has rolled over - dropped rather than carried into
+            // a season it was never meant for.
+            nextMatchOnlyOverrideActive = false;
+            nextMatchOverrideDefaultStartingEleven = null;
 
             currentFixtureIndex = 0;
             simulatedMatchdays.Clear();
@@ -2534,6 +2615,24 @@ namespace Manager
                 return;
             }
 
+            // Retirement announcement (session 14, Thomas's own suggestion while this
+            // batch was being wired) - managed team only, same scope limit as every
+            // other Inbox trigger; an AI club's retirements are invisible replacements,
+            // nothing the manager would ever be told about. Sent here at season
+            // rollover, before currentFixtureIndex resets to 0 for the new season (see
+            // OnStartNewSeasonClicked), so matchdayReceived reads as 0 like the other
+            // new-season messages (Welcome/Season Expectations use the same convention).
+            if (teamName == managedTeamName)
+            {
+                foreach (PlayerAgent retiree in retirees)
+                {
+                    inbox.Add(InboxMessageType.Retirement, $"{retiree.Name} Retires",
+                        $"{retiree.Name} has announced their retirement from professional football at age {retiree.Age}, bringing the curtain down on their playing career. " +
+                        "Everyone at the club thanks them for their contribution and wishes them well for the future.",
+                        0);
+                }
+            }
+
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
 
             foreach (PlayerAgent retiree in retirees)
@@ -2735,6 +2834,20 @@ namespace Manager
             // otherwise a loaded career could show pre-save Form strips that no longer
             // correspond to anything in the restored fixture list.
             recentFormByTeamId.Clear();
+
+            // Same scope limit as recentFormByTeamId just above - none of this survives
+            // save/load either, so it's reset here rather than left holding stale
+            // pre-load state (a mid-season-review flag from a different season, an
+            // injured-player tracked set for a squad about to be rebuilt fresh below).
+            midSeasonReviewSentForCurrentSeason = false;
+            lastPostMatchReactionMatchday = -PostMatchReactionMinGapMatchdays;
+            lastLowStaminaWarningMatchday = -LowStaminaWarningCooldownMatchdays;
+            poorRunMessageSentForCurrentStreak = false;
+            strongRunMessageSentForCurrentStreak = false;
+            injuredPlayersTracked.Clear();
+            nextMatchOnlyOverrideActive = false;
+            nextMatchOverrideDefaultStartingEleven = null;
+
             foreach (LeagueTableEntrySaveData entry in data.TableEntries)
             {
                 playableTable.SetEntry(entry.TeamId, entry.Played, entry.Wins, entry.Draws, entry.Losses, entry.GoalsFor, entry.GoalsAgainst, entry.Points);
@@ -5295,10 +5408,19 @@ namespace Manager
             // Built regardless of what AI clubs do (Thomas's call): it doesn't raise the
             // team's strength ceiling, a manager could always assemble this same XI by
             // hand - this just automates the clicking.
-            Button autoPickButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "AUTO-PICK XI", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            autoPickButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "AUTO-PICK XI", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(autoPickButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-764f, -27f), new Vector2(170f, 36f));
             autoPickButton.onClick.AddListener(OnAutoPickBestXIClicked);
             autoPickButton.onClick.AddListener(ManagerAudio.PlayClick);
+
+            // Per-match tactical override toggle (new feature suggestion, session 14) -
+            // see the field-level comment above for the full design. Pre-match only
+            // (hidden mid-match, same as Auto-Pick - see RefreshTacticsBoardUI), since
+            // "revert after this match" has no meaning once a match is already live.
+            nextMatchOnlyButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "NEXT MATCH ONLY", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(nextMatchOnlyButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-954f, -27f), new Vector2(180f, 36f));
+            nextMatchOnlyButton.onClick.AddListener(OnNextMatchOnlyToggleClicked);
+            nextMatchOnlyButton.onClick.AddListener(ManagerAudio.PlayClick);
 
             // Injury block warning (session 10) - centered under the header row, empty
             // by default (BuildLabel with empty text still reserves the space so it pops
@@ -6141,6 +6263,20 @@ namespace Manager
 
             CloseTacticsBoardFormationDropdown();
 
+            // Playtest backlog (session 14, Thomas: "Auto-Pick shouldn't be offered
+            // inside the mid-match Make Changes squad screen") - the button itself is
+            // shared chrome (built once, this same panel is reused for both the pre-
+            // match Tactics Board and the mid-match Make Changes flow), so it's toggled
+            // here on every refresh rather than at build time.
+            if (autoPickButton != null) autoPickButton.gameObject.SetActive(!tacticsBoardOpenedMidMatch);
+
+            if (nextMatchOnlyButton != null)
+            {
+                nextMatchOnlyButton.gameObject.SetActive(!tacticsBoardOpenedMidMatch);
+                ManagerUITheme.NormalizeButtonLabel(nextMatchOnlyButton, nextMatchOnlyOverrideActive ? "NEXT MATCH ONLY: ON" : "NEXT MATCH ONLY", ManagerUITheme.TextBody, 13);
+                HighlightSelectedMentalityButton(nextMatchOnlyButton, nextMatchOnlyOverrideActive);
+            }
+
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
 
             // Only clear pins, not the pitch markings built once in BuildPitchMarkings -
@@ -6180,9 +6316,37 @@ namespace Manager
                 BuildTacticsBoardPin(player, slotPosition, pins[i]);
             }
 
+            // Playtest backlog (session 14) - Thomas: separate genuine reserves from an
+            // "unavailable" (injured) group, so an injured player reads as clearly
+            // off-limits rather than just blocked-on-drag (see OnBenchPlayerDroppedOnPin's
+            // injury check, which already refuses the drop - this makes the refusal
+            // visible before the manager even tries). Available players keep the plain
+            // bench list exactly as before; injured players are pushed below a caption
+            // divider, still built by the same BuildTacticsBoardBenchCard (own injury
+            // cross badge included) so they're still visible and still draggable-away-
+            // from (a manager might want to shuffle who's next in line), just not mixed
+            // in with who's actually pickable.
+            ManagerSquadRoles benchRoles = GetOrCreateSquadRoles(managedTeamName);
+            List<PlayerAgent> availableBench = new List<PlayerAgent>();
+            List<PlayerAgent> unavailableBench = new List<PlayerAgent>();
             foreach (PlayerAgent player in team.Bench)
             {
+                if (benchRoles.IsInjured(player, currentFixtureIndex)) unavailableBench.Add(player);
+                else availableBench.Add(player);
+            }
+
+            foreach (PlayerAgent player in availableBench)
+            {
                 BuildTacticsBoardBenchCard(player);
+            }
+
+            if (unavailableBench.Count > 0)
+            {
+                BuildTacticsBoardBenchSectionCaption($"UNAVAILABLE ({unavailableBench.Count})");
+                foreach (PlayerAgent player in unavailableBench)
+                {
+                    BuildTacticsBoardBenchCard(player);
+                }
             }
 
             // Pins/bench cards are destroyed and rebuilt fresh every time this runs
@@ -6245,20 +6409,27 @@ namespace Manager
             // match's kickoff. Without this gate, players read as still gassed from the
             // *previous* match on the Tactics Board right up until the next one starts
             // (confirmed live - reported as "not sure if this is by design", it wasn't).
+            // Playtest backlog (session 14) - Thomas's own idea: "the pin's green border
+            // smoothly shifts warmer (green->yellow->red) as Condition drops, not a
+            // separate number." Previously this only reflected live in-match fatigue
+            // (GetFatigueMultiplier) and was hardcoded flat green outside a live match -
+            // the season-long Condition system (ManagerSquadRoles, session 7/13
+            // rebalance) had no visual presence on the board at all pre-match. Now blends
+            // both signals: the persistent Condition is always the base (so a fatigued
+            // squad reads as such before a ball's even kicked), and during a live match
+            // the worse of the two (persistent vs in-match fatigue) wins, so the border
+            // still visibly warms up as a match wears on, same as before.
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            float seasonCondition = roles.GetCondition(player);
             float condition = isMatchCurrentlyLive
-                ? matchSimulator.GetFatigueMultiplier(player, currentMatchMinute)
-                : 1f;
-            Color conditionColor = condition >= 0.95f
-                ? ManagerUITheme.Accent
-                : condition >= 0.85f
-                    ? ManagerUITheme.Warning
-                    : ManagerUITheme.Danger;
+                ? Mathf.Min(seasonCondition, matchSimulator.GetFatigueMultiplier(player, currentMatchMinute) * 100f)
+                : seasonCondition;
+            Color conditionColor = ManagerUITheme.ConditionGradientColor(condition);
 
             // Injury cross (session 9) - the Tactics screen previously had zero injury
             // awareness at all (see feedback in HANDOFF), so a manager could plan a
             // lineup around a player who's silently benched at kickoff. Doesn't block
             // selection yet, just makes it visible where the lineup is actually built.
-            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
             bool isInjured = roles.IsInjured(player, currentFixtureIndex);
 
             GameObject pinObj = ManagerUITheme.BuildPitchPinVisual(
@@ -6278,7 +6449,20 @@ namespace Manager
             TacticsBoardPlayerCard card = pinObj.AddComponent<TacticsBoardPlayerCard>();
             // isDraggable: true now (was false) - lets a pin be dragged onto another
             // pin to swap their positions, not just a bench card dragged onto a pin.
-            card.Configure(player, isDraggable: true, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin, OnPinPlayersSwapped);
+            card.Configure(player, isDraggable: true, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin, OnPinPlayersSwapped, isPinCard: true);
+        }
+
+        // Playtest backlog (session 14) - divider between the available bench and the
+        // unavailable (injured) group below it. Same plain LayoutElement-label approach
+        // every other inline scroll-list caption in this file uses (e.g. Inbox's empty-
+        // state row) - not a full card, just a fixed-height text row the VerticalLayoutGroup
+        // slots in like any other child.
+        private void BuildTacticsBoardBenchSectionCaption(string text)
+        {
+            GameObject captionObj = new GameObject("BenchSectionCaption", typeof(RectTransform), typeof(LayoutElement));
+            captionObj.transform.SetParent(tacticsBoardBenchContent, false);
+            captionObj.GetComponent<LayoutElement>().preferredHeight = 24f;
+            ManagerUITheme.BuildLabel(captionObj.transform, text, 13, ManagerUITheme.Danger, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
         }
 
         private void BuildTacticsBoardBenchCard(PlayerAgent player)
@@ -6297,9 +6481,27 @@ namespace Manager
             RectTransform nameRect = nameObj.GetComponent<RectTransform>();
             nameRect.anchorMin = new Vector2(0f, 0.5f);
             nameRect.anchorMax = new Vector2(1f, 1f);
-            nameRect.offsetMin = new Vector2(18f, 0f);
+            // Extra left inset (was 18f) makes room for the injury cross gutter below,
+            // same fixed-gutter approach SquadListView.BuildInjuryCrossIcon's own caller
+            // already uses - reserved whether or not this particular card is injured, so
+            // the name doesn't visibly shift card-to-card.
+            nameRect.offsetMin = new Vector2(40f, 0f);
             nameRect.offsetMax = new Vector2(-18f, -2f);
             ManagerUITheme.BuildLabel(nameObj.transform, player.Name, 17, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            // Injury cross badge (playtest backlog, session 14) - Thomas: prevents
+            // accidentally dragging an injured player onto the pitch. The pin and Squad
+            // list already show this (session 9); the Tactics Board's own bench card was
+            // the one place left without it, which mattered most for exactly the drag
+            // gesture this icon is meant to warn against.
+            bool benchCardIsInjured = GetOrCreateSquadRoles(managedTeamName).IsInjured(player, currentFixtureIndex);
+            GameObject benchInjuryIcon = ManagerUITheme.BuildInjuryCrossIcon(cardObj.transform, 16f);
+            RectTransform benchInjuryIconRect = benchInjuryIcon.GetComponent<RectTransform>();
+            benchInjuryIconRect.anchorMin = new Vector2(0f, 0.5f);
+            benchInjuryIconRect.anchorMax = new Vector2(0f, 0.5f);
+            benchInjuryIconRect.pivot = new Vector2(0f, 0.5f);
+            benchInjuryIconRect.anchoredPosition = new Vector2(14f, 0f);
+            benchInjuryIcon.SetActive(benchCardIsInjured);
 
             GameObject ovrObj = new GameObject("OVR", typeof(RectTransform));
             ovrObj.transform.SetParent(cardObj.transform, false);
@@ -6320,7 +6522,11 @@ namespace Manager
             ManagerUITheme.BuildLabel(posObj.transform, player.PrimaryPosition.ToString(), 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
 
             TacticsBoardPlayerCard card = cardObj.AddComponent<TacticsBoardPlayerCard>();
-            card.Configure(player, isDraggable: true, isDropTarget: false, OnTacticsBoardPlayerTapped, null);
+            // isDropTarget: true now (was false), and OnBenchPlayerDroppedOnPin wired
+            // (was null) - playtest backlog (session 14): dragging a starter pin onto a
+            // bench card now substitutes them, same as the existing bench-onto-pin
+            // direction (see TacticsBoardPlayerCard.OnDrop's isPinCard branch).
+            card.Configure(player, isDraggable: true, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin, isPinCard: false);
         }
 
         private void OnTacticsBoardPlayerTapped(PlayerAgent player)
@@ -6388,6 +6594,65 @@ namespace Manager
             }
 
             RefreshTacticsBoardUI();
+        }
+
+        // Per-match tactical override toggle (session 14) - see the field-level comment
+        // near nextMatchOnlyButton for the full design. Arming snapshots the CURRENT
+        // formation/XI as "the default to come back to" - any edits made afterward
+        // (formation switch, drag substitutions, auto-pick) are then provisional for
+        // just the next fixture. Clicking it again before that fixture plays cancels
+        // the snapshot, keeping whatever's currently set as the permanent default -
+        // same as if the toggle had never been touched.
+        private void OnNextMatchOnlyToggleClicked()
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+
+            if (!nextMatchOnlyOverrideActive)
+            {
+                nextMatchOnlyOverrideActive = true;
+                nextMatchOverrideDefaultFormation = team.Formation;
+                nextMatchOverrideDefaultStartingEleven = new List<PlayerAgent>(team.StartingEleven);
+                ShowTacticsBoardWarning("Armed - changes from here apply to the next match only, then your usual XI returns.");
+            }
+            else
+            {
+                nextMatchOnlyOverrideActive = false;
+                nextMatchOverrideDefaultStartingEleven = null;
+                ShowTacticsBoardWarning("Cancelled - the current setup is your default again.");
+            }
+
+            RefreshTacticsBoardUI();
+        }
+
+        // Restores the snapshot taken in OnNextMatchOnlyToggleClicked, right after the
+        // one fixture it was armed for has actually been resolved - called from both
+        // places currentFixtureIndex advances (the Simulate Season loop and
+        // OnFullTimeContinueClicked), same as ResolveMatchdayInboxTicks. Defensively
+        // filters the snapshot down to players still on the squad (a departed player
+        // between arming and revert is a real, if unlikely, possibility - a transfer or
+        // retirement landing in that exact one-fixture window) and bails without
+        // touching anything if that leaves the XI short, rather than risk restoring a
+        // corrupt lineup.
+        private void ResolveNextMatchOnlyOverride()
+        {
+            if (!nextMatchOnlyOverrideActive)
+            {
+                return;
+            }
+
+            nextMatchOnlyOverrideActive = false;
+
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            List<PlayerAgent> restoredEleven = nextMatchOverrideDefaultStartingEleven?.FindAll(p => team.Players.Contains(p));
+            nextMatchOverrideDefaultStartingEleven = null;
+
+            if (restoredEleven == null || restoredEleven.Count != squadGenerator.GetStartingPositions(nextMatchOverrideDefaultFormation).Count)
+            {
+                Debug.LogWarning("ManagerPrototypeController: skipped next-match-only revert - the snapshotted XI no longer matches the current squad.");
+                return;
+            }
+
+            team.ChangeFormation(nextMatchOverrideDefaultFormation, restoredEleven);
         }
 
         // Auto-pick best XI (backlog item, session 12). Greedy slot-by-slot assignment
@@ -9161,6 +9426,8 @@ namespace Manager
                 transferNegotiation.ResolveDueTransferScoutAssignments(currentFixtureIndex, inbox, FindTeamContainingPlayer);
                 transferNegotiation.ResolveDueBids(currentFixtureIndex, finance, managedTeamName, inbox, FindTeamContainingPlayer);
                 transferNegotiation.ResolveExpiredSignatures(currentFixtureIndex, finance, managedTeamName, inbox);
+                ResolveMatchdayInboxTicks();
+                ResolveNextMatchOnlyOverride();
             }
 
             RefreshHubUI();
@@ -9229,6 +9496,220 @@ namespace Manager
 
             ApplyMatchFormBonusForManagedTeam(fixture, result);
             ApplyMatchMoraleForManagedTeam(fixture, result);
+            SendPostMatchReactionForManagedTeam(fixture, result);
+        }
+
+        // Tier 1 potentialemails.txt batch, #6-10 (session 14) - post-match reaction,
+        // gated to avoid flooding the Inbox over a 38-match season (explicitly flagged
+        // as an open decision in the session 13 handoff). A notable result (margin 3+)
+        // always gets a message immediately - that's exactly the kind of result worth
+        // reacting to on its own. An ordinary win/draw/loss only sends once the gap
+        // since the last post-match message has reached PostMatchReactionMinGapMatchdays,
+        // so routine results still surface periodically without one landing after
+        // literally every fixture.
+        private const int PostMatchReactionMinGapMatchdays = 2;
+        private int lastPostMatchReactionMatchday = -PostMatchReactionMinGapMatchdays;
+
+        private void SendPostMatchReactionForManagedTeam(OpenFootballMatch fixture, AgentMatchSimulator.AgentMatchResult result)
+        {
+            bool isManagedHome = fixture.HomeTeam == managedTeamName;
+            bool isManagedAway = fixture.AwayTeam == managedTeamName;
+
+            if (!isManagedHome && !isManagedAway)
+            {
+                return;
+            }
+
+            int managedGoals = isManagedHome ? result.HomeGoals : result.AwayGoals;
+            int opponentGoals = isManagedHome ? result.AwayGoals : result.HomeGoals;
+            int margin = managedGoals - opponentGoals;
+            string opponentName = isManagedHome ? fixture.AwayTeam : fixture.HomeTeam;
+
+            bool isNotable = Mathf.Abs(margin) >= 3;
+            bool gapElapsed = currentFixtureIndex - lastPostMatchReactionMatchday >= PostMatchReactionMinGapMatchdays;
+
+            if (!isNotable && !gapElapsed)
+            {
+                CheckFormStreakMessages();
+                return;
+            }
+
+            lastPostMatchReactionMatchday = currentFixtureIndex;
+
+            string title;
+            string body;
+
+            if (margin >= 3)
+            {
+                title = "Excellent Performance";
+                body = $"That was an excellent result against {opponentName}. The players looked confident and the scoreline will give the dressing room a real lift. Let's make sure we build on it rather than treating it as a one-off.";
+            }
+            else if (margin > 0)
+            {
+                title = "Good Result";
+                body = $"Congratulations on the result against {opponentName}. The performance has helped strengthen our position in the league table and should give the squad confidence going into the next fixture. Keep the standards high.";
+            }
+            else if (margin == 0)
+            {
+                title = "Points Shared";
+                body = $"The draw against {opponentName} leaves us with mixed feelings. There were positives in the performance, but also moments where the match could have slipped away. There is still room to improve.";
+            }
+            else if (margin > -3)
+            {
+                title = "Disappointing Result";
+                body = $"The result against {opponentName} was disappointing. Setbacks are part of a long season, but we expect a response in the next match. Consistency will be important if we are to meet our objectives.";
+            }
+            else
+            {
+                title = "Performance Concerns";
+                body = $"The defeat to {opponentName} has raised concerns. It was not simply the result, but the manner of the performance that disappointed us. We expect you to review the tactical approach, squad selection, and mentality ahead of the next fixture.";
+            }
+
+            inbox.Add(InboxMessageType.PostMatchReaction, title, body, currentFixtureIndex);
+
+            CheckFormStreakMessages();
+        }
+
+        // Tier 1 potentialemails.txt batch, #11-12 (session 14) - fires once when the
+        // managed team's recent-form strip (see recentFormByTeamId/GetRecentFormString,
+        // last 5 results) first reaches a 3-result streak, not on every single match
+        // still inside that streak - a flag per direction, reset the moment the streak
+        // breaks, keeps this to one message per streak rather than one per match.
+        private const int FormStreakLength = 3;
+        private bool poorRunMessageSentForCurrentStreak;
+        private bool strongRunMessageSentForCurrentStreak;
+
+        private void CheckFormStreakMessages()
+        {
+            int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
+            if (!recentFormByTeamId.TryGetValue(managedTeamId, out List<char> history) || history.Count < FormStreakLength)
+            {
+                return;
+            }
+
+            bool allLossesRecently = true;
+            bool allWinsRecently = true;
+            for (int i = history.Count - FormStreakLength; i < history.Count; i++)
+            {
+                if (history[i] != 'L') allLossesRecently = false;
+                if (history[i] != 'W') allWinsRecently = false;
+            }
+
+            if (allLossesRecently)
+            {
+                if (!poorRunMessageSentForCurrentStreak)
+                {
+                    poorRunMessageSentForCurrentStreak = true;
+                    inbox.Add(InboxMessageType.FormStreak, "Recent Form",
+                        "Recent results have not met expectations. The board still supports your work, but we need to see signs of improvement soon. The squad has enough quality to be more competitive than recent performances suggest.",
+                        currentFixtureIndex);
+                }
+            }
+            else
+            {
+                poorRunMessageSentForCurrentStreak = false;
+            }
+
+            if (allWinsRecently)
+            {
+                if (!strongRunMessageSentForCurrentStreak)
+                {
+                    strongRunMessageSentForCurrentStreak = true;
+                    inbox.Add(InboxMessageType.FormStreak, "Momentum Building",
+                        "The squad is starting to build momentum. Recent performances have improved confidence around the club, and the league table is beginning to reflect that. The challenge now is maintaining standards when the fixture list becomes more difficult.",
+                        currentFixtureIndex);
+                }
+            }
+            else
+            {
+                strongRunMessageSentForCurrentStreak = false;
+            }
+        }
+
+        // Remaining Tier 1 potentialemails.txt triggers that only make sense checked
+        // once per matchday tick rather than at a specific single call site - mid-season
+        // review (#27), low-stamina warning (#18), and injury recovery (playtest
+        // backlog item, paired with the injury message TryRollInjury sends directly).
+        // Called from both places currentFixtureIndex actually advances (the Simulate
+        // Season loop and OnFullTimeContinueClicked), same as every other per-matchday
+        // resolver above (ResolveDueBids etc.).
+        private bool midSeasonReviewSentForCurrentSeason;
+        private const float LowStaminaWarningThreshold = 60f;
+        private const int LowStaminaWarningCooldownMatchdays = 5;
+        private int lastLowStaminaWarningMatchday = -LowStaminaWarningCooldownMatchdays;
+        private readonly HashSet<PlayerAgent> injuredPlayersTracked = new();
+
+        private void ResolveMatchdayInboxTicks()
+        {
+            if (!squadsByTeamName.TryGetValue(managedTeamName, out AgentTeam team))
+            {
+                return;
+            }
+
+            // Mid-season review (#27) - fires once, the first matchday the season is at
+            // least half played out. Reset alongside every other season-scoped flag in
+            // OnStartNewSeasonClicked.
+            if (!midSeasonReviewSentForCurrentSeason && managedTeamFixtures.Count > 0 &&
+                currentFixtureIndex >= managedTeamFixtures.Count / 2)
+            {
+                midSeasonReviewSentForCurrentSeason = true;
+                inbox.Add(InboxMessageType.MidSeasonReview, "Mid-Season Review",
+                    "We have reached the midpoint of the season. The board has reviewed our league position, recent form, and overall squad performance. There is still time to improve, but the second half of the campaign will be important. Continue to make decisions that serve the long-term interests of the club.",
+                    currentFixtureIndex);
+            }
+
+            // Low-stamina warning (#18) - cooldown-gated so a squad that stays fatigued
+            // for a long stretch doesn't get the same warning every single matchday.
+            if (currentFixtureIndex - lastLowStaminaWarningMatchday >= LowStaminaWarningCooldownMatchdays)
+            {
+                ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+                bool anyLowStamina = false;
+                foreach (PlayerAgent player in team.Players)
+                {
+                    if (roles.GetCondition(player) < LowStaminaWarningThreshold)
+                    {
+                        anyLowStamina = true;
+                        break;
+                    }
+                }
+
+                if (anyLowStamina)
+                {
+                    lastLowStaminaWarningMatchday = currentFixtureIndex;
+                    inbox.Add(InboxMessageType.LowStamina, "Fitness Concern",
+                        "A few players are showing signs of fatigue. Heavy minutes can reduce sharpness late in matches, especially for players with lower stamina. Rotating the squad or using substitutions earlier may help avoid performance drops.",
+                        currentFixtureIndex);
+                }
+            }
+
+            // Injury recovery (playtest backlog) - diffs the tracked injured set against
+            // ManagerSquadRoles.IsInjured (a threshold check, not an event) to catch
+            // whoever's return matchday just passed.
+            if (injuredPlayersTracked.Count > 0)
+            {
+                ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+                List<PlayerAgent> recovered = null;
+
+                foreach (PlayerAgent player in injuredPlayersTracked)
+                {
+                    if (!roles.IsInjured(player, currentFixtureIndex))
+                    {
+                        recovered ??= new List<PlayerAgent>();
+                        recovered.Add(player);
+                    }
+                }
+
+                if (recovered != null)
+                {
+                    foreach (PlayerAgent player in recovered)
+                    {
+                        injuredPlayersTracked.Remove(player);
+                        inbox.Add(InboxMessageType.Recovery, $"{player.Name} Fit Again",
+                            $"{player.Name} has recovered from injury and is available for selection again.",
+                            currentFixtureIndex);
+                    }
+                }
+            }
         }
 
         // Form-based development bonus (session 9 backlog item) - has to live here,
@@ -9652,6 +10133,15 @@ namespace Manager
 
             int duration = Mathf.Clamp(Mathf.RoundToInt((UnityEngine.Random.Range(1f, 6f) + UnityEngine.Random.Range(1f, 6f)) / 2f), 1, 8);
             roles.SetInjured(player, currentFixtureIndex + duration + 1);
+            injuredPlayersTracked.Add(player);
+
+            // Playtest backlog item (session 14) - injury Inbox message. Recovery is
+            // handled separately (see ResolveMatchdayInboxTicks) since there's no single
+            // call site for "a player's return matchday just passed" - it's a threshold
+            // crossed silently by IsInjured, not a discrete event like this roll is.
+            inbox.Add(InboxMessageType.Injury, $"Injury: {player.Name}",
+                $"{player.Name} has picked up an injury and is expected to be out for approximately {duration} matchday{(duration == 1 ? "" : "s")}.",
+                currentFixtureIndex);
         }
 
         // Lets the running replay coroutine finish out its remaining minutes without
@@ -10105,6 +10595,8 @@ namespace Manager
             transferNegotiation.ResolveDueTransferScoutAssignments(currentFixtureIndex, inbox, FindTeamContainingPlayer);
             transferNegotiation.ResolveDueBids(currentFixtureIndex, finance, managedTeamName, inbox, FindTeamContainingPlayer);
             transferNegotiation.ResolveExpiredSignatures(currentFixtureIndex, finance, managedTeamName, inbox);
+            ResolveMatchdayInboxTicks();
+            ResolveNextMatchOnlyOverride();
 
             matchPaused = false;
             Time.timeScale = 1f;
