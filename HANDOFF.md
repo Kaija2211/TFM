@@ -1,51 +1,65 @@
-# Manager Mode Backlog Sweep + Live Bug Fixes — Session Handoff (2026-08-10, session 9)
+# Live Ratings, Morale, Backlog Sweep + Session Review — Session Handoff (2026-08-10, session 10)
 
 ## 1. Branch / project state
 
 - Branch: `unity6-ai-prototype` (main branch holds the stable research baseline, untouched).
-- Working tree: same harmless font-atlas-glyph-population diff as every prior session on `Oswald SDF.asset`/`Oswald Bold SDF.asset` — deliberately excluded from the commit, same precedent as before.
-- Unity Editor: left in Edit Mode, no in-progress test career on disk (test careers created during this session's live verification were throwaway, never saved to a real file).
-- This was the biggest session yet, in two very different modes: a long "work through the whole backlog" pass done largely on autopilot while Thomas was away, followed by a live pairing session where he caught two genuine bugs in real time by watching the numbers closely rather than trusting the UI.
+- Working tree at handoff time: same harmless font-atlas-glyph-population diff on `Oswald SDF.asset`/`Oswald Bold SDF.asset` as every prior session - deliberately excluded from the commit, same precedent as before. Everything else from this session is committed.
+- Unity Editor: left in Edit Mode. No in-progress test career on disk beyond whatever pre-existing save file was already there at session start (this session's live-verification careers were mid-session Play Mode state only, never intentionally saved).
+- This was a long session covering three distinct phases: a five-item backlog sweep, two new systems built from a live design conversation (live ratings + morale), and a final end-to-end review pass where Thomas filed 12 items after actually using the build himself.
 
 ## 2. What happened this session
 
-### A. Player development tuning — elite aging curve
+### A. Backlog sweep (5 items, all live-verified)
 
-Thomas's pushback on the original aging model: "I feel like players, or at least superstars should at least remain stagnant for a few years... I'd say harry kane has only gotten better since turning 30." Added an elite-player aging extension to `ManagerPlayerDevelopment.cs` — players with a high CURRENT Overall (his own reasoning: "since now potentials can go down, maybe overall?", not Potential) get up to +5 extra years before decline kicks in (`GetAgingCurveOffset`, `EliteAgingExtensionYears`, `GetGrowthEligibleUntilAge`, `GetPeakDevelopmentAge`, `GetVeteranFactor`), replacing the flat age-30 cutoff everywhere it was used. Verified live with a full sanity pass on goals-per-match realism after the change — still matching real-world Premier League rates.
+- **LOAD CAREER** — turned out already fully wired since session 8 (Phase 5), just never click-tested. Verified live via real button clicks: a full double round-trip (Load → Save & Exit → Load again) with zero data drift.
+- **Injury block on Tactics Board** — dragging an injured bench player onto a starter pin now blocks the swap and shows a red warning banner (`OnBenchPlayerDroppedOnPin`). Pin-to-pin swaps between existing starters stay unblocked (nothing new enters the XI there).
+- **Always-visible Condition** — Squad Browse's FIT% badge and a new Player Detail "CONDITION" line now always show the number, color-graded, instead of only appearing below 60%.
+- **Youth academy focus stats** — pick up to 3 attributes per academy prospect (position-restricted, growable-pool-only list) to double their per-season growth rate. UI is a chip-toggle grid reusing the Player Detail roles-band slot for academy prospects specifically.
+- **Scouting pool expiry/refresh** — a prospect who ages past 22 unbought gets replaced with a fresh 16-19-year-old at season rollover (`ManagerScouting.AgeAndExpireProspects`).
 
-### B. Transfer/Scouting detail view
+### B. Condition fatigue/recovery fix (found via a live technical question, not the backlog)
 
-"In the transfers, as well as youth talent, we need to be able to click on their name to see detailed stats" instead of buying/scouting blind. `SquadListView` gained `onNameClicked` support (a separate click target layered on the row's own click), `OpenPlayerInspect` gained `browseList`/`ownSquad` params so Player Detail can browse an arbitrary list read-only (no roles band for players you don't own). **Live bug caught and fixed same session**: clicking a youth prospect's name did nothing until Back was pressed — `OpenPlayerInspect` never hid `scoutingPanel`/`transferMarketPanel`, so Player Detail opened underneath and stayed invisible. Fixed by adding both to the hide list.
+Thomas asked directly how Condition recovery handles a benched-then-subbed-on player. Investigation found `ApplyPostMatchCondition` used a binary played/not-played flag driven by final Starting XI membership - a late substitute took full-match fatigue, an early substitution-off read as fully rested. Changed to a `minutesPlayed` float derived from `matchSubsLog`, blending recovery/fatigue linearly by real minutes played. Also confirmed (Thomas asked) that Condition and injuries both correctly reset at season rollover. Full detail: [[project_manager_mode_future_scope_ideas]] backlog entry.
 
-### C. Form column bug + a real misunderstanding cleared up
+### C. Live in-match player ratings (new system, Thomas's own screenshot design)
 
-Live bug report via screenshot: Form strip showing stale/wrong data at Season 2. Real cause: `recentFormByTeamId` was never cleared alongside the league table reset on season rollover or load. Fixed both call sites. Along the way, clarified for Thomas that the "promotion and relegation" he thought he saw (Sunderland appearing with no training data) is just the season-file-cycling mechanic from session 8, not an actual football pyramid — no lower leagues exist.
+Asked to discuss "next items" (live ratings/morale/inbox, all previously out of scope), Thomas sketched the UI directly: a strip of 11 player cards under the Match Log, name + live rating each. Built:
+- `AgentMatchEvent` (ManagerSim fork only) gained `CreatorName`/`ShooterName`/`DefenderName`/`GoalkeeperName`, populated in `ResolveAttack` from identities that were already being computed there and then discarded.
+- New `ManagerMatchRatings.cs` - FM-style 0-10 rating, managed-team-only, ticks live in sync with the event feed reveal during `ReplayMatchCoroutine`.
+- Grid genuinely reflects live substitutions (swaps cards, not just numbers).
 
-### D. Autopilot batch (loans, world-scattered scouting rework, nationalities, youth academy)
+Live bug caught by Thomas same session: the grid was left visible through Full Time and collided with the goal-timeline layout there. Reverted to live-match-only.
 
-Thomas: "yeah go on with all of them, apart from the biggeru nscoped items [live ratings/morale/inbox]... anyway, i shall go for a shower, feel free to go on autopilot." Four features shipped and live-verified without further check-ins:
+Full detail, including the exact rating-delta table and the goals/match sanity check this required (per `PROJECT_CONTEXT_FOR_AI.md` guardrail #13, since `AgentMatchSimulator.cs` was touched): [[project_live_match_ratings]].
 
-- **Loan system** (`ManagerLoanTracker.cs`, new) — any squad player, automatic destination, free, fixed to season-end. A starter loaned out backfills via the same bench/reserve logic injuries use. **Caught proactively**: a loaned player is removed from `team.Players` entirely, so the save DTO would have silently lost them forever on the next load — fixed with `ManagerSaveData.LoanedOutPlayers`.
-- **World-scattered scouting + player nationalities** (`ManagerPlayerNationality.cs`, new; `ManagerScouting.cs` reworked) — prospects were cosmetically tagged to a real PL club that buying them never actually touched, which was a bit dishonest. Reworked to pool by region instead, with a real nationality per prospect. Regional "hotbed" quality bias is randomized fresh per career rather than a fixed real-world hierarchy — **flag to Thomas, not explicitly discussed with him**, a deliberate choice to avoid a permanent claim about which real nations produce better talent.
-- **Youth academy** (`ManagerAcademy.cs`, new) — 5 slots, ages 14-15, promotion age 16, manual "click to promote," built as a second tab inside the existing Scouting screen. **Caught proactively**: an empty `AcademyPool` on load would permanently freeze the pool at zero via a stale "already generated" flag — guarded with a count check before restoring.
-- Along the way: bell-curved the Potential-roll headroom (was flat `Random.Range`, re-tuned after the shape change alone barely moved the 90+ rate), and fixed a real `DefenceStrength` inversion bug in both the reserve pool and youth pool discount math (dividing, not multiplying, gives a genuinely worse defense — see `feedback_defencestrength_inverted` in memory, hit twice).
+### D. Team/player morale (new system)
 
-### E. Design-to-implementation: injury cross icon
+Thomas's own design pivot when discussing scope: "maybe doesn't affect performance, but it affects development?" Built as a growth-rate multiplier (0.85x-1.15x) in `ManagerPlayerDevelopment.ApplyMatchdayProgression`, fed by `ManagerSquadRoles`'s new `morale` dict (playing time + match result driven). Resets every season to a happy 70 baseline ("assume the players went off to a beach somewhere... and are in good moods again"), not neutral. Does NOT touch match simulation at all - deliberately kept separate from Condition's `ManagerFormationFit` injection point. Shown on Player Detail below Condition. Live-verified with exact before/after deltas (a first messy read turned out to be a hot-reload timing artifact, not a real bug - a clean Play Mode restart proved the math exactly right).
 
-Thomas linked a Claude Design mockup project ("Unity UX design possibilities," claude.ai/design) and asked for its red medical-cross sprite to be added to injured players on both the Tactics Board and the Squad list. Read via the `DesignSync` tool (read-only — no push, just spec extraction), translated into `ManagerUITheme.BuildInjuryCrossIcon` (two crossed rectangles over a red square — flat-rectangles-only, matching the project's existing convention, no image asset). Tactics Board pin gets it bottom-right (per Thomas's own corrected screenshot — his first phrasing said "bottom left," the circle he actually drew was bottom-right); Squad list gets it left of the name, in an always-reserved gutter so rows don't shift. **Live-verified appear AND disappear**: looped a real career until three starters got genuinely injured, confirmed the icon on both screens, then pushed matchdays past their return dates and confirmed it correctly cleared — proven by construction to also mean they're selectable again, since the icon and the actual match-day auto-substitution swap read the exact same `IsInjured` check.
+### E. Also fixed same session
 
-### F. Two real bugs Thomas caught live by watching closely
+- **"Mentality used" label removed from Full Time stats** - Thomas flagged it as likely-obsolete; investigation showed it wasn't actually stale (a live pill change did keep it updated correctly), just decided not worth the screen space. Removed the label and the now-fully-dead `mentalityUsedForCurrentMatch` field.
+- **Goals/match sanity check** - required by touching `AgentMatchSimulator.cs`. Two checks: 200 raw matches (protected `Sim.AgentMatchSimulator` vs the modified `Manager` fork) landed at 2.57 vs 2.78 goals/match, no meaningful divergence; a full 20-team single round-robin (380 matches) through the real fit-adjustment pipeline landed at 2.57 combined goals/match, 52.4% BTTS, 5.8% scoreless draws - all realistic. One important finding for whoever picks up item J below: `selectedMentality` is confirmed to never reset between matches (see the review batch).
 
-**Substitute fatigue bug.** "I paused to make subs... i switched them out and the borders remained yellow, meaning the subbed on players have low stamina." Not cosmetic — `AgentMatchSimulator.GetFatigueMultiplier` judged every player purely by the absolute match clock, so a player subbed on at minute 88 was treated as having played 88 minutes themselves, same penalty as the starter they replaced, in both the Tactics Board display AND the actual chance-creation math. Fixed by tracking each substitute's real entry minute (`RegisterSubstitution`/`ClearSubstitutions`) and computing fatigue off minutes actually on the pitch. Verified via direct logic test: a fresh sub 8 minutes after entering reads 1.000 (fully fresh) vs. 0.866 for an unmodified starter at the same match minute.
+### F. End-of-session review batch (12 items, Thomas went through the whole build himself)
 
-**Hub matchday label stale-reference bug.** "how is the screen currently on matchday 1, but each team has played 21 matches?" Real bug — confirmed via Matchday Prep's own separate matchday label, which stayed correct throughout, isolating it to one display. First fix attempt (suspecting a coroutine race in the pre-existing `RecreateHubBylineLabelNextFrame` hack) was wrong — removed it, replaced with a synchronous `ForceMeshUpdate()`, restarted Play Mode clean, reproduced identically. A temporary diagnostic log found the real cause: `hubClubNameLabel`/`hubBylineLabel` were cached controller fields, and the *general* TMP blank-label recovery sweep this screen also runs (`RecoverBlankLabelsNextFrame`) had silently destroyed and recreated the byline label at some point without knowing to update the cached field — leaving it pointing at a destroyed object, `== null` forever after, silently skipping every future update. Fixed by not caching these as fields at all — look them up fresh by path every refresh instead, immune to any recovery mechanism destroying the underlying component. Verified live: 15 matchdays back-to-back, byline correctly tracked every single one against the league table.
+Explicitly asked to just record these + handoff + commit + push this round, not action them. Full detail on every item in [[project_manager_mode_future_scope_ideas]] under "Session 10 review batch" - short version:
+
+1. New Career screen: Manager Name input text too small, remove "Enter text..." placeholder.
+2. Move Trophy Room into a new "Career" button tracking overall manager performance (record, money spent - scope TBD).
+3. Squad screen: FIT% column not aligned like the rest of the row grid.
+4. Transfers: buying is too easy to trigger by accident clicking a name - should open Player Detail instead, with the buy action + confirmation living there.
+5. Transfers: only ~10 sellable players shown, needs clarity (likely just the existing bench-only sell rule needing a clearer label, not a bug - unconfirmed).
+6. **Real bug, root-caused via code read, not yet live-verified**: live "Make Changes" lets you cycle the same player off/on repeatedly, each drop unconditionally calls `RegisterSubstitution` (resets their fatigue clock - an "infinite stamina" exploit) and unconditionally logs to `matchSubsLog` (duplicate "Subs Made" entries), and nothing blocks re-selecting a player already officially subbed off. All three trace to `OnBenchPlayerDroppedOnPin` needing to track *net* subs, not log/reset on every drag.
+7. Live ratings barely move over 90 minutes - feels unnatural. Likely needs bigger per-event deltas or an ambient periodic tick, since only genuine chances generate rateable events today.
+8. Question (answered live, not a code change): after scouting a prospect, what next? Academy and Scouting are separate pools by design - a scouted external prospect is bought via Transfer Market, never funneled into the 5-slot Academy. Surfaced a real gap: no way to release a bad Academy prospect to free a slot.
+9. Mentality carries over between matches instead of resetting to Balanced - confirmed via code read, `selectedMentality` is never reset at kickoff.
+10. SIMULATE SEASON produces unrealistic table collapses (won first 3 matches individually with Liverpool, simmed the rest, finished 15th) - Thomas's diagnosis is accumulated Condition/injury/morale/form decay with zero manager mitigation during an auto-skip; suggested neutralizing those factors for auto-resolved fixtures. `OnSimulateSeasonClicked` not yet read to confirm current behavior.
+11. Background music + button-click SFX added under `Assets/Resources/Music & Sound/`, not wired to anything yet.
+12. Splash screen logo added (studio "Eucna") - needs a new pre-title screen, logo centered on the title screen's existing background with an "eucna" wordmark below.
 
 ## 3. Open backlog (see `project_manager_mode_future_scope_ideas` in memory for full detail)
 
-- Youth academy "focus stats" (pick 3 attributes to double-grow per prospect) — not scoped.
-- LOAD CAREER wiring — title screen button is still a disabled placeholder; save/load has been built and reviewed for every system (reserves, roles, loans, academy) but never click-tested end-to-end since there's no UI entry point to actually reload yet.
-- Mid-season progress UI — the OVR delta badge only updates at season-end even though growth ticks per-matchday now.
-- Scouting pool expiry/refresh — pools never expire today; leaning toward age-out-and-replace over fake AI-club poaching, not decided.
-- Injured player still selectable in Tactics/Matchday Prep lineup — doesn't block selection, only shows the icon now (this session's fix). A real block/warning is still open.
-- Condition/fitness always-visible number — Condition genuinely persists matchday-to-matchday but is invisible until it crosses 60%; no raw number shown anywhere.
-- Live in-match player ratings, team/player morale, inbox system — all still just floated, not scoped, explicitly out of tonight's scope by Thomas's own instruction.
+- All 12 items from section F above - none actioned yet, this was a record-only pass.
+- Full Time "player performance" tab (ratings + scorers + assists in one Full Time view) - floated right after live ratings shipped.
+- Inbox system - still just a disabled placeholder, explicitly backlogged twice now by Thomas's own call.
