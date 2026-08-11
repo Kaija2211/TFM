@@ -12,6 +12,15 @@ namespace Manager
         public bool IsChampion;
         public float PrizeMoney;
         public float BoardBoost;
+
+        // Backlog item 2 (session 11) - the Career screen's Record tab wants the actual
+        // match record behind the final position, not just the position itself. Sourced
+        // straight from the managed team's LeagueTable.Entry at the same point
+        // ApplySeasonEndRewards already reads FinalPosition from.
+        public int Wins;
+        public int Draws;
+        public int Losses;
+        public int Points;
     }
 
     // Season-by-season history + the prize money/board boost formulas that fund it -

@@ -102,24 +102,32 @@ namespace Manager
 
             for (int i = 0; i < AcademySlots; i++)
             {
-                PlayerPosition position = AcademyPositionCycle[i % AcademyPositionCycle.Length];
-                int age = Random.Range(MinAcademyAge, MaxAcademyAge + 1);
-
-                // Softer than even ManagerScouting's youth pool (0.6-0.78x for age 16-19)
-                // - a genuine 14-15-year-old academy kid is a much rawer prospect than a
-                // scouted 16-19-year-old. DefenceStrength divided rather than multiplied
-                // for the same reason as everywhere else this discount pattern is used -
-                // see feedback_defencestrength_inverted in memory.
-                float ageSpan = Mathf.Max(1, MaxAcademyAge - MinAcademyAge);
-                float ageDiscount = Mathf.Lerp(0.4f, 0.5f, (age - MinAcademyAge) / ageSpan);
-
-                PlayerAgent prospect = generator.GenerateReservePlayer(position, attackStrength * ageDiscount, defenceStrength / ageDiscount);
-                ApplyAcademyAgeAndPotential(prospect, age);
-
-                academyPool.Add(prospect);
+                academyPool.Add(GenerateProspect(i, generator, attackStrength, defenceStrength));
             }
 
             return academyPool;
+        }
+
+        // Shared by the initial pool fill above and ReleaseProspect below (backlog item
+        // 8, session 11) - refactored out so the two generation paths can't drift apart,
+        // same precedent as ManagerScouting.GenerateProspect.
+        private PlayerAgent GenerateProspect(int slotIndex, AgentSquadGenerator generator, float attackStrength, float defenceStrength)
+        {
+            PlayerPosition position = AcademyPositionCycle[slotIndex % AcademyPositionCycle.Length];
+            int age = Random.Range(MinAcademyAge, MaxAcademyAge + 1);
+
+            // Softer than even ManagerScouting's youth pool (0.6-0.78x for age 16-19)
+            // - a genuine 14-15-year-old academy kid is a much rawer prospect than a
+            // scouted 16-19-year-old. DefenceStrength divided rather than multiplied
+            // for the same reason as everywhere else this discount pattern is used -
+            // see feedback_defencestrength_inverted in memory.
+            float ageSpan = Mathf.Max(1, MaxAcademyAge - MinAcademyAge);
+            float ageDiscount = Mathf.Lerp(0.4f, 0.5f, (age - MinAcademyAge) / ageSpan);
+
+            PlayerAgent prospect = generator.GenerateReservePlayer(position, attackStrength * ageDiscount, defenceStrength / ageDiscount);
+            ApplyAcademyAgeAndPotential(prospect, age);
+
+            return prospect;
         }
 
         public bool CanPromote(PlayerAgent player)
@@ -135,6 +143,37 @@ namespace Manager
             }
 
             academyPool.Remove(player);
+            return true;
+        }
+
+        // Manual release (backlog item 8, session 11) - "no way to release a dud
+        // prospect to free a slot" (unlike ManagerScouting's world pool, which already
+        // ages prospects out automatically). Unlike promotion, which deliberately
+        // shrinks the pool permanently (a graduated prospect earned their spot on the
+        // real squad), releasing immediately backfills the SAME slot index with a fresh
+        // 14-15-year-old - "release" only makes sense as an action if it actually frees
+        // real capacity for new talent, matching how Thomas originally framed the gap.
+        public bool ReleaseProspect(PlayerAgent player, AgentSquadGenerator generator, float attackStrength, float defenceStrength)
+        {
+            if (academyPool == null)
+            {
+                return false;
+            }
+
+            int index = academyPool.IndexOf(player);
+
+            if (index < 0)
+            {
+                return false;
+            }
+
+            // Same reasoning as ManagerScouting's expiry clearing scouting/assignment
+            // state for the expiring reference - the replacement is a genuinely new,
+            // unrelated PlayerAgent instance, so any focus picks tied to the released
+            // player's specific object reference would otherwise just leak forever.
+            focusAttributesByProspect.Remove(player);
+
+            academyPool[index] = GenerateProspect(index, generator, attackStrength, defenceStrength);
             return true;
         }
 

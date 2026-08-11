@@ -15,6 +15,49 @@ namespace Manager
     {
         private readonly Dictionary<string, float> budgetByTeamName = new();
 
+        // Career screen Finance tab (backlog item 2, session 11) - lifetime totals,
+        // separate from budgetByTeamName which only ever holds the current NET figure
+        // (wages/prize money/transfers all mixed together, with no way to recover a
+        // historical spend/income split from it after the fact). Only ever written from
+        // the two Transfer Market buy/sell handlers, so only the managed team's entries
+        // are ever meaningfully non-zero in practice - matches budgetByTeamName's own
+        // team-name-keyed idiom for consistency, not because AI teams' totals are used.
+        private readonly Dictionary<string, float> totalTransferSpendByTeamName = new();
+        private readonly Dictionary<string, float> totalTransferIncomeByTeamName = new();
+
+        public void RecordTransferSpend(string teamName, float amount)
+        {
+            totalTransferSpendByTeamName[teamName] = GetTotalTransferSpend(teamName) + amount;
+        }
+
+        public void RecordTransferIncome(string teamName, float amount)
+        {
+            totalTransferIncomeByTeamName[teamName] = GetTotalTransferIncome(teamName) + amount;
+        }
+
+        public float GetTotalTransferSpend(string teamName)
+        {
+            return totalTransferSpendByTeamName.TryGetValue(teamName, out float total) ? total : 0f;
+        }
+
+        public float GetTotalTransferIncome(string teamName)
+        {
+            return totalTransferIncomeByTeamName.TryGetValue(teamName, out float total) ? total : 0f;
+        }
+
+        // Save/load restores these as absolute totals (same idiom as AdjustBudget being
+        // used with a computed delta in ApplySaveData) rather than exposing the backing
+        // dictionaries directly.
+        public void SetTotalTransferSpend(string teamName, float total)
+        {
+            totalTransferSpendByTeamName[teamName] = total;
+        }
+
+        public void SetTotalTransferIncome(string teamName, float total)
+        {
+            totalTransferIncomeByTeamName[teamName] = total;
+        }
+
         // Seeded once per club from its own strength rating (already generated for
         // squad-strength purposes, see StatisticalModel.GetTeamStrength) - a top club
         // starts with meaningfully more to spend than a relegation-strength one, free

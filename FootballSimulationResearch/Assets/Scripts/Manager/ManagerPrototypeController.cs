@@ -183,9 +183,23 @@ namespace Manager
         // ever shown on this one specific player's Player Detail screen.
         private Sprite hiddePortraitSprite;
 
+        // Splash screen logo (backlog item 12, session 11) - studio name "Eucna".
+        private Sprite eucnaLogoSprite;
+
         // In-memory only - there is no save system, so this never persists across sessions.
         private string managerName = "Manager";
         private bool titleScreenBuilt;
+
+        // Splash screen (backlog item 12, session 11) - shown once before Title on
+        // launch. splashAdvanced guards against both the timed auto-advance and a
+        // click-to-skip firing twice (e.g. a click landing in the same frame the timer
+        // was already about to fire).
+        private GameObject splashPanel;
+        private bool splashScreenBuilt;
+        private bool splashAdvanced;
+        private CanvasGroup splashCanvasGroup;
+        private CanvasGroup titleCanvasGroup;
+        private Coroutine splashSequenceCoroutine;
         private bool teamGridBuilt;
         private List<Button> teamGridButtons = new();
 
@@ -298,6 +312,13 @@ namespace Manager
         private bool tacticsBoardOpenedMidMatch;
         private readonly List<(string offName, string offPosition, string onName, string onPosition, int minute)> matchSubsLog = new();
 
+        // Real football doesn't let a substituted-off player return - tracks who's
+        // actually left the pitch via a genuine mid-match sub this match (session 10
+        // fix: OnBenchPlayerDroppedOnPin used to allow cycling the same two players
+        // back and forth indefinitely, resetting fatigue to fresh each time and
+        // spamming duplicate "Subs Made" entries). Cleared alongside matchSubsLog.
+        private readonly HashSet<PlayerAgent> playersSubbedOffThisMatch = new();
+
         // Live in-match player ratings (session 10) - managed team only, reset at
         // kickoff (see OnSimulateMatchClicked) and applied one event at a time in sync
         // with the event feed reveal in ReplayMatchCoroutine, so the ratings grid ticks
@@ -322,11 +343,16 @@ namespace Manager
             footballIconSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/football-icon");
             tfmLogoSprite = Resources.Load<Sprite>("Manager/tfm-logo");
             hiddePortraitSprite = Resources.Load<Sprite>("Manager/hidde_playerportrait");
+            eucnaLogoSprite = Resources.Load<Sprite>("Manager/eucna_logo_2");
 
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnNextMatchdayClicked);
-            if (simulateMatchButton != null) simulateMatchButton.onClick.AddListener(OnSimulateMatchClicked);
+            // Backlog items 13/15 (session 11) - both buttons now go through a wrapper
+            // that may show a confirm dialog first; the real simulate logic (unchanged)
+            // only runs once that's resolved. See OnSimulateMatchButtonClicked/
+            // OnSimulateSeasonButtonClicked.
+            if (simulateMatchButton != null) simulateMatchButton.onClick.AddListener(OnSimulateMatchButtonClicked);
             if (matchdayPrepBackButton != null) matchdayPrepBackButton.onClick.AddListener(OnMatchdayPrepBackClicked);
-            if (simulateSeasonButton != null) simulateSeasonButton.onClick.AddListener(OnSimulateSeasonClicked);
+            if (simulateSeasonButton != null) simulateSeasonButton.onClick.AddListener(OnSimulateSeasonButtonClicked);
             if (viewSquadButton != null) viewSquadButton.onClick.AddListener(OnViewSquadClicked);
             if (inspectPreviousButton != null) inspectPreviousButton.onClick.AddListener(OnInspectPreviousClicked);
             if (inspectNextButton != null) inspectNextButton.onClick.AddListener(OnInspectNextClicked);
@@ -342,6 +368,22 @@ namespace Manager
             // checking on click - see RefreshTeamSelectStepUI.
             if (managerNameInput != null) managerNameInput.onValueChanged.AddListener(_ => RefreshTeamSelectStepUI());
             if (exitToTitleButton != null) exitToTitleButton.onClick.AddListener(OnExitToTitleClicked);
+
+            // Click SFX (backlog item 11, session 11) - these are the Editor-placed
+            // buttons wired above; every code-built button (the overwhelming majority)
+            // already gets the same listener from ManagerUITheme.BuildButton itself.
+            ManagerAudio.Initialize(gameObject);
+            Button[] editorPlacedButtons =
+            {
+                playNextMatchButton, simulateMatchButton, matchdayPrepBackButton, simulateSeasonButton,
+                viewSquadButton, inspectPreviousButton, inspectNextButton, inspectBackButton,
+                skipToResultsButton, fullTimeContinueButton, attackingButton, balancedButton,
+                defensiveButton, confirmTeamButton, teamSelectBackButton, exitToTitleButton
+            };
+            foreach (Button editorButton in editorPlacedButtons)
+            {
+                if (editorButton != null) editorButton.onClick.AddListener(ManagerAudio.PlayClick);
+            }
 
             ApplyManagerUITheme();
             SetMentality(selectedMentality);
@@ -368,7 +410,7 @@ namespace Manager
 
             TrainStatisticalModel();
 
-            ShowTitleScreen();
+            ShowSplashScreen();
         }
 
         // Recolors the already-placed Hub buttons/text to the reskinned palette using the
@@ -470,6 +512,189 @@ namespace Manager
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
 
             ShowTitleScreen();
+        }
+
+        // --- Splash Screen (backlog item 12, session 11) - shown once before Title on
+        // launch only (OnExitToTitleClicked goes straight to ShowTitleScreen, never back
+        // through here - exiting mid-career shouldn't replay the studio splash). Reuses
+        // Title's own background styling calls directly rather than the titlePanel
+        // GameObject itself, since this needs to be its own separate panel shown first. ---
+
+        // Timing for the fade in / hold / fade out sequence (Thomas's own ask, session
+        // 11) - logo+wordmark fade in, sit for ~3s, fade out, then Title's own content
+        // (buttons + TFM wordmark) fades in separately once Splash is gone.
+        private const float SplashFadeInDuration = 0.8f;
+        private const float SplashHoldDuration = 3f;
+        private const float SplashFadeOutDuration = 0.8f;
+        private const float TitleFadeInDuration = 0.6f;
+
+        private void ShowSplashScreen()
+        {
+            if (!splashScreenBuilt)
+            {
+                BuildSplashScreenContent();
+                splashScreenBuilt = true;
+            }
+
+            splashAdvanced = false;
+
+            // titlePanel starts active by the scene's own Editor default (confirmed
+            // live) - splashPanel renders in front regardless since it's created later
+            // (later sibling), but explicitly hiding Title here avoids any doubt.
+            if (titlePanel != null) titlePanel.SetActive(false);
+            if (splashPanel != null) splashPanel.SetActive(true);
+            if (splashCanvasGroup != null) splashCanvasGroup.alpha = 0f;
+
+            splashSequenceCoroutine = StartCoroutine(PlaySplashSequence());
+        }
+
+        private IEnumerator PlaySplashSequence()
+        {
+            yield return FadeCanvasGroup(splashCanvasGroup, 0f, 1f, SplashFadeInDuration);
+            yield return new WaitForSeconds(SplashHoldDuration);
+            yield return FadeCanvasGroup(splashCanvasGroup, 1f, 0f, SplashFadeOutDuration);
+
+            AdvanceFromSplashToTitle();
+        }
+
+        // Shared by every fade in this project's UI could ever want, not splash-specific
+        // logic baked into one place - a plain CanvasGroup.alpha lerp over real time
+        // (deliberately WaitForSeconds-equivalent unscaled stepping via Time.deltaTime
+        // directly, not a single blocking wait, so it can't freeze solid if anything
+        // ever set Time.timeScale=0 before this ever runs - nothing does yet, at Splash/
+        // Title, but no reason to make that assumption load-bearing).
+        private IEnumerator FadeCanvasGroup(CanvasGroup group, float from, float to, float duration)
+        {
+            if (group == null)
+            {
+                yield break;
+            }
+
+            group.alpha = from;
+            float elapsed = 0f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                group.alpha = Mathf.Lerp(from, to, Mathf.Clamp01(elapsed / duration));
+                yield return null;
+            }
+
+            group.alpha = to;
+        }
+
+        // Click-to-skip (the panel's own Button) and the natural end of
+        // PlaySplashSequence both funnel through here - splashAdvanced guards against
+        // either firing twice. A skip click stops the sequence coroutine outright
+        // (whichever phase it's in - fade-in, hold, or fade-out) and jumps straight to
+        // Title, which still gets its own fade-in either way for a consistent handoff.
+        private void AdvanceFromSplashToTitle()
+        {
+            if (splashAdvanced)
+            {
+                return;
+            }
+
+            splashAdvanced = true;
+
+            if (splashSequenceCoroutine != null)
+            {
+                StopCoroutine(splashSequenceCoroutine);
+                splashSequenceCoroutine = null;
+            }
+
+            if (splashPanel != null) splashPanel.SetActive(false);
+
+            ShowTitleScreen();
+
+            // Music starts here, not at launch (Thomas: the splash should play in
+            // silence) - see ManagerAudio.PlayMusic's own comment.
+            ManagerAudio.PlayMusic();
+
+            if (titleCanvasGroup == null && titlePanel != null)
+            {
+                titleCanvasGroup = titlePanel.GetComponent<CanvasGroup>();
+                if (titleCanvasGroup == null)
+                {
+                    titleCanvasGroup = titlePanel.AddComponent<CanvasGroup>();
+                }
+            }
+
+            if (titleCanvasGroup != null)
+            {
+                StartCoroutine(FadeCanvasGroup(titleCanvasGroup, 0f, 1f, TitleFadeInDuration));
+            }
+        }
+
+        // Code-built entirely (no Editor-placed panel to wire), same precedent as every
+        // other screen added after the initial Editor layout - Tactics Board, Match
+        // Events, Career, etc. Parented alongside titlePanel so it shares the same root
+        // canvas/sort order.
+        private void BuildSplashScreenContent()
+        {
+            if (titlePanel == null || titlePanel.transform.parent == null)
+            {
+                return;
+            }
+
+            splashPanel = new GameObject("SplashPanel", typeof(RectTransform), typeof(Image), typeof(Button));
+            splashPanel.transform.SetParent(titlePanel.transform.parent, false);
+            RectTransform panelRect = splashPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+
+            // Same background treatment as Title itself (see BuildTitleScreenContent) -
+            // the backlog note's own ask ("reuse the title screen's existing background").
+            ManagerUITheme.ApplyPanelBackground(splashPanel);
+            ManagerUITheme.ApplyDiagonalGradientBackground(splashPanel, ManagerUITheme.Background, ManagerUITheme.GradientEnd);
+
+            // The whole panel is a Button (invisible, same background as its own
+            // targetGraphic) purely so a click anywhere skips straight to Title instead
+            // of waiting out the full auto-advance delay.
+            Button skipButton = splashPanel.GetComponent<Button>();
+            skipButton.targetGraphic = splashPanel.GetComponent<Image>();
+            skipButton.transition = Selectable.Transition.None;
+            skipButton.onClick.AddListener(AdvanceFromSplashToTitle);
+            skipButton.onClick.AddListener(ManagerAudio.PlayClick);
+
+            // Scale/font matched to the "STUDIO SPLASH" mockup in Thomas's Claude Design
+            // project ("Unity UX design possibilities", Football Manager UI Concepts.dc.
+            // html) - logo 170px wide, 26px gap, wordmark 52pt Oswald Bold with 9pt
+            // character spacing, white. Background deliberately NOT matched (Thomas: "it's
+            // slightly different from us" - kept Title's own gradient instead). This
+            // project's own UI is already built at the same 1920x1080 reference canvas the
+            // mockup uses, so its pixel values map directly with no scale conversion.
+            const float logoSize = 170f;
+            const float logoGap = 26f;
+            const float wordmarkHeight = 64f;
+            const float stackTop = (1080f - (logoSize + logoGap + wordmarkHeight)) / 2f;
+
+            GameObject logoObj = new GameObject("EucnaLogo", typeof(RectTransform));
+            logoObj.transform.SetParent(splashPanel.transform, false);
+            ManagerUITheme.AnchorTopCenter(logoObj, stackTop, logoSize, logoSize);
+
+            if (eucnaLogoSprite != null)
+            {
+                Image logoImage = logoObj.AddComponent<Image>();
+                logoImage.sprite = eucnaLogoSprite;
+                logoImage.preserveAspect = true;
+                logoImage.raycastTarget = false;
+            }
+
+            GameObject wordmarkObj = new GameObject("EucnaWordmark", typeof(RectTransform));
+            wordmarkObj.transform.SetParent(splashPanel.transform, false);
+            ManagerUITheme.AnchorTopCenter(wordmarkObj, stackTop + logoSize + logoGap, 600f, wordmarkHeight);
+            TextMeshProUGUI wordmarkLabel = ManagerUITheme.BuildLabel(wordmarkObj.transform, "eucna", 52, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
+            wordmarkLabel.characterSpacing = 9f;
+            StartCoroutine(RecoverBlankLabelNextFrame(wordmarkLabel));
+
+            // Fade in/hold/fade out (Thomas's own ask) - CanvasGroup on the whole panel so
+            // logo+wordmark+background fade together as one unit, then Title fades in
+            // separately once this coroutine hands off. See AdvanceFromSplashToTitle and
+            // FadeCanvasGroup.
+            splashCanvasGroup = splashPanel.AddComponent<CanvasGroup>();
         }
 
         // --- Title Screen ---
@@ -580,6 +805,7 @@ namespace Manager
             newCareerButton.targetGraphic = newCareerObj.GetComponent<Image>();
             ManagerUITheme.BuildLabel(newCareerObj.transform, "NEW CAREER", 17, ManagerUITheme.OnAccent, TextAlignmentOptions.Center, FontStyles.Bold);
             newCareerButton.onClick.AddListener(OnTitleNewCareerClicked);
+            newCareerButton.onClick.AddListener(ManagerAudio.PlayClick);
 
             GameObject loadCareerObj = new GameObject("LoadCareerButton", typeof(RectTransform), typeof(Image), typeof(Button));
             loadCareerObj.transform.SetParent(titleContentContainer, false);
@@ -602,6 +828,7 @@ namespace Manager
             if (ManagerSaveService.HasSaveFile())
             {
                 loadCareerButton.onClick.AddListener(OnLoadCareerClicked);
+                loadCareerButton.onClick.AddListener(ManagerAudio.PlayClick);
             }
             else
             {
@@ -625,6 +852,7 @@ namespace Manager
             exitButton.targetGraphic = exitObj.GetComponent<Image>();
             ManagerUITheme.BuildLabel(exitObj.transform, "EXIT", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
             exitButton.onClick.AddListener(OnTitleExitClicked);
+            exitButton.onClick.AddListener(ManagerAudio.PlayClick);
         }
 
         // See BuildTitleScreenContent's call site - recovers a label that came out of
@@ -952,6 +1180,12 @@ namespace Manager
                     placeholderLabel.color = ManagerUITheme.TextMuted;
                     placeholderLabel.fontSize = 18;
                     if (TMP_Settings.defaultFontAsset != null) placeholderLabel.font = TMP_Settings.defaultFontAsset;
+
+                    // The Editor-authored input field still carries TMP's stock "Enter
+                    // text..." placeholder copy - never intentionally set, just never
+                    // cleared. The big centered box plus the MANAGER NAME caption above it
+                    // already say what the field is for.
+                    placeholderLabel.text = "";
                 }
 
                 GameObject inputAccent = new GameObject("LeftAccent", typeof(RectTransform), typeof(Image));
@@ -1134,8 +1368,8 @@ namespace Manager
                     ManagerUITheme.SetPointAnchor(
                         inputRect, new Vector2(0.5f, 0.5f), new Vector2(0f, 20f), new Vector2(bigInputWidth, bigInputHeight));
 
-                    if (managerNameInput.textComponent != null) managerNameInput.textComponent.fontSize = 28;
-                    if (managerNameInput.placeholder is TextMeshProUGUI bigPlaceholder) bigPlaceholder.fontSize = 28;
+                    if (managerNameInput.textComponent != null) managerNameInput.textComponent.fontSize = 34;
+                    if (managerNameInput.placeholder is TextMeshProUGUI bigPlaceholder) bigPlaceholder.fontSize = 34;
                 }
                 else
                 {
@@ -1459,6 +1693,7 @@ namespace Manager
                 StyleHubActionButton(transfersButton);
                 ManagerUITheme.NormalizeButtonLabel(transfersButton, "TRANSFERS", ManagerUITheme.TextBody, 17);
                 transfersButton.onClick.AddListener(OnOpenTransferMarketClicked);
+                transfersButton.onClick.AddListener(ManagerAudio.PlayClick);
             }
 
             // SCOUTING (career-arc addition, session 8, Phase 2) - real, unlike the
@@ -1480,9 +1715,14 @@ namespace Manager
             StyleHubActionButton(scoutingButton);
             ManagerUITheme.NormalizeButtonLabel(scoutingButton, "SCOUTING", ManagerUITheme.TextBody, 17);
             scoutingButton.onClick.AddListener(OnOpenScoutingClicked);
+            scoutingButton.onClick.AddListener(ManagerAudio.PlayClick);
 
-            // TROPHY ROOM (career-arc addition, session 8, Phase 4) - real, same styling
-            // as Squad/Transfers/Scouting rather than a disabled placeholder.
+            // CAREER (career-arc addition, session 8, Phase 4; folded from a standalone
+            // "Trophy Room" button into a tabbed Career screen - backlog item 2, session
+            // 11) - real, same styling as Squad/Transfers/Scouting rather than a disabled
+            // placeholder. Internal identifiers (trophyRoomPanel, OnOpenTrophyRoomClicked,
+            // etc.) deliberately kept as-is below - this button is the only thing that
+            // changed name-wise, renaming everything downstream wasn't worth the risk.
             float trophyRoomTop = scoutingTop + subRowHeight + rowGap;
 
             GameObject trophyRoomObj = new GameObject("TrophyRoomButton", typeof(RectTransform), typeof(Image), typeof(Button));
@@ -1490,10 +1730,11 @@ namespace Manager
             ManagerUITheme.SetPointAnchor(trophyRoomObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -trophyRoomTop), new Vector2(menuWidth, subRowHeight));
             Button trophyRoomButton = trophyRoomObj.GetComponent<Button>();
             trophyRoomButton.targetGraphic = trophyRoomObj.GetComponent<Image>();
-            ManagerUITheme.BuildLabel(trophyRoomObj.transform, "TROPHY ROOM", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
+            ManagerUITheme.BuildLabel(trophyRoomObj.transform, "CAREER", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
             StyleHubActionButton(trophyRoomButton);
-            ManagerUITheme.NormalizeButtonLabel(trophyRoomButton, "TROPHY ROOM", ManagerUITheme.TextBody, 17);
+            ManagerUITheme.NormalizeButtonLabel(trophyRoomButton, "CAREER", ManagerUITheme.TextBody, 17);
             trophyRoomButton.onClick.AddListener(OnOpenTrophyRoomClicked);
+            trophyRoomButton.onClick.AddListener(ManagerAudio.PlayClick);
 
             float inboxTop = trophyRoomTop + subRowHeight + rowGap;
 
@@ -1666,12 +1907,14 @@ namespace Manager
             List<LeagueTable.Entry> finalTable = playableTable.Sorted();
             int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
             int finalPosition = finalTable.Count;
+            LeagueTable.Entry managedEntry = null;
 
             for (int i = 0; i < finalTable.Count; i++)
             {
                 if (finalTable[i].TeamId == managedTeamId)
                 {
                     finalPosition = i + 1;
+                    managedEntry = finalTable[i];
                     break;
                 }
             }
@@ -1689,7 +1932,11 @@ namespace Manager
                 FinalPosition = finalPosition,
                 IsChampion = finalPosition == 1,
                 PrizeMoney = prizeMoney,
-                BoardBoost = boardBoost
+                BoardBoost = boardBoost,
+                Wins = managedEntry?.Wins ?? 0,
+                Draws = managedEntry?.Draws ?? 0,
+                Losses = managedEntry?.Losses ?? 0,
+                Points = managedEntry?.Points ?? 0
             };
 
             careerHistory.AddRecord(lastSeasonRecord);
@@ -2185,6 +2432,8 @@ namespace Manager
                 ActiveSeasonFileName = allSeasonFixtures.Count > 0 ? allSeasonFixtures[0].Season : seasonFile.name,
                 ManagedSquad = AgentTeamSaveData.FromTeam(managedTeam),
                 ManagedBudget = budget,
+                ManagedTotalTransferSpend = finance.GetTotalTransferSpend(managedTeamName),
+                ManagedTotalTransferIncome = finance.GetTotalTransferIncome(managedTeamName),
                 ManagedRoles = new ManagerSquadRolesSaveData
                 {
                     CaptainId = roles.Captain?.PlayerId,
@@ -2248,7 +2497,11 @@ namespace Manager
                     FinalPosition = record.FinalPosition,
                     IsChampion = record.IsChampion,
                     PrizeMoney = record.PrizeMoney,
-                    BoardBoost = record.BoardBoost
+                    BoardBoost = record.BoardBoost,
+                    Wins = record.Wins,
+                    Draws = record.Draws,
+                    Losses = record.Losses,
+                    Points = record.Points
                 });
             }
 
@@ -2372,6 +2625,8 @@ namespace Manager
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
             finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
             finance.AdjustBudget(managedTeamName, data.ManagedBudget - finance.GetBudget(managedTeamName));
+            finance.SetTotalTransferSpend(managedTeamName, data.ManagedTotalTransferSpend);
+            finance.SetTotalTransferIncome(managedTeamName, data.ManagedTotalTransferIncome);
 
             foreach (SeasonRecordSaveData recordData in data.CareerHistory)
             {
@@ -2381,7 +2636,11 @@ namespace Manager
                     FinalPosition = recordData.FinalPosition,
                     IsChampion = recordData.IsChampion,
                     PrizeMoney = recordData.PrizeMoney,
-                    BoardBoost = recordData.BoardBoost
+                    BoardBoost = recordData.BoardBoost,
+                    Wins = recordData.Wins,
+                    Draws = recordData.Draws,
+                    Losses = recordData.Losses,
+                    Points = recordData.Points
                 });
             }
 
@@ -2710,7 +2969,7 @@ namespace Manager
                     prospect.PrimaryPosition.ToString(),
                     prospect.Age.ToString(),
                     nation,
-                    prospect.GetOverallRating().ToString("F0"),
+                    GetDisplayRating(prospect.GetOverallRating()).ToString(),
                     scouting.GetDisplayPotential(prospect),
                     status
                 };
@@ -2753,7 +3012,7 @@ namespace Manager
                     prospect.Name,
                     prospect.PrimaryPosition.ToString(),
                     prospect.Age.ToString(),
-                    prospect.GetOverallRating().ToString("F0"),
+                    GetDisplayRating(prospect.GetOverallRating()).ToString(),
                     scouting.GetDisplayPotential(prospect),
                     status
                 };
@@ -2780,6 +3039,17 @@ namespace Manager
             }
 
             RefreshScoutingUI();
+        }
+
+        // Manual release (backlog item 8, session 11) - see ManagerAcademy.
+        // ReleaseProspect's own comment for why this backfills the same slot instead of
+        // just shrinking the pool the way promotion does.
+        private void OnReleaseAcademyProspectClicked(PlayerAgent prospect)
+        {
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+            academy.ReleaseProspect(prospect, squadGenerator, strength.AttackStrength, strength.DefenceStrength);
+
+            OnInspectBackClicked();
         }
 
         private void OpenAcademyProspectDetail(PlayerAgent prospect, List<PlayerAgent> browseList)
@@ -3084,7 +3354,14 @@ namespace Manager
                 TextMeshProUGUI bylineTMP = transferMarketBylineObj.GetComponentInChildren<TextMeshProUGUI>();
                 if (bylineTMP != null)
                 {
-                    bylineTMP.text = $"Transfer budget: £{budget:F1}m";
+                    // Sell-tab clarification (backlog item 5, session 11) - not a bug,
+                    // session 8 deliberately scoped selling to bench-only to protect
+                    // against an accidental first-teamer sale, but nothing said so on
+                    // screen, so a ~10-player bench-sized list read as suspiciously
+                    // short/broken. Buy tab keeps its original plain budget line.
+                    bylineTMP.text = transferMarketShowingBuyTab
+                        ? $"Transfer budget: £{budget:F1}m"
+                        : $"Transfer budget: £{budget:F1}m   ·   Only bench players can be sold - your Starting XI is protected from an accidental sale.";
                 }
             }
 
@@ -3244,7 +3521,7 @@ namespace Manager
                 player.PrimaryPosition.ToString(),
                 player.Age.ToString(),
                 teamName,
-                player.GetOverallRating().ToString("F0"),
+                GetDisplayRating(player.GetOverallRating()).ToString(),
                 bidCell
             };
 
@@ -3285,7 +3562,7 @@ namespace Manager
                     player.Name,
                     player.PrimaryPosition.ToString(),
                     player.Age.ToString(),
-                    player.GetOverallRating().ToString("F0"),
+                    GetDisplayRating(player.GetOverallRating()).ToString(),
                     $"£{sellPrice:F1}m"
                 };
 
@@ -3390,6 +3667,7 @@ namespace Manager
             }
 
             finance.AdjustBudget(managedTeamName, -askingPrice);
+            finance.RecordTransferSpend(managedTeamName, askingPrice);
             GetOrCreateAgentTeam(managedTeamName).AddBenchPlayer(target);
 
             SetTransferMarketStatus($"Signed {target.Name} for £{askingPrice:F1}m!");
@@ -3408,6 +3686,7 @@ namespace Manager
             team.Bench.Remove(target);
             team.Players.Remove(target);
             finance.AdjustBudget(managedTeamName, sellPrice);
+            finance.RecordTransferIncome(managedTeamName, sellPrice);
 
             SetTransferMarketStatus($"Sold {target.Name} for £{sellPrice:F1}m.");
             RefreshTransferMarketUI();
@@ -3438,6 +3717,14 @@ namespace Manager
         private RectTransform trophyRoomContentContainer;
         private readonly List<GameObject> spawnedTrophyRoomRows = new();
 
+        // Career screen tabs (backlog item 2, session 11): 0 = Trophies (the original
+        // Trophy Room content, unchanged), 1 = Record (season-by-season W/D/L/Points),
+        // 2 = Finance (lifetime transfer spend/income + prize money/board boost totals).
+        private int careerTab;
+        private Button careerTrophiesTabButton;
+        private Button careerRecordTabButton;
+        private Button careerFinanceTabButton;
+
         public void OnOpenTrophyRoomClicked()
         {
             if (!trophyRoomChromeBuilt)
@@ -3445,6 +3732,8 @@ namespace Manager
                 BuildTrophyRoomChrome();
                 trophyRoomChromeBuilt = true;
             }
+
+            careerTab = 0;
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (trophyRoomPanel != null) trophyRoomPanel.SetActive(true);
@@ -3457,6 +3746,24 @@ namespace Manager
             if (trophyRoomPanel != null) trophyRoomPanel.SetActive(false);
 
             ShowSeasonHub();
+        }
+
+        private void OnCareerTrophiesTabClicked()
+        {
+            careerTab = 0;
+            RefreshTrophyRoomUI();
+        }
+
+        private void OnCareerRecordTabClicked()
+        {
+            careerTab = 1;
+            RefreshTrophyRoomUI();
+        }
+
+        private void OnCareerFinanceTabClicked()
+        {
+            careerTab = 2;
+            RefreshTrophyRoomUI();
         }
 
         private void BuildTrophyRoomChrome()
@@ -3482,11 +3789,26 @@ namespace Manager
             GameObject titleObj = new GameObject("Title", typeof(RectTransform));
             titleObj.transform.SetParent(header.transform, false);
             ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(300f, 34f));
-            ManagerUITheme.BuildLabel(titleObj.transform, "TROPHY ROOM", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            ManagerUITheme.BuildLabel(titleObj.transform, "CAREER", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(200f, 36f));
             backButton.onClick.AddListener(OnTrophyRoomBackClicked);
+
+            // Three tabs (same BUY/SELL-style pattern as Transfer Market) sharing the one
+            // scroll content container below rather than three separate ScrollRects -
+            // RefreshTrophyRoomUI branches on careerTab to decide what rows go into it.
+            careerFinanceTabButton = ManagerUITheme.BuildButton(header.transform, "FINANCE", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(careerFinanceTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-276f, -27f), new Vector2(120f, 36f));
+            careerFinanceTabButton.onClick.AddListener(OnCareerFinanceTabClicked);
+
+            careerRecordTabButton = ManagerUITheme.BuildButton(header.transform, "RECORD", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(careerRecordTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-406f, -27f), new Vector2(120f, 36f));
+            careerRecordTabButton.onClick.AddListener(OnCareerRecordTabClicked);
+
+            careerTrophiesTabButton = ManagerUITheme.BuildButton(header.transform, "TROPHIES", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
+            ManagerUITheme.SetPointAnchor(careerTrophiesTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-536f, -27f), new Vector2(120f, 36f));
+            careerTrophiesTabButton.onClick.AddListener(OnCareerTrophiesTabClicked);
 
             const float contentWidth = 1200f;
             const float sideMargin = (1920f - contentWidth) / 2f;
@@ -3544,12 +3866,48 @@ namespace Manager
                 return;
             }
 
+            if (careerTrophiesTabButton != null && careerTrophiesTabButton.TryGetComponent(out Image trophiesImage))
+            {
+                trophiesImage.color = careerTab == 0 ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(careerTrophiesTabButton, "TROPHIES", careerTab == 0 ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
+            if (careerRecordTabButton != null && careerRecordTabButton.TryGetComponent(out Image recordImage))
+            {
+                recordImage.color = careerTab == 1 ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(careerRecordTabButton, "RECORD", careerTab == 1 ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
+            if (careerFinanceTabButton != null && careerFinanceTabButton.TryGetComponent(out Image financeImage))
+            {
+                financeImage.color = careerTab == 2 ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(careerFinanceTabButton, "FINANCE", careerTab == 2 ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
             foreach (GameObject row in spawnedTrophyRoomRows)
             {
                 if (row != null) Destroy(row);
             }
             spawnedTrophyRoomRows.Clear();
 
+            if (careerTab == 0)
+            {
+                RefreshCareerTrophiesTab();
+            }
+            else if (careerTab == 1)
+            {
+                RefreshCareerRecordTab();
+            }
+            else
+            {
+                RefreshCareerFinanceTab();
+            }
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(trophyRoomContentContainer));
+        }
+
+        private void RefreshCareerTrophiesTab()
+        {
             spawnedTrophyRoomRows.Add(BuildTrophyRoomHeaderRow());
 
             if (careerHistory.Records.Count == 0)
@@ -3559,17 +3917,162 @@ namespace Manager
                 emptyObj.GetComponent<LayoutElement>().preferredHeight = 60f;
                 ManagerUITheme.BuildLabel(emptyObj.transform, "No seasons completed yet - finish your first season to start the history.", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
                 spawnedTrophyRoomRows.Add(emptyObj);
-            }
-            else
-            {
-                // Most recent season first.
-                for (int i = careerHistory.Records.Count - 1; i >= 0; i--)
-                {
-                    spawnedTrophyRoomRows.Add(BuildTrophyRoomRow(careerHistory.Records[i]));
-                }
+                return;
             }
 
-            StartCoroutine(RecoverBlankLabelsNextFrame(trophyRoomContentContainer));
+            // Most recent season first.
+            for (int i = careerHistory.Records.Count - 1; i >= 0; i--)
+            {
+                spawnedTrophyRoomRows.Add(BuildTrophyRoomRow(careerHistory.Records[i]));
+            }
+        }
+
+        private static readonly float[] CareerRecordColumnFractions = { 0.16f, 0.14f, 0.14f, 0.14f, 0.14f, 0.14f, 0.14f };
+
+        private void RefreshCareerRecordTab()
+        {
+            spawnedTrophyRoomRows.Add(BuildCareerRecordHeaderRow());
+
+            if (careerHistory.Records.Count == 0)
+            {
+                GameObject emptyObj = new GameObject("EmptyState", typeof(RectTransform), typeof(LayoutElement));
+                emptyObj.transform.SetParent(trophyRoomContentContainer, false);
+                emptyObj.GetComponent<LayoutElement>().preferredHeight = 60f;
+                ManagerUITheme.BuildLabel(emptyObj.transform, "No seasons completed yet - finish your first season to start the history.", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+                spawnedTrophyRoomRows.Add(emptyObj);
+                return;
+            }
+
+            for (int i = careerHistory.Records.Count - 1; i >= 0; i--)
+            {
+                spawnedTrophyRoomRows.Add(BuildCareerRecordRow(careerHistory.Records[i]));
+            }
+        }
+
+        private GameObject BuildCareerRecordHeaderRow()
+        {
+            GameObject row = new GameObject("RecordHeader", typeof(RectTransform), typeof(LayoutElement));
+            row.transform.SetParent(trophyRoomContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = 30f;
+
+            string[] headers = { "SEASON", "POSITION", "PTS", "W", "D", "L", "GD" };
+            float x = 0f;
+            for (int i = 0; i < headers.Length; i++)
+            {
+                GameObject cell = new GameObject($"Header_{i}", typeof(RectTransform));
+                cell.transform.SetParent(row.transform, false);
+                RectTransform cellRect = cell.GetComponent<RectTransform>();
+                cellRect.anchorMin = new Vector2(x, 0f);
+                cellRect.anchorMax = new Vector2(x + CareerRecordColumnFractions[i], 1f);
+                cellRect.offsetMin = new Vector2(10f, 0f);
+                cellRect.offsetMax = new Vector2(-10f, 0f);
+                ManagerUITheme.BuildLabel(cell.transform, headers[i], 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                x += CareerRecordColumnFractions[i];
+            }
+
+            return row;
+        }
+
+        private GameObject BuildCareerRecordRow(SeasonRecord record)
+        {
+            GameObject row = new GameObject($"RecordSeason_{record.Season}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            row.transform.SetParent(trophyRoomContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = 44f;
+            row.GetComponent<Image>().color = record.IsChampion ? new Color(ManagerUITheme.Accent.r, ManagerUITheme.Accent.g, ManagerUITheme.Accent.b, 0.12f) : ManagerUITheme.CardNeutralAlt;
+
+            // Goal difference isn't stored on SeasonRecord itself (GF/GA weren't part of
+            // the original ask) - Points/W/D/L already carry the shape Thomas actually
+            // asked for, so a GD column not being derivable exactly isn't worth widening
+            // SeasonRecord for. Shown as "-" rather than a wrong number.
+            string[] values =
+            {
+                $"Season {record.Season}",
+                $"{record.FinalPosition}{GetOrdinalSuffix(record.FinalPosition)}",
+                record.Points.ToString(),
+                record.Wins.ToString(),
+                record.Draws.ToString(),
+                record.Losses.ToString(),
+                "-"
+            };
+
+            Color textColor = record.IsChampion ? ManagerUITheme.Accent : ManagerUITheme.TextBody;
+            FontStyles style = record.IsChampion ? FontStyles.Bold : FontStyles.Normal;
+
+            float x = 0f;
+            for (int i = 0; i < values.Length; i++)
+            {
+                GameObject cell = new GameObject($"Cell_{i}", typeof(RectTransform));
+                cell.transform.SetParent(row.transform, false);
+                RectTransform cellRect = cell.GetComponent<RectTransform>();
+                cellRect.anchorMin = new Vector2(x, 0f);
+                cellRect.anchorMax = new Vector2(x + CareerRecordColumnFractions[i], 1f);
+                cellRect.offsetMin = new Vector2(10f, 0f);
+                cellRect.offsetMax = new Vector2(-10f, 0f);
+                ManagerUITheme.BuildLabel(cell.transform, values[i], 16, textColor, TextAlignmentOptions.MidlineLeft, style);
+                x += CareerRecordColumnFractions[i];
+            }
+
+            return row;
+        }
+
+        private void RefreshCareerFinanceTab()
+        {
+            float totalSpend = finance.GetTotalTransferSpend(managedTeamName);
+            float totalIncome = finance.GetTotalTransferIncome(managedTeamName);
+
+            float totalPrizeMoney = 0f;
+            float totalBoardBoost = 0f;
+            foreach (SeasonRecord record in careerHistory.Records)
+            {
+                totalPrizeMoney += record.PrizeMoney;
+                totalBoardBoost += record.BoardBoost;
+            }
+
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
+            float currentBudget = finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
+
+            (string label, string value, bool emphasize)[] rows =
+            {
+                ("CURRENT BUDGET", $"£{currentBudget:F1}m", true),
+                ("TOTAL TRANSFER SPEND", $"£{totalSpend:F1}m", false),
+                ("TOTAL TRANSFER INCOME", $"£{totalIncome:F1}m", false),
+                ("NET TRANSFER SPEND", $"£{(totalSpend - totalIncome):F1}m", false),
+                ("TOTAL PRIZE MONEY", $"£{totalPrizeMoney:F1}m", false),
+                ("TOTAL BOARD BOOST", $"£{totalBoardBoost:F1}m", false),
+            };
+
+            foreach (var (label, value, emphasize) in rows)
+            {
+                spawnedTrophyRoomRows.Add(BuildCareerFinanceRow(label, value, emphasize));
+            }
+        }
+
+        private GameObject BuildCareerFinanceRow(string label, string value, bool emphasize)
+        {
+            GameObject row = new GameObject($"Finance_{label}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            row.transform.SetParent(trophyRoomContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = 52f;
+            row.GetComponent<Image>().color = emphasize ? new Color(ManagerUITheme.Accent.r, ManagerUITheme.Accent.g, ManagerUITheme.Accent.b, 0.12f) : ManagerUITheme.CardNeutralAlt;
+
+            GameObject labelCell = new GameObject("Label", typeof(RectTransform));
+            labelCell.transform.SetParent(row.transform, false);
+            RectTransform labelRect = labelCell.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0f, 0f);
+            labelRect.anchorMax = new Vector2(0.6f, 1f);
+            labelRect.offsetMin = new Vector2(20f, 0f);
+            labelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.BuildLabel(labelCell.transform, label, 15, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject valueCell = new GameObject("Value", typeof(RectTransform));
+            valueCell.transform.SetParent(row.transform, false);
+            RectTransform valueRect = valueCell.GetComponent<RectTransform>();
+            valueRect.anchorMin = new Vector2(0.6f, 0f);
+            valueRect.anchorMax = new Vector2(1f, 1f);
+            valueRect.offsetMin = Vector2.zero;
+            valueRect.offsetMax = new Vector2(-20f, 0f);
+            ManagerUITheme.BuildLabel(valueCell.transform, value, 20, emphasize ? ManagerUITheme.Accent : ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+
+            return row;
         }
 
         private static readonly float[] TrophyRoomColumnFractions = { 0.14f, 0.20f, 0.22f, 0.24f, 0.20f };
@@ -3767,7 +4270,15 @@ namespace Manager
             warningRect.anchorMax = new Vector2(0.5f, 1f);
             warningRect.pivot = new Vector2(0.5f, 1f);
             warningRect.sizeDelta = new Vector2(700f, 24f);
-            warningRect.anchoredPosition = new Vector2(0f, -headerHeight - 14f);
+            // The gap between the header's own bottom accent line and the pitch's real top
+            // edge turned out too tight to fit this label in at all (~25 world-units for a
+            // ~22-unit-tall label, confirmed via live GetWorldCorners measurement - two
+            // earlier attempts to thread that gap both failed live). Placed in the header's
+            // own background instead, below the button row (bottom edge at local y=-45,
+            // all buttons are anchoredPosition.y=-27 with height 36) and above the accent
+            // line at the header's bottom edge (local y=-90) - a genuinely empty ~45-unit
+            // band with real margin on both sides, confirmed live.
+            warningRect.anchoredPosition = new Vector2(0f, -headerHeight + 34f);
             tacticsBoardWarningLabel = ManagerUITheme.BuildLabel(warningObj.transform, "", 15, ManagerUITheme.Danger, TextAlignmentOptions.Center, FontStyles.Bold);
 
             // Body row: pitch (flex, capped at 1320px wide) beside a 300px vertical bench
@@ -4772,6 +5283,17 @@ namespace Manager
                 return;
             }
 
+            // Session 10 exploit fix: once a player has genuinely been subbed off this
+            // match, real football doesn't let them come back on. Only checked mid-match
+            // (see playersSubbedOffThisMatch's own comment) - pre-match team-sheet edits
+            // are free to rearrange the XI as many times as the manager likes.
+            if (tacticsBoardOpenedMidMatch && playersSubbedOffThisMatch.Contains(benchPlayer))
+            {
+                ShowTacticsBoardWarning($"{benchPlayer.Name} has already been substituted and can't return");
+                RefreshTacticsBoardUI();
+                return;
+            }
+
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
             bool applied = team.SubstitutePlayer(pinPlayer, benchPlayer);
 
@@ -4783,6 +5305,7 @@ namespace Manager
             {
                 matchSubsLog.Add((pinPlayer.Name, pinPlayer.PrimaryPosition.ToString(), benchPlayer.Name, benchPlayer.PrimaryPosition.ToString(), currentMatchMinute));
                 RefreshMatchSubsMadeList();
+                playersSubbedOffThisMatch.Add(pinPlayer);
 
                 // Fresh legs, fresh fatigue clock - see AgentMatchSimulator.
                 // GetFatigueMultiplier's own comment on why this was missing before.
@@ -4833,6 +5356,13 @@ namespace Manager
                 return;
             }
 
+            // Built early in BuildTacticsBoardChrome, before the pitch/bench elements -
+            // those render on top of it as later siblings otherwise (same z-order gotcha
+            // as the dropdown popups). Bring the warning's container to front each time
+            // it's actually shown rather than reordering it once at build time, since a
+            // full board rebuild (RefreshTacticsBoardUI) doesn't touch this object at all.
+            tacticsBoardWarningLabel.transform.parent.SetAsLastSibling();
+
             tacticsBoardWarningLabel.text = message;
 
             if (tacticsBoardWarningCoroutine != null)
@@ -4845,7 +5375,12 @@ namespace Manager
 
         private IEnumerator ClearTacticsBoardWarningAfterDelay()
         {
-            yield return new WaitForSeconds(3f);
+            // Realtime, not scaled - OnOpenTacticsBoardDuringMatchClicked pauses the game
+            // (Time.timeScale = 0) for the entire time this board is open, so a WaitForSeconds
+            // here would never progress while the manager is actually looking at the warning,
+            // then barely progress in the few real seconds after resuming before the board
+            // pauses again on next open - the warning would look permanently stuck.
+            yield return new WaitForSecondsRealtime(3f);
 
             if (tacticsBoardWarningLabel != null)
             {
@@ -5090,14 +5625,14 @@ namespace Manager
             {
                 PlayerAgent player = team.StartingEleven[i];
                 PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
-                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex));
+                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles));
             }
 
             squadBrowseListView.AddSectionHeader($"Bench ({team.Bench.Count})");
 
             foreach (PlayerAgent player in team.Bench)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles) + BuildFitnessBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex));
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles));
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
@@ -5111,19 +5646,19 @@ namespace Manager
             OpenPlayerInspect(player);
         }
 
-        // Cosmetic only: stretches the true weighted rating away from the midpoint so
-        // strong squads read as clearly elite and weak squads read as clearly weak,
-        // closer to how FIFA-style ratings feel. The underlying attributes, the true
-        // GetOverallRating() value, and match simulation are all completely unaffected
-        // by this - only the number printed here changes.
+        // Session 11: used to apply a cosmetic +15% stretch away from 50 so strong
+        // squads read as clearly elite without touching the true GetOverallRating()
+        // value - removed once AgentSquadGenerator's team-strength multiplier was
+        // strengthened (0.35->0.75) to make top clubs legitimately generate higher
+        // attributes instead. Stacking the old stretch on top of that honest fix
+        // tripled the league's count of "90+" players (6 true vs 18 displayed in a real
+        // 20-club sample) and pulled players as low as a true 85 up into "90+" - closer
+        // to inflation than to Liverpool no longer reading as underrated. This function
+        // stays as the one place every screen routes an Overall through, in case a
+        // display transform is ever wanted again - it just no longer changes anything.
         private static int GetDisplayRating(float trueRating)
         {
-            const float midpoint = 50f;
-            const float stretch = 1.15f;
-
-            float displayed = midpoint + (trueRating - midpoint) * stretch;
-
-            return Mathf.RoundToInt(Mathf.Clamp(displayed, 1f, 99f));
+            return Mathf.RoundToInt(Mathf.Clamp(trueRating, 1f, 99f));
         }
 
         // Compact role indicators for the Squad screen's PLAYER cell - "C"/"VC" for
@@ -5168,7 +5703,7 @@ namespace Manager
                 // this just adds the one piece of info the icon alone can't carry.
                 int returnMatchday = roles.GetInjuryReturnMatchday(player);
                 string dangerHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Danger);
-                return $"  <size=80%><color=#{dangerHex}>(Ret. MD{returnMatchday + 1})</color></size>";
+                return $"<color=#{dangerHex}>(Ret. MD{returnMatchday + 1})</color>";
             }
 
             float condition = roles.GetCondition(player);
@@ -5178,7 +5713,7 @@ namespace Manager
                     ? ManagerUITheme.Warning
                     : ManagerUITheme.Danger;
             string conditionHex = ColorUtility.ToHtmlStringRGB(conditionColor);
-            return $"  <size=80%><color=#{conditionHex}>FIT {condition:F0}%</color></size>";
+            return $"<color=#{conditionHex}>{condition:F0}%</color>";
         }
 
         // --- Player Inspect (Prev/Next once inside; entry point jumps straight to a
@@ -5628,6 +6163,15 @@ namespace Manager
             else if (inspectIsAcademyProspect)
             {
                 BuildFocusStatsPicker(rolesBand.transform, player);
+
+                // Manual release (backlog item 8, session 11) - right-anchored on the
+                // same top row as the focus-stats caption, same "action button sits at
+                // the far edge of the band" convention LOAN OUT uses above for an
+                // own-squad player. No confirmation dialog, same precedent as LOAN OUT -
+                // returning to the Academy list is itself the confirmation.
+                Button releaseButton = ManagerUITheme.BuildButton(rolesBand.transform, "RELEASE", ManagerUITheme.CardNeutral, ManagerUITheme.Danger, 13);
+                ManagerUITheme.SetPointAnchor(releaseButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-16f, -4f), new Vector2(110f, 26f));
+                releaseButton.onClick.AddListener(() => OnReleaseAcademyProspectClicked(player));
             }
             else
             {
@@ -7122,8 +7666,134 @@ namespace Manager
             return y + 44f;
         }
 
+        // --- Reusable confirm dialog (backlog items 13 + 15, session 11) - both "you
+        // haven't set a Captain yet" and "are you sure you want to auto-skip the
+        // season" are the same shape: a message + Confirm/Cancel. Built fresh each
+        // time rather than chrome-cached, since content varies per call. ---
+
+        private GameObject confirmDialogPanel;
+
+        private void ShowConfirmDialog(string message, string confirmLabel, System.Action onConfirm, string cancelLabel, System.Action onCancel)
+        {
+            if (confirmDialogPanel != null)
+            {
+                Destroy(confirmDialogPanel);
+            }
+
+            Transform root = titlePanel.transform.parent;
+            confirmDialogPanel = new GameObject("ConfirmDialogPanel", typeof(RectTransform), typeof(Image));
+            confirmDialogPanel.transform.SetParent(root, false);
+            RectTransform panelRect = confirmDialogPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            confirmDialogPanel.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.7f);
+            // Last sibling so it renders above whatever screen is currently active,
+            // regardless of that screen's own build order - same z-order technique as
+            // the Tactics Board warning label.
+            confirmDialogPanel.transform.SetAsLastSibling();
+
+            GameObject card = new GameObject("Card", typeof(RectTransform), typeof(Image));
+            card.transform.SetParent(confirmDialogPanel.transform, false);
+            RectTransform cardRect = card.GetComponent<RectTransform>();
+            cardRect.anchorMin = new Vector2(0.5f, 0.5f);
+            cardRect.anchorMax = new Vector2(0.5f, 0.5f);
+            cardRect.pivot = new Vector2(0.5f, 0.5f);
+            cardRect.sizeDelta = new Vector2(640f, 260f);
+            cardRect.anchoredPosition = Vector2.zero;
+            card.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            GameObject messageObj = new GameObject("Message", typeof(RectTransform));
+            messageObj.transform.SetParent(card.transform, false);
+            RectTransform messageRect = messageObj.GetComponent<RectTransform>();
+            messageRect.anchorMin = new Vector2(0f, 1f);
+            messageRect.anchorMax = new Vector2(1f, 1f);
+            messageRect.pivot = new Vector2(0.5f, 1f);
+            messageRect.anchoredPosition = new Vector2(0f, -40f);
+            messageRect.sizeDelta = new Vector2(-80f, 140f);
+            ManagerUITheme.BuildLabel(messageObj.transform, message, 17, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Normal, noWrap: false);
+
+            Button confirmButton = ManagerUITheme.BuildButton(card.transform, confirmLabel, ManagerUITheme.Accent, ManagerUITheme.OnAccent, 15);
+            ManagerUITheme.SetPointAnchor(confirmButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(-90f, 36f), new Vector2(160f, 48f));
+            confirmButton.onClick.AddListener(() => { CloseConfirmDialog(); onConfirm?.Invoke(); });
+
+            Button cancelButton = ManagerUITheme.BuildButton(card.transform, cancelLabel, ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 15);
+            ManagerUITheme.SetPointAnchor(cancelButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(90f, 36f), new Vector2(160f, 48f));
+            cancelButton.onClick.AddListener(() => { CloseConfirmDialog(); onCancel?.Invoke(); });
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(confirmDialogPanel.transform));
+        }
+
+        private void CloseConfirmDialog()
+        {
+            if (confirmDialogPanel != null)
+            {
+                Destroy(confirmDialogPanel);
+                confirmDialogPanel = null;
+            }
+        }
+
+        // Backlog item 13 (session 11) - warns before the very first match of a new
+        // career specifically if no Captain has been assigned yet, the single highest-
+        // signal proxy for "the manager hasn't visited Tactics at all" (Captain feeds a
+        // real match-strength bonus via ManagerCaptaincyModifier, unlike most of the
+        // other roles). Not a hard block - Continue still starts the match as normal.
+        // Only fires once ever, guarded by hasShownFirstMatchWarning, not on every click
+        // if the manager dismisses it and clicks Simulate Match again.
+        private bool hasShownFirstMatchWarning;
+
+        public void OnSimulateMatchButtonClicked()
+        {
+            if (!hasShownFirstMatchWarning && currentFixtureIndex == 0 && GetOrCreateSquadRoles(managedTeamName).Captain == null)
+            {
+                hasShownFirstMatchWarning = true;
+
+                ShowConfirmDialog(
+                    "You haven't assigned a Captain or set-piece roles yet. This affects match performance. Continue anyway?",
+                    "CONTINUE", OnSimulateMatchClicked,
+                    "GO TO TACTICS", OnFirstMatchWarningGoToTacticsClicked);
+                return;
+            }
+
+            OnSimulateMatchClicked();
+        }
+
+        private void OnFirstMatchWarningGoToTacticsClicked()
+        {
+            // matchdayPrepPanel isn't touched by OnOpenTacticsScreenClicked itself (it
+            // only knows about tacticsBoardPanel/tacticsScreenPanel) - hide it explicitly
+            // so the two screens can't end up stacked. The manager returns to Matchday
+            // Prep the normal way afterward (Hub -> Next Matchday) - currentFixtureIndex
+            // hasn't moved, so nothing is lost by the detour.
+            if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(false);
+            OnOpenTacticsScreenClicked();
+        }
+
+        // Backlog item 15 (session 11) - Thomas: an accidental click currently costs the
+        // whole rest of the season with no way back (see backlog item 10's collapse
+        // finding, which this pairs with). Straightforward confirm-before-irreversible
+        // pattern, same shape as item 13's dialog above.
+        public void OnSimulateSeasonButtonClicked()
+        {
+            ShowConfirmDialog(
+                "Simulate the rest of the season automatically? This can't be undone.",
+                "SIMULATE SEASON", OnSimulateSeasonClicked,
+                "CANCEL", null);
+        }
+
         public void OnSimulateMatchClicked()
         {
+            // Mentality has no pre-match picker (the Attacking/Balanced/Defensive buttons
+            // only exist in the live match footer, see matchLiveOnlyElements) - so whatever
+            // was left active at the end of the previous match (including a live change
+            // made late on) would otherwise silently carry into this match's expected-goals
+            // calc below, before the manager gets any chance to see or choose it again.
+            // Reset here, before SimulateFixture uses selectedMentality, not after (where
+            // matchSubsLog.Clear() sits below) - resetting after would still let this match
+            // kick off on the stale value and only take effect from the match after.
+            selectedMentality = ManagerMentality.Balanced;
+
             AgentMatchSimulator.AgentMatchResult result = SimulateFixture(currentFixture);
 
             lastSimulatedResult = result;
@@ -7152,6 +7822,7 @@ namespace Manager
             if (scoreText != null) scoreText.fontSize = 52;
             SetMentality(selectedMentality); // re-highlights the correct footer pill for this screen
             matchSubsLog.Clear();
+            playersSubbedOffThisMatch.Clear();
             RefreshMatchSubsMadeList();
             if (matchFullTimeCaptionGroup != null) matchFullTimeCaptionGroup.SetActive(false);
 
@@ -7236,7 +7907,10 @@ namespace Manager
             {
                 OpenFootballMatch fixture = managedTeamFixtures[currentFixtureIndex];
 
-                ApplyFixtureResult(fixture, SimulateFixture(fixture));
+                // isAutoResolved: true (backlog item 10) - see ApplyMatchdayConditionAndInjuries
+                // and SimulateFixture's own comments for why only Condition/injury are
+                // neutralized here, not morale/form/development.
+                ApplyFixtureResult(fixture, SimulateFixture(fixture, isAutoResolved: true));
                 SimulateOtherFixturesInMatchday(fixture.Matchday);
 
                 currentFixtureIndex++;
@@ -7437,7 +8111,7 @@ namespace Manager
         // Applies the mentality modifier only when the managed club is actually playing
         // in this fixture - other clubs' matches against each other use the plain
         // predicted expected goals with no modifier.
-        private AgentMatchSimulator.AgentMatchResult SimulateFixture(OpenFootballMatch fixture)
+        private AgentMatchSimulator.AgentMatchResult SimulateFixture(OpenFootballMatch fixture, bool isAutoResolved = false)
         {
             AgentTeam homeTeam = GetOrCreateAgentTeam(fixture.HomeTeam);
             AgentTeam awayTeam = GetOrCreateAgentTeam(fixture.AwayTeam);
@@ -7459,10 +8133,14 @@ namespace Manager
             // every starter is already a perfect fit for their slot, and conditionLookup
             // stays null since AI teams have no Condition tracking); only matters once
             // the managed team's XI has anyone out of position or under-conditioned.
-            Func<PlayerAgent, float> homeConditionLookup = fixture.HomeTeam == managedTeamName
+            // isAutoResolved (backlog item 10) - during a SIMULATE SEASON skip, lean on
+            // team-strength alone rather than feeding possibly-stale, un-recoverable
+            // Condition into this match's fit-adjusted strength - see
+            // ApplyMatchdayConditionAndInjuries's own comment for the full reasoning.
+            Func<PlayerAgent, float> homeConditionLookup = (fixture.HomeTeam == managedTeamName && !isAutoResolved)
                 ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p))
                 : null;
-            Func<PlayerAgent, float> awayConditionLookup = fixture.AwayTeam == managedTeamName
+            Func<PlayerAgent, float> awayConditionLookup = (fixture.AwayTeam == managedTeamName && !isAutoResolved)
                 ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p))
                 : null;
 
@@ -7479,11 +8157,11 @@ namespace Manager
             // oversight (see HANDOFF).
             if (fixture.HomeTeam == managedTeamName)
             {
-                ApplyMatchdayConditionAndInjuries(homeTeam);
+                ApplyMatchdayConditionAndInjuries(homeTeam, isAutoResolved);
             }
             else if (fixture.AwayTeam == managedTeamName)
             {
-                ApplyMatchdayConditionAndInjuries(awayTeam);
+                ApplyMatchdayConditionAndInjuries(awayTeam, isAutoResolved);
             }
 
             StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(fixture);
@@ -7628,7 +8306,21 @@ namespace Manager
             OnInspectBackClicked();
         }
 
-        private void ApplyMatchdayConditionAndInjuries(AgentTeam team)
+        // isAutoResolved (backlog item 10, session 11) - Thomas's real test: won his
+        // first 3 individually-played matches with Liverpool, hit SIMULATE SEASON for
+        // the rest, finished 15th. Root cause traced here: Condition decay and injury
+        // rolls compound every auto-resolved match with zero manager mitigation (no
+        // rest, no rotation, no tactical response - none of that is even possible
+        // during a skip), and SimulateFixture's homeConditionLookup/awayConditionLookup
+        // then feeds that same un-recovered fatigue into THIS match's fit-adjusted
+        // strength, producing a genuine unrealistic performance spiral, not just a
+        // cosmetic number. Only Condition/injury are gated here - development
+        // (RecordAppearance, ApplyMatchdayProgression) stays unconditional, since a
+        // skipped season should still let players grow normally; morale/form are
+        // deliberately left alone too (see OnSimulateSeasonClicked's own comment on
+        // why - they only ever affect development speed, never match performance, so
+        // neutralizing them wouldn't touch the actual collapse symptom at all).
+        private void ApplyMatchdayConditionAndInjuries(AgentTeam team, bool isAutoResolved = false)
         {
             ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
 
@@ -7641,12 +8333,19 @@ namespace Manager
                 bool played = minutesPlayed > 0f;
                 float preMatchCondition = roles.GetCondition(player);
 
-                roles.ApplyPostMatchCondition(player, minutesPlayed, player.Age, player.Stamina);
+                if (!isAutoResolved)
+                {
+                    roles.ApplyPostMatchCondition(player, minutesPlayed, player.Age, player.Stamina);
+                }
 
                 if (played)
                 {
                     roles.RecordAppearance(player);
-                    TryRollInjury(roles, player, preMatchCondition);
+
+                    if (!isAutoResolved)
+                    {
+                        TryRollInjury(roles, player, preMatchCondition);
+                    }
                 }
 
                 // Per-matchday development tick (session 9 backlog item) - same hook
@@ -7729,6 +8428,7 @@ namespace Manager
             liveHomeGoalsSoFar = 0;
             liveAwayGoalsSoFar = 0;
             matchSubsLog.Clear();
+            playersSubbedOffThisMatch.Clear();
             RefreshMatchSubsMadeList();
 
             // Explicit flag rather than inferring "live" from panel active-states -
@@ -7843,6 +8543,18 @@ namespace Manager
                     // tail events flow through this exact loop and get rated normally -
                     // no special-casing needed.
                     matchRatings.ApplyEvent(matchEvent);
+                    RefreshMatchRatingsGrid();
+                }
+
+                // Ambient drift (session 11, backlog item 7) - Thomas: a player sitting at
+                // the same rating for a full 90 minutes reads as broken, not calm. Every 5
+                // match-minutes regardless of whether an event happened this minute, so a
+                // player who's on the pitch but never directly involved in a discrete
+                // chance still shows some natural movement. See ManagerMatchRatings.
+                // ApplyAmbientTick's own comment for the tuning reasoning.
+                if (minute % 5 == 0)
+                {
+                    matchRatings.ApplyAmbientTick();
                     RefreshMatchRatingsGrid();
                 }
             }

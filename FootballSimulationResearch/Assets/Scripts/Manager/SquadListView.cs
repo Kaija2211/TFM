@@ -71,13 +71,20 @@ namespace Manager
             spawnedRows.Add(BuildSectionHeader(label));
         }
 
-        // --- Grid rows (Pos/Player/OVR/Rating) - used by the Squad screen (clickable,
+        // --- Grid rows (Pos/Player/OVR/Fit/Rating) - used by the Squad screen (clickable,
         // reaches Player Detail) and Matchday Prep's read-only opponent scout list
         // (onRowClicked null -> no Button at all, purely informational). Column-fraction
         // technique mirrored from LeagueTableView.BuildRow, since both lists share the
         // same "fixed columns across the row's own width" grid shape.
-        private static readonly float[] GridColumnFractions = { 0.08f, 0.50f, 0.14f, 0.28f };
-        private static readonly string[] GridColumnHeaders = { "POS", "PLAYER", "OVR", "RATING" };
+        //
+        // FIT column added session 11 (backlog item 3) - it used to be plain text
+        // concatenated onto the end of the Player name (see BuildPlayerGridRow's old
+        // badgeSuffix-only signature), so its horizontal position drifted with every
+        // name's length instead of lining up in a clean column. Role badges (captain/
+        // vice/etc.) stay inline with the name via badgeSuffix - only FIT/injury-return
+        // status, the specific thing flagged as misaligned, moved to its own column.
+        private static readonly float[] GridColumnFractions = { 0.08f, 0.38f, 0.14f, 0.12f, 0.28f };
+        private static readonly string[] GridColumnHeaders = { "POS", "PLAYER", "OVR", "FIT", "RATING" };
 
         public void AddGridHeaderRow()
         {
@@ -88,11 +95,14 @@ namespace Manager
         // badgeSuffix is appended straight to the player name cell as TMP rich text (e.g.
         // role badges like " <color=...>C VC</color>" - see ManagerPrototypeController.
         // BuildRoleBadgeSuffix) - empty by default so callers that don't care about roles
-        // are unaffected.
-        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false)
+        // are unaffected. fitText is rendered in its own dedicated FIT column instead
+        // (see ManagerPrototypeController.BuildFitnessBadgeSuffix) - kept separate from
+        // badgeSuffix specifically so it lines up in a real column rather than drifting
+        // with each player name's length.
+        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false, string fitText = "")
         {
             EnsureLayoutComponents();
-            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix, isInjured));
+            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix, isInjured, fitText));
         }
 
         // Generic N-column grid row/header - unlike the fixed Pos/Player/OVR/Rating grid
@@ -158,7 +168,7 @@ namespace Manager
             return row;
         }
 
-        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false)
+        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false, string fitText = "")
         {
             bool clickable = onRowClicked != null;
 
@@ -235,12 +245,17 @@ namespace Manager
             BuildGridCell(row.transform, x, GridColumnFractions[2], displayRating.ToString(), fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
             x += GridColumnFractions[2];
 
+            // Fit - its own column (session 11, backlog item 3) instead of text tacked
+            // onto the end of the name, which drifted with each name's length.
+            BuildGridCell(row.transform, x, GridColumnFractions[3], fitText, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            x += GridColumnFractions[3];
+
             // Rating bar
             GameObject barContainer = new GameObject("RatingBar", typeof(RectTransform));
             barContainer.transform.SetParent(row.transform, false);
             RectTransform barRect = barContainer.GetComponent<RectTransform>();
             barRect.anchorMin = new Vector2(x, 0.5f);
-            barRect.anchorMax = new Vector2(x + GridColumnFractions[3], 0.5f);
+            barRect.anchorMax = new Vector2(x + GridColumnFractions[4], 0.5f);
             barRect.offsetMin = new Vector2(10f, 0f);
             barRect.offsetMax = new Vector2(-10f, 0f);
             ManagerUITheme.BuildBar(barContainer.transform, ratingPercent, ManagerUITheme.Accent, height: 7f);

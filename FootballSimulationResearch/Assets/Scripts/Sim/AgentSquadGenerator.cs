@@ -361,8 +361,17 @@ namespace Sim
             // an ambiguous CS0104 (see feedback_random_namespace_ambiguity).
             player.PlayerId = System.Guid.NewGuid().ToString();
 
-            float attackMultiplier = Mathf.Lerp(1f, attackStrength, 0.35f);
-            float defenceMultiplier = Mathf.Lerp(1f, 1f / defenceStrength, 0.35f);
+            // Strengthened from 0.35 (session 11, explicit authorization) - the old
+            // damping meant even a genuinely elite attacking side (e.g. real trained
+            // AttackStrength ~1.5, 50% more goals than league average) only pulled
+            // starting XI attributes ~18% of the way toward that strength, capping
+            // top-club starters in the low-to-mid 70s Overall - Thomas wanted Liverpool's
+            // actual XI to mostly read 80+ on its own honest GetOverallRating(), not via
+            // a display-layer stretch. Calibrated empirically via TEMP_TestSquadStrength
+            // (see session 11 handoff/memory for full before/after numbers and the
+            // Research Mode goals/match re-check this required).
+            float attackMultiplier = Mathf.Lerp(1f, attackStrength, 0.75f);
+            float defenceMultiplier = Mathf.Lerp(1f, 1f / defenceStrength, 0.75f);
 
             ApplyBaseAttributes(player);
 

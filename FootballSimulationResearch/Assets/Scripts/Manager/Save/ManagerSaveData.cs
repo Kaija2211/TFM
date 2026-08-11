@@ -163,6 +163,10 @@ namespace Manager.Save
         public bool IsChampion;
         public float PrizeMoney;
         public float BoardBoost;
+        public int Wins;
+        public int Draws;
+        public int Losses;
+        public int Points;
     }
 
     // TeamName renamed to Region (world-scattered scouting rework, session 9) - scouted
@@ -205,6 +209,8 @@ namespace Manager.Save
         public List<PlayerAgentSaveData> ManagedReservePool = new();
         public ManagerSquadRolesSaveData ManagedRoles;
         public float ManagedBudget;
+        public float ManagedTotalTransferSpend;
+        public float ManagedTotalTransferIncome;
         public List<SeasonRecordSaveData> CareerHistory = new();
         public List<YouthPoolSaveData> YouthPools = new();
         public List<string> ScoutedPlayerIds = new();

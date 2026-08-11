@@ -106,6 +106,25 @@ namespace Manager
             }
         }
 
+        // Ambient drift (session 11, backlog item 7) - a player on the pitch the whole
+        // match but never directly involved in a rated event (ApplyEvent only fires for
+        // genuine chances - general buildup/passing never touches a rating) used to sit
+        // dead flat at BaseRating for all 90 minutes, reading as broken/frozen rather
+        // than calm. Called periodically (every few match-minutes, see
+        // ReplayMatchCoroutine) for every currently-tracked player regardless of event
+        // involvement - small, mildly positive-biased random noise so a rating drifts
+        // naturally over the match instead of only ever moving via a discrete event.
+        public void ApplyAmbientTick()
+        {
+            List<string> names = new List<string>(ratingByPlayerName.Keys);
+
+            foreach (string name in names)
+            {
+                float drift = Random.Range(-0.04f, 0.06f);
+                ratingByPlayerName[name] = Mathf.Clamp(ratingByPlayerName[name] + drift, MinRating, MaxRating);
+            }
+        }
+
         private void Add(string playerName, float delta)
         {
             if (string.IsNullOrEmpty(playerName) || !ratingByPlayerName.ContainsKey(playerName))

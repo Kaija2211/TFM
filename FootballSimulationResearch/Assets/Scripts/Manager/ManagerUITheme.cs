@@ -274,6 +274,12 @@ namespace Manager
 
             BuildLabel(buttonObject.transform, label, fontSize, textColor, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
 
+            // Click SFX (backlog item 11, session 11) - every button built through this
+            // one shared factory gets it automatically; ManagerPrototypeController.Start
+            // wires the same sound onto the handful of Editor-placed buttons that don't
+            // go through here.
+            button.onClick.AddListener(ManagerAudio.PlayClick);
+
             return button;
         }
 
