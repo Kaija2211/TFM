@@ -83,13 +83,19 @@ namespace Manager
         // name's length instead of lining up in a clean column. Role badges (captain/
         // vice/etc.) stay inline with the name via badgeSuffix - only FIT/injury-return
         // status, the specific thing flagged as misaligned, moved to its own column.
-        private static readonly float[] GridColumnFractions = { 0.08f, 0.38f, 0.14f, 0.12f, 0.28f };
-        private static readonly string[] GridColumnHeaders = { "POS", "PLAYER", "OVR", "FIT", "RATING" };
+        // AGE/VALUE added session 12 (backlog item, Thomas: "sortable by Overall/Age/
+        // Transfer Value") - Transfer Value wasn't a column at all before this.
+        private static readonly float[] GridColumnFractions = { 0.06f, 0.26f, 0.07f, 0.08f, 0.10f, 0.13f, 0.30f };
+        private static readonly string[] GridColumnHeaders = { "POS", "PLAYER", "AGE", "OVR", "FIT", "VALUE", "RATING" };
 
-        public void AddGridHeaderRow()
+        // onColumnClicked/activeSortColumn/sortDescending optional (default: no sorting) -
+        // same shape as AddCustomGridHeaderRow's sort-indicator convention, added session
+        // 12 for the Squad screen. Matchday Prep's read-only opponent list (the only other
+        // caller of this fixed-grid pair) just omits them, unaffected.
+        public void AddGridHeaderRow(Action<int> onColumnClicked = null, int activeSortColumn = -1, bool sortDescending = false)
         {
             EnsureLayoutComponents();
-            spawnedRows.Add(BuildGridHeaderRow());
+            spawnedRows.Add(BuildGridHeaderRow(onColumnClicked, activeSortColumn, sortDescending));
         }
 
         // badgeSuffix is appended straight to the player name cell as TMP rich text (e.g.
@@ -99,10 +105,13 @@ namespace Manager
         // (see ManagerPrototypeController.BuildFitnessBadgeSuffix) - kept separate from
         // badgeSuffix specifically so it lines up in a real column rather than drifting
         // with each player name's length.
-        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false, string fitText = "")
+        // ageText/valueText default to empty so Matchday Prep's opponent list (which
+        // doesn't need to sort by them) can keep calling this without changes - an empty
+        // cell just renders blank in those two columns rather than breaking.
+        public void AddPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false, string fitText = "", string ageText = "", string valueText = "")
         {
             EnsureLayoutComponents();
-            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix, isInjured, fitText));
+            spawnedRows.Add(BuildPlayerGridRow(player, position, displayRating, ratingPercent, onRowClicked, badgeSuffix, isInjured, fitText, ageText, valueText));
         }
 
         // Generic N-column grid row/header - unlike the fixed Pos/Player/OVR/Rating grid
@@ -138,7 +147,7 @@ namespace Manager
             spawnedRows.Add(BuildCustomGridRow(player, cellTexts, columnFractions, onRowClicked, onNameClicked));
         }
 
-        private GameObject BuildGridHeaderRow()
+        private GameObject BuildGridHeaderRow(Action<int> onColumnClicked, int activeSortColumn, bool sortDescending)
         {
             GameObject row = new GameObject("GridHeader", typeof(RectTransform), typeof(LayoutElement));
             row.transform.SetParent(rowContainer, false);
@@ -151,16 +160,27 @@ namespace Manager
 
             for (int i = 0; i < GridColumnHeaders.Length; i++)
             {
-                GameObject cell = new GameObject($"HeaderCell_{i}", typeof(RectTransform));
-                cell.transform.SetParent(row.transform, false);
+                bool isActiveSortColumn = i == activeSortColumn;
+                string text = isActiveSortColumn ? $"{GridColumnHeaders[i]} {(sortDescending ? "v" : "^")}" : GridColumnHeaders[i];
+                Color color = isActiveSortColumn ? ManagerUITheme.Accent : ManagerUITheme.TextMuted;
 
-                RectTransform cellRect = cell.GetComponent<RectTransform>();
-                cellRect.anchorMin = new Vector2(x, 0f);
-                cellRect.anchorMax = new Vector2(x + GridColumnFractions[i], 1f);
-                cellRect.offsetMin = new Vector2(10f, 0f);
-                cellRect.offsetMax = new Vector2(-10f, 0f);
+                if (onColumnClicked != null)
+                {
+                    BuildClickableHeaderCell(row.transform, x, GridColumnFractions[i], text, color, i, onColumnClicked);
+                }
+                else
+                {
+                    GameObject cell = new GameObject($"HeaderCell_{i}", typeof(RectTransform));
+                    cell.transform.SetParent(row.transform, false);
 
-                ManagerUITheme.BuildLabel(cell.transform, GridColumnHeaders[i], 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                    RectTransform cellRect = cell.GetComponent<RectTransform>();
+                    cellRect.anchorMin = new Vector2(x, 0f);
+                    cellRect.anchorMax = new Vector2(x + GridColumnFractions[i], 1f);
+                    cellRect.offsetMin = new Vector2(10f, 0f);
+                    cellRect.offsetMax = new Vector2(-10f, 0f);
+
+                    ManagerUITheme.BuildLabel(cell.transform, text, 12, color, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                }
 
                 x += GridColumnFractions[i];
             }
@@ -168,7 +188,7 @@ namespace Manager
             return row;
         }
 
-        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix = "", bool isInjured = false, string fitText = "")
+        private GameObject BuildPlayerGridRow(PlayerAgent player, string position, int displayRating, float ratingPercent, Action<PlayerAgent> onRowClicked, string badgeSuffix, bool isInjured, string fitText, string ageText, string valueText)
         {
             bool clickable = onRowClicked != null;
 
@@ -241,21 +261,29 @@ namespace Manager
 
             x += GridColumnFractions[1];
 
-            // OVR
-            BuildGridCell(row.transform, x, GridColumnFractions[2], displayRating.ToString(), fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            // Age (session 12 backlog item)
+            BuildGridCell(row.transform, x, GridColumnFractions[2], ageText, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
             x += GridColumnFractions[2];
+
+            // OVR
+            BuildGridCell(row.transform, x, GridColumnFractions[3], displayRating.ToString(), fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            x += GridColumnFractions[3];
 
             // Fit - its own column (session 11, backlog item 3) instead of text tacked
             // onto the end of the name, which drifted with each name's length.
-            BuildGridCell(row.transform, x, GridColumnFractions[3], fitText, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
-            x += GridColumnFractions[3];
+            BuildGridCell(row.transform, x, GridColumnFractions[4], fitText, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            x += GridColumnFractions[4];
+
+            // Transfer Value (session 12 backlog item)
+            BuildGridCell(row.transform, x, GridColumnFractions[5], valueText, fontSize, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+            x += GridColumnFractions[5];
 
             // Rating bar
             GameObject barContainer = new GameObject("RatingBar", typeof(RectTransform));
             barContainer.transform.SetParent(row.transform, false);
             RectTransform barRect = barContainer.GetComponent<RectTransform>();
             barRect.anchorMin = new Vector2(x, 0.5f);
-            barRect.anchorMax = new Vector2(x + GridColumnFractions[4], 0.5f);
+            barRect.anchorMax = new Vector2(x + GridColumnFractions[6], 0.5f);
             barRect.offsetMin = new Vector2(10f, 0f);
             barRect.offsetMax = new Vector2(-10f, 0f);
             ManagerUITheme.BuildBar(barContainer.transform, ratingPercent, ManagerUITheme.Accent, height: 7f);

@@ -31,7 +31,7 @@ namespace Manager
         private void SetUpAudio()
         {
             AudioClip musicClip = Resources.Load<AudioClip>("Music & Sound/anton_vlasov-slow-trap-18565");
-            AudioClip clickClip = Resources.Load<AudioClip>("Music & Sound/aceeldon-click-button-578399");
+            AudioClip clickClip = Resources.Load<AudioClip>("Music & Sound/buttonclicksound");
 
             musicSource = gameObject.AddComponent<AudioSource>();
             musicSource.clip = musicClip;
@@ -57,7 +57,7 @@ namespace Manager
 
             if (clickClip == null)
             {
-                Debug.LogWarning("ManagerAudio: click SFX clip not found at Resources/Music & Sound/aceeldon-click-button-578399.");
+                Debug.LogWarning("ManagerAudio: click SFX clip not found at Resources/Music & Sound/buttonclicksound.");
             }
         }
 
@@ -81,6 +81,24 @@ namespace Manager
             {
                 instance.clickSource.PlayOneShot(instance.clickSource.clip);
             }
+        }
+
+        // Settings screen music toggle (backlog item, session 12). Mute rather than
+        // Stop/Play - keeps the loop's playback position intact so turning music back on
+        // resumes where it left off instead of restarting the track. Click SFX is
+        // deliberately unaffected - the ask was specifically "music on/off", not a master
+        // mute.
+        public static void SetMusicEnabled(bool enabled)
+        {
+            if (instance != null && instance.musicSource != null)
+            {
+                instance.musicSource.mute = !enabled;
+            }
+        }
+
+        public static bool IsMusicEnabled()
+        {
+            return instance == null || instance.musicSource == null || !instance.musicSource.mute;
         }
     }
 }

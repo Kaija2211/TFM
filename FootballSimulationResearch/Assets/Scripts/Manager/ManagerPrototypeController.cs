@@ -203,6 +203,28 @@ namespace Manager
         private bool teamGridBuilt;
         private List<Button> teamGridButtons = new();
 
+        // Settings screen (backlog item, session 12) - reachable from both Title and Hub
+        // (each had its own disabled SETTINGS placeholder), so Back returns to whichever
+        // one it was actually opened from rather than a fixed screen.
+        private GameObject settingsPanel;
+        private bool settingsScreenBuilt;
+        private GameObject settingsReturnPanel;
+        private readonly List<GameObject> spawnedSettingsRows = new();
+
+        // Multiplier-framed (Thomas: "x1, x1.5, x2... and the other direction as well") -
+        // labels are honest multipliers of matchReplayDurationSeconds' own ACTUAL current
+        // value. Corrected 2026-08-11 (session 12, live bug report - "match speed is on
+        // x0.5 on default... should be on x1 no?"): the field's C# declaration defaults to
+        // 60f, but the scene's own serialized SerializeField value overrides that to 45 -
+        // the true value every session has actually been running Match Day at, which the
+        // first build of this array never checked for and assumed was 60. x1 now
+        // correctly anchors on the real 45s; the fastest option still respects Thomas's
+        // explicit "30 seconds max" cap (45/1.5 = 30 exactly, so x2 no longer fits under
+        // that cap and was dropped down to x1.5).
+        private static readonly float[] MatchSpeedSecondsOptions = { 90f, 60f, 45f, 30f };
+        private static readonly string[] MatchSpeedLabels = { "x0.5", "x0.75", "x1", "x1.5" };
+        private const int MatchSpeedDefaultIndex = 2;
+
         // Populated from the season file itself, so the list is always exactly the
         // clubs actually playing this season - no separately maintained team list.
         private List<string> availableTeamNames = new();
@@ -260,6 +282,7 @@ namespace Manager
         // (moved off Player Detail) alongside the new tactical sliders.
         private bool tacticsScreenChromeBuilt;
         private GameObject tacticsScreenPanel;
+        private Button tacticsScreenBackButton;
         private readonly List<GameObject> spawnedTacticsScreenElements = new();
         private readonly List<GameObject> tacticsScreenOpenDropdowns = new();
 
@@ -277,6 +300,14 @@ namespace Manager
         private GameObject squadBrowsePanel;
         private TextMeshProUGUI squadBrowseByline;
         private SquadListView squadBrowseListView;
+
+        // Sortable Squad columns (backlog item, session 12, Thomas: "sortable by
+        // Overall/Age/Transfer Value") - same -1/descending-first convention as
+        // scoutingSortColumn. Sorts Starting XI and Bench independently rather than
+        // flattening them into one list, since the section split itself is meaningful
+        // (who's actually selected vs who isn't).
+        private int squadSortColumn = -1;
+        private bool squadSortDescending = true;
 
         // Set inside SimulateFixture and reused if an in-match substitution requires
         // resimulating the remainder of the match with the same underlying prediction.
@@ -311,6 +342,14 @@ namespace Manager
         // no separate off-then-on picker flow or per-match sub limit anymore. ---
         private bool tacticsBoardOpenedMidMatch;
         private readonly List<(string offName, string offPosition, string onName, string onPosition, int minute)> matchSubsLog = new();
+
+        // Tactics screen is normally reached via the Tactics Board's "TACTICS" button, so
+        // its Back/Save buttons return there by default. The first-match Captain warning's
+        // "GO TO TACTICS" shortcut (OnFirstMatchWarningGoToTacticsClicked) instead jumps
+        // straight there from Matchday Prep without ever opening the board - without this
+        // flag, Back would try to reactivate a tacticsBoardPanel that was never built this
+        // session (null), leaving both panels inactive and the screen blank.
+        private bool tacticsScreenOpenedFromMatchdayPrep;
 
         // Real football doesn't let a substituted-off player return - tracks who's
         // actually left the pitch via a genuine mid-match sub this match (session 10
@@ -542,6 +581,18 @@ namespace Manager
             // live) - splashPanel renders in front regardless since it's created later
             // (later sibling), but explicitly hiding Title here avoids any doubt.
             if (titlePanel != null) titlePanel.SetActive(false);
+
+            // seasonHubPanel ALSO starts active by the scene's own Editor default (an
+            // older leftover from before Title/Splash existed) - unlike titlePanel above,
+            // nothing was hiding it here, so it sat active-but-covered behind splashPanel
+            // for the whole fade-in/hold, then genuinely bled through during the fade-OUT
+            // as splashPanel's own alpha dropped toward 0 (confirmed live: Thomas saw the
+            // real dark-navy Hub panel + "View Squad / Table" button flash through, not an
+            // empty scene). ShowTitleScreen() already hides seasonHubPanel too, but that
+            // only runs at the very end of AdvanceFromSplashToTitle - too late to prevent
+            // this.
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+
             if (splashPanel != null) splashPanel.SetActive(true);
             if (splashCanvasGroup != null) splashCanvasGroup.alpha = 0f;
 
@@ -842,7 +893,10 @@ namespace Manager
             Button settingsButton = settingsObj.GetComponent<Button>();
             settingsButton.targetGraphic = settingsObj.GetComponent<Image>();
             ManagerUITheme.BuildLabel(settingsObj.transform, "SETTINGS", 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
-            ManagerUITheme.SetDisabledPlaceholder(settingsButton, "SETTINGS");
+            // Real now (backlog item, session 12) - was a disabled placeholder with no
+            // settings screen at all.
+            settingsButton.onClick.AddListener(() => OnOpenSettingsClicked(titlePanel));
+            settingsButton.onClick.AddListener(ManagerAudio.PlayClick);
 
             GameObject exitObj = new GameObject("ExitButton", typeof(RectTransform), typeof(Image), typeof(Button));
             exitObj.transform.SetParent(titleContentContainer, false);
@@ -853,6 +907,103 @@ namespace Manager
             ManagerUITheme.BuildLabel(exitObj.transform, "EXIT", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
             exitButton.onClick.AddListener(OnTitleExitClicked);
             exitButton.onClick.AddListener(ManagerAudio.PlayClick);
+        }
+
+        // --- Settings screen (backlog item, session 12) - reached from either Title's or
+        // the Hub's SETTINGS button, both previously disabled placeholders. Music on/off
+        // and match sim speed, the two contents actually proposed for it. Code-built, same
+        // precedent as every other screen added post-launch. ---
+
+        public void OnOpenSettingsClicked(GameObject returnPanel)
+        {
+            if (!settingsScreenBuilt)
+            {
+                BuildSettingsScreenChrome();
+                settingsScreenBuilt = true;
+            }
+
+            settingsReturnPanel = returnPanel;
+            if (returnPanel != null) returnPanel.SetActive(false);
+            if (settingsPanel != null) settingsPanel.SetActive(true);
+
+            RefreshSettingsUI();
+        }
+
+        public void OnSettingsBackClicked()
+        {
+            if (settingsPanel != null) settingsPanel.SetActive(false);
+            if (settingsReturnPanel != null) settingsReturnPanel.SetActive(true);
+        }
+
+        private void BuildSettingsScreenChrome()
+        {
+            if (titlePanel == null || titlePanel.transform.parent == null)
+            {
+                return;
+            }
+
+            settingsPanel = new GameObject("SettingsPanel", typeof(RectTransform));
+            settingsPanel.transform.SetParent(titlePanel.transform.parent, false);
+            RectTransform panelRect = settingsPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(settingsPanel);
+            ManagerUITheme.ApplyDiagonalGradientBackground(settingsPanel, ManagerUITheme.Background, ManagerUITheme.GradientEnd);
+
+            const float headerHeight = 90f;
+            GameObject header = ManagerUITheme.BuildAccentBand(settingsPanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -28f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "SETTINGS", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            Button backButton = ManagerUITheme.BuildButton(settingsPanel.transform, "BACK", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(150f, 36f));
+            backButton.onClick.AddListener(OnSettingsBackClicked);
+            backButton.onClick.AddListener(ManagerAudio.PlayClick);
+
+            settingsPanel.SetActive(false);
+        }
+
+        private void RefreshSettingsUI()
+        {
+            if (settingsPanel == null)
+            {
+                return;
+            }
+
+            foreach (GameObject row in spawnedSettingsRows)
+            {
+                if (row != null) Destroy(row);
+            }
+            spawnedSettingsRows.Clear();
+
+            GameObject content = new GameObject("SettingsContent", typeof(RectTransform));
+            content.transform.SetParent(settingsPanel.transform, false);
+            RectTransform contentRect = content.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0.5f, 1f);
+            contentRect.anchorMax = new Vector2(0.5f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.sizeDelta = new Vector2(760f, 300f);
+            contentRect.anchoredPosition = new Vector2(0f, -150f);
+            spawnedSettingsRows.Add(content);
+
+            int musicIndex = ManagerAudio.IsMusicEnabled() ? 0 : 1;
+            BuildSliderRow(content.transform, "MUSIC", 0f, new[] { "ON", "OFF" }, musicIndex,
+                index => { ManagerAudio.SetMusicEnabled(index == 0); RefreshSettingsUI(); });
+
+            // Falls back to x1 (not index 0/slowest) if the current value somehow isn't an
+            // exact match for any option - the exact bug just fixed above, guarded against
+            // recurring the same way if this field is ever hand-edited again.
+            int speedIndexRaw = System.Array.IndexOf(MatchSpeedSecondsOptions, matchReplayDurationSeconds);
+            int speedIndex = speedIndexRaw >= 0 ? speedIndexRaw : MatchSpeedDefaultIndex;
+            BuildSliderRow(content.transform, "MATCH SPEED", 90f, MatchSpeedLabels, speedIndex,
+                index => { matchReplayDurationSeconds = MatchSpeedSecondsOptions[index]; RefreshSettingsUI(); });
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(settingsPanel.transform));
         }
 
         // See BuildTitleScreenContent's call site - recovers a label that came out of
@@ -1757,7 +1908,11 @@ namespace Manager
             Button settingsButton = settingsObj.GetComponent<Button>();
             settingsButton.targetGraphic = settingsObj.GetComponent<Image>();
             ManagerUITheme.BuildLabel(settingsObj.transform, "SETTINGS", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
-            ManagerUITheme.SetDisabledPlaceholder(settingsButton, "SETTINGS");
+            // Real now (backlog item, session 12) - was a disabled placeholder with no
+            // settings screen at all, same as Title's own Settings button above.
+            StyleHubActionButton(settingsButton);
+            settingsButton.onClick.AddListener(() => OnOpenSettingsClicked(seasonHubPanel));
+            settingsButton.onClick.AddListener(ManagerAudio.PlayClick);
 
             if (exitToTitleButton != null)
             {
@@ -2852,7 +3007,13 @@ namespace Manager
             scrollRect.horizontal = false;
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
-            scrollRect.scrollSensitivity = 1f;
+            // +1 was the direction fix (negative sensitivity scrolled backwards - see the
+            // Match Events scroll view's own comment for the measured proof of that), but
+            // magnitude 1 itself is Unity's stock default and reads as sluggish on this
+            // project's 1920x1080-reference-resolution lists (backlog item, session 12,
+            // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
+            // correct direction) while moving content a comfortable amount per wheel notch.
+            scrollRect.scrollSensitivity = 25f;
 
             GameObject scrollbarObj = new GameObject("ScoutingScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
             scrollbarObj.transform.SetParent(scoutingPanel.transform, false);
@@ -3289,7 +3450,13 @@ namespace Manager
             scrollRect.horizontal = false;
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
-            scrollRect.scrollSensitivity = 1f;
+            // +1 was the direction fix (negative sensitivity scrolled backwards - see the
+            // Match Events scroll view's own comment for the measured proof of that), but
+            // magnitude 1 itself is Unity's stock default and reads as sluggish on this
+            // project's 1920x1080-reference-resolution lists (backlog item, session 12,
+            // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
+            // correct direction) while moving content a comfortable amount per wheel notch.
+            scrollRect.scrollSensitivity = 25f;
 
             GameObject scrollbarObj = new GameObject("TransferScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
             scrollbarObj.transform.SetParent(transferMarketPanel.transform, false);
@@ -3854,7 +4021,13 @@ namespace Manager
             scrollRect.horizontal = false;
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
-            scrollRect.scrollSensitivity = 1f;
+            // +1 was the direction fix (negative sensitivity scrolled backwards - see the
+            // Match Events scroll view's own comment for the measured proof of that), but
+            // magnitude 1 itself is Unity's stock default and reads as sluggish on this
+            // project's 1920x1080-reference-resolution lists (backlog item, session 12,
+            // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
+            // correct direction) while moving content a comfortable amount per wheel notch.
+            scrollRect.scrollSensitivity = 25f;
 
             StartCoroutine(RecoverBlankLabelsNextFrame(trophyRoomPanel.transform));
         }
@@ -3933,13 +4106,29 @@ namespace Manager
         {
             spawnedTrophyRoomRows.Add(BuildCareerRecordHeaderRow());
 
+            // Live in-progress row (backlog item, session 12, Thomas: Record should show
+            // the current season live, not just completed ones). SeasonRecord/
+            // careerHistory only ever gets a row once ApplySeasonEndRewards runs at
+            // rollover - mid-season there was nothing here for the season actually being
+            // played. Sourced straight from playableTable, the same live table the Hub's
+            // own league position already reads from - no new tracking needed.
+            GameObject liveRow = BuildLiveCareerRecordRow();
+            if (liveRow != null)
+            {
+                spawnedTrophyRoomRows.Add(liveRow);
+            }
+
             if (careerHistory.Records.Count == 0)
             {
-                GameObject emptyObj = new GameObject("EmptyState", typeof(RectTransform), typeof(LayoutElement));
-                emptyObj.transform.SetParent(trophyRoomContentContainer, false);
-                emptyObj.GetComponent<LayoutElement>().preferredHeight = 60f;
-                ManagerUITheme.BuildLabel(emptyObj.transform, "No seasons completed yet - finish your first season to start the history.", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
-                spawnedTrophyRoomRows.Add(emptyObj);
+                if (liveRow == null)
+                {
+                    GameObject emptyObj = new GameObject("EmptyState", typeof(RectTransform), typeof(LayoutElement));
+                    emptyObj.transform.SetParent(trophyRoomContentContainer, false);
+                    emptyObj.GetComponent<LayoutElement>().preferredHeight = 60f;
+                    ManagerUITheme.BuildLabel(emptyObj.transform, "No seasons completed yet - finish your first season to start the history.", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+                    spawnedTrophyRoomRows.Add(emptyObj);
+                }
+
                 return;
             }
 
@@ -3947,6 +4136,56 @@ namespace Manager
             {
                 spawnedTrophyRoomRows.Add(BuildCareerRecordRow(careerHistory.Records[i]));
             }
+        }
+
+        // Null if there's genuinely no live table yet (e.g. before a career's first
+        // EnsureTeam call) - defensive, shouldn't happen in practice by the time this
+        // screen is reachable at all.
+        private GameObject BuildLiveCareerRecordRow()
+        {
+            int managedTeamId = teamRegistry.GetTeamId(managedTeamName);
+            List<LeagueTable.Entry> sorted = playableTable.Sorted();
+            int position = sorted.FindIndex(e => e.TeamId == managedTeamId) + 1;
+
+            if (position <= 0)
+            {
+                return null;
+            }
+
+            LeagueTable.Entry live = sorted[position - 1];
+
+            GameObject row = new GameObject($"RecordSeason_{currentSeason}_Live", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            row.transform.SetParent(trophyRoomContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = 44f;
+            row.GetComponent<Image>().color = new Color(ManagerUITheme.Accent.r, ManagerUITheme.Accent.g, ManagerUITheme.Accent.b, 0.08f);
+
+            int goalDifference = live.GoalsFor - live.GoalsAgainst;
+            string[] values =
+            {
+                $"Season {currentSeason} (live)",
+                $"{position}{GetOrdinalSuffix(position)}",
+                live.Points.ToString(),
+                live.Wins.ToString(),
+                live.Draws.ToString(),
+                live.Losses.ToString(),
+                (goalDifference > 0 ? "+" : "") + goalDifference
+            };
+
+            float x = 0f;
+            for (int i = 0; i < values.Length; i++)
+            {
+                GameObject cell = new GameObject($"Cell_{i}", typeof(RectTransform));
+                cell.transform.SetParent(row.transform, false);
+                RectTransform cellRect = cell.GetComponent<RectTransform>();
+                cellRect.anchorMin = new Vector2(x, 0f);
+                cellRect.anchorMax = new Vector2(x + CareerRecordColumnFractions[i], 1f);
+                cellRect.offsetMin = new Vector2(10f, 0f);
+                cellRect.offsetMax = new Vector2(-10f, 0f);
+                ManagerUITheme.BuildLabel(cell.transform, values[i], 16, ManagerUITheme.Accent, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+                x += CareerRecordColumnFractions[i];
+            }
+
+            return row;
         }
 
         private GameObject BuildCareerRecordHeaderRow()
@@ -4259,6 +4498,17 @@ namespace Manager
             Button tacticsScreenButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "TACTICS", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(tacticsScreenButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-598f, -27f), new Vector2(150f, 36f));
             tacticsScreenButton.onClick.AddListener(OnOpenTacticsScreenClicked);
+
+            // Auto-pick best XI (backlog item, session 12) - fills every pin with the
+            // highest position-fit player available for that slot, from the whole squad
+            // (Starting XI + Bench combined), skipping injured/already-subbed-off players.
+            // Built regardless of what AI clubs do (Thomas's call): it doesn't raise the
+            // team's strength ceiling, a manager could always assemble this same XI by
+            // hand - this just automates the clicking.
+            Button autoPickButton = ManagerUITheme.BuildButton(tacticsBoardPanel.transform, "AUTO-PICK XI", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(autoPickButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-764f, -27f), new Vector2(170f, 36f));
+            autoPickButton.onClick.AddListener(OnAutoPickBestXIClicked);
+            autoPickButton.onClick.AddListener(ManagerAudio.PlayClick);
 
             // Injury block warning (session 10) - centered under the header row, empty
             // by default (BuildLabel with empty text still reserves the space so it pops
@@ -4582,13 +4832,28 @@ namespace Manager
             if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
             if (tacticsScreenPanel != null) tacticsScreenPanel.SetActive(true);
 
+            if (tacticsScreenBackButton != null)
+            {
+                string label = tacticsScreenOpenedFromMatchdayPrep ? "BACK" : "BACK TO TACTICS BOARD";
+                ManagerUITheme.NormalizeButtonLabel(tacticsScreenBackButton, label, ManagerUITheme.TextBody, 13);
+            }
+
             RefreshTacticsScreenUI();
         }
 
         public void OnTacticsScreenBackClicked()
         {
             if (tacticsScreenPanel != null) tacticsScreenPanel.SetActive(false);
-            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
+
+            if (tacticsScreenOpenedFromMatchdayPrep)
+            {
+                tacticsScreenOpenedFromMatchdayPrep = false;
+                if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(true);
+            }
+            else
+            {
+                if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
+            }
         }
 
         private void BuildTacticsScreenChrome()
@@ -4617,6 +4882,7 @@ namespace Manager
             Button backButton = ManagerUITheme.BuildButton(tacticsScreenPanel.transform, "BACK TO TACTICS BOARD", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(240f, 36f));
             backButton.onClick.AddListener(OnTacticsScreenBackClicked);
+            tacticsScreenBackButton = backButton;
 
             ManagerUITheme.BuildAccentBand(tacticsScreenPanel.transform, topBand: false, height: TacticsScreenFooterHeight);
 
@@ -4653,8 +4919,14 @@ namespace Manager
 
             ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            // Starting XI only, deliberately excluding Bench (backlog item, session 12,
+            // Thomas's call) - scrolling past the Starting XI into Bench with no visual
+            // separator risked accidentally assigning e.g. Captain to a player not even
+            // playing. A bench player realistically shouldn't hold any of these roles
+            // anyway. A role already pointing at a bench player from before this change
+            // still displays correctly (BuildRoleDropdownRow shows currentValue.Name
+            // regardless of the options list), it just won't be re-selectable here.
             List<PlayerAgent> squadPlayers = new List<PlayerAgent>(team.StartingEleven);
-            squadPlayers.AddRange(team.Bench);
 
             // Matches the actual design mockup (DesignSync, "Football Manager UI
             // Concepts.dc.html", TACTICS frame) exactly: a centered fixed-width row -
@@ -4840,12 +5112,16 @@ namespace Manager
             Button dropdownButton = dropdownButtonObj.GetComponent<Button>();
             dropdownButton.targetGraphic = dropdownButtonImage;
 
-            // "v" not "▾" - Oswald SDF has no symbol glyphs at all (same reason the
-            // Tactics Board's own formation dropdown uses "v", see its comment). This
-            // spot was missed when that fix was applied elsewhere, and kept spamming
-            // "character not found" warnings every time this row rebuilt.
-            string currentLabel = (currentValue != null ? currentValue.Name : "— None —") + "  v";
-            ManagerUITheme.BuildLabel(dropdownButtonObj.transform, currentLabel, 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
+            // No "v"/"— None —" (Thomas's call, session 12) - just the assigned name, or
+            // blank until one's picked. BuildLabel stretches its label full-size with
+            // zero padding, so the text touched the button's left edge directly - given
+            // its own padded RectTransform here instead (same 10px inset BuildGridCell
+            // uses elsewhere) rather than accepting that default.
+            string currentLabel = currentValue != null ? currentValue.Name : "";
+            TextMeshProUGUI dropdownLabel = ManagerUITheme.BuildLabel(dropdownButtonObj.transform, currentLabel, 13, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineLeft);
+            RectTransform dropdownLabelRect = dropdownLabel.GetComponent<RectTransform>();
+            dropdownLabelRect.offsetMin = new Vector2(10f, 0f);
+            dropdownLabelRect.offsetMax = new Vector2(-10f, 0f);
 
             // Two real bugs, found live and fixed together: (1) the dropdown used to be
             // nested inside its own row's button - Unity draws UI children in sibling
@@ -5324,6 +5600,105 @@ namespace Manager
             RefreshTacticsBoardUI();
         }
 
+        // Auto-pick best XI (backlog item, session 12). Greedy slot-by-slot assignment
+        // (not a true combinatorial optimum, but a strong practical XI - this is a
+        // convenience feature, not core simulation logic): for each formation slot in
+        // order, picks whichever eligible remaining candidate has the best
+        // PlayerAgent.GetPositionFit for that specific slot. Reuses AgentTeam.
+        // ChangeFormation with the SAME formation the team already has, purely for its
+        // existing "assign this StartingEleven, everyone else falls to Bench" behavior -
+        // no formation change happens here.
+        private void OnAutoPickBestXIClicked()
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            List<PlayerPosition> slots = squadGenerator.GetStartingPositions(team.Formation);
+
+            // Same two exclusions OnBenchPlayerDroppedOnPin already enforces one player
+            // at a time - applied here up front so auto-pick can never do in one click
+            // what a manual drag isn't allowed to do at all.
+            List<PlayerAgent> pool = new List<PlayerAgent>(team.Players);
+            pool.RemoveAll(p => roles.IsInjured(p, currentFixtureIndex)
+                || (tacticsBoardOpenedMidMatch && playersSubbedOffThisMatch.Contains(p)));
+
+            List<PlayerAgent> bestXI = new List<PlayerAgent>();
+            foreach (PlayerPosition slot in slots)
+            {
+                PlayerAgent best = null;
+                float bestScore = float.MinValue;
+
+                foreach (PlayerAgent candidate in pool)
+                {
+                    if (bestXI.Contains(candidate))
+                    {
+                        continue;
+                    }
+
+                    // GetPositionFit alone doesn't hard-block a keeper from an outfield
+                    // slot or vice versa (it has no real notion of goalkeeping at all -
+                    // "GK deliberately has no entry" in its own AdjacentPositions table),
+                    // so that exact mismatch is guarded explicitly here instead.
+                    bool candidateIsGK = candidate.PrimaryPosition == PlayerPosition.GK;
+                    bool slotIsGK = slot == PlayerPosition.GK;
+                    if (candidateIsGK != slotIsGK)
+                    {
+                        continue;
+                    }
+
+                    // Fit alone isn't enough - two primary-position candidates for the
+                    // same slot both score a flat 1.00 fit, so comparing fit only picked
+                    // whoever happened to be first in `pool` (a weaker starter) over a
+                    // clearly better bench player at the same fit tier (real bug Thomas
+                    // caught live: an 87-rated bench CB lost a tie to an 84-rated starting
+                    // CB, so Auto-Pick visibly did nothing). Fit's four tiers (0.60/0.80/
+                    // 0.85/1.00) are categorical steps far apart from each other, so
+                    // multiplying it by 1000 and adding Overall (0-99) keeps fit tier
+                    // strictly dominant while letting Overall break ties within a tier.
+                    float fit = candidate.GetPositionFit(slot);
+                    float score = fit * 1000f + candidate.GetOverallRating();
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = candidate;
+                    }
+                }
+
+                if (best != null)
+                {
+                    bestXI.Add(best);
+                }
+            }
+
+            // Fallback for a genuinely short-handed squad (mass injuries etc.) - fill any
+            // remaining slot with whoever's left rather than leave a pin empty. Real
+            // football-manager UX: a weak/mismatched XI is still better than no XI.
+            if (bestXI.Count < slots.Count)
+            {
+                foreach (PlayerAgent candidate in pool)
+                {
+                    if (bestXI.Count >= slots.Count)
+                    {
+                        break;
+                    }
+
+                    if (!bestXI.Contains(candidate))
+                    {
+                        bestXI.Add(candidate);
+                    }
+                }
+            }
+
+            if (bestXI.Count < slots.Count)
+            {
+                ShowTacticsBoardWarning("Not enough available players to fill the XI");
+                RefreshTacticsBoardUI();
+                return;
+            }
+
+            team.ChangeFormation(team.Formation, bestXI);
+            RefreshTacticsBoardUI();
+        }
+
         // A pin dragged onto another pin - e.g. after a formation change scatters the
         // ST onto the LM spot and vice versa, dragging the ST back onto the ST pin.
         // Both players stay in the starting XI (unlike OnBenchPlayerDroppedOnPin, this
@@ -5539,7 +5914,13 @@ namespace Manager
             // See BuildMatchEventsPanel's identical comment for how this was verified -
             // +1 is Unity's own default and is confirmed (via simulated scroll input,
             // not guessed) to move content the correct direction.
-            scrollRect.scrollSensitivity = 1f;
+            // +1 was the direction fix (negative sensitivity scrolled backwards - see the
+            // Match Events scroll view's own comment for the measured proof of that), but
+            // magnitude 1 itself is Unity's stock default and reads as sluggish on this
+            // project's 1920x1080-reference-resolution lists (backlog item, session 12,
+            // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
+            // correct direction) while moving content a comfortable amount per wheel notch.
+            scrollRect.scrollSensitivity = 25f;
 
             GameObject scrollbarObj = new GameObject("SquadScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
             scrollbarObj.transform.SetParent(squadBrowsePanel.transform, false);
@@ -5616,28 +5997,99 @@ namespace Manager
             ManagerSquadRoles squadRoles = GetOrCreateSquadRoles(managedTeamName);
 
             squadBrowseListView.Clear();
-            squadBrowseListView.AddGridHeaderRow();
+            squadBrowseListView.AddGridHeaderRow(OnSquadColumnHeaderClicked, squadSortColumn, squadSortDescending);
             squadBrowseListView.AddSectionHeader("Starting XI");
 
             List<PlayerPosition> slots = squadGenerator.GetStartingPositions(team.Formation);
 
+            // Starting XI's slot-based POS (from the formation, not just the player's own
+            // primary position) only makes sense paired with each player's original index
+            // - captured before any sort reorders the list, so "who plays where" stays
+            // correct regardless of sort column/direction.
+            List<(PlayerAgent player, PlayerPosition slot)> startingWithSlots = new List<(PlayerAgent, PlayerPosition)>();
             for (int i = 0; i < team.StartingEleven.Count; i++)
             {
                 PlayerAgent player = team.StartingEleven[i];
                 PlayerPosition slot = i < slots.Count ? slots[i] : player.PrimaryPosition;
-                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles));
+                startingWithSlots.Add((player, slot));
+            }
+
+            if (squadSortColumn >= 0)
+            {
+                startingWithSlots.Sort((a, b) => CompareSquadColumn(a.player, b.player, squadSortColumn, squadSortDescending));
+            }
+
+            foreach (var (player, slot) in startingWithSlots)
+            {
+                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
             }
 
             squadBrowseListView.AddSectionHeader($"Bench ({team.Bench.Count})");
 
-            foreach (PlayerAgent player in team.Bench)
+            List<PlayerAgent> benchPlayers = new List<PlayerAgent>(team.Bench);
+            if (squadSortColumn >= 0)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles));
+                benchPlayers.Sort((a, b) => CompareSquadColumn(a, b, squadSortColumn, squadSortDescending));
+            }
+
+            foreach (PlayerAgent player in benchPlayers)
+            {
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
             // destroy/recreate churn as the Tactics Board's pins/bench.
             StartCoroutine(RecoverBlankLabelsNextFrame(squadBrowsePanel.transform));
+        }
+
+        private void OnSquadColumnHeaderClicked(int column)
+        {
+            if (squadSortColumn == column)
+            {
+                squadSortDescending = !squadSortDescending;
+            }
+            else
+            {
+                squadSortColumn = column;
+                squadSortDescending = true;
+            }
+
+            RefreshSquadUI();
+        }
+
+        // Column indices match SquadListView's GridColumnHeaders (POS/PLAYER/AGE/OVR/
+        // FIT/VALUE/RATING). FIT and RATING aren't sortable (FIT is condition-derived
+        // text with a variable "(Ret. MDx)" suffix, not a clean number; RATING is a
+        // live-match-only stat with no meaning outside a match) - clicking those headers
+        // is a no-op via AddGridHeaderRow's onColumnClicked still firing but landing on
+        // the default case below (falls through to 0, same as clicking POS/PLAYER twice
+        // would after a no-op sort).
+        private int CompareSquadColumn(PlayerAgent a, PlayerAgent b, int column, bool descending)
+        {
+            int result;
+            switch (column)
+            {
+                case 0:
+                    result = string.Compare(a.PrimaryPosition.ToString(), b.PrimaryPosition.ToString(), StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 1:
+                    result = string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 2:
+                    result = a.Age.CompareTo(b.Age);
+                    break;
+                case 3:
+                    result = a.GetOverallRating().CompareTo(b.GetOverallRating());
+                    break;
+                case 5:
+                    result = ManagerClubFinance.GetMarketValue(a).CompareTo(ManagerClubFinance.GetMarketValue(b));
+                    break;
+                default:
+                    result = 0;
+                    break;
+            }
+
+            return descending ? -result : result;
         }
 
         private void OnSquadRowClicked(PlayerAgent player)
@@ -7767,6 +8219,7 @@ namespace Manager
             // Prep the normal way afterward (Hub -> Next Matchday) - currentFixtureIndex
             // hasn't moved, so nothing is lost by the detour.
             if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(false);
+            tacticsScreenOpenedFromMatchdayPrep = true;
             OnOpenTacticsScreenClicked();
         }
 
@@ -9028,7 +9481,13 @@ namespace Manager
             // this screen's chrome is only built once per session (see the
             // matchEventsChromeBuilt-style guard), so a session that predates a fix will
             // never show it no matter how long it keeps running.
-            scrollRect.scrollSensitivity = 1f;
+            // +1 was the direction fix (negative sensitivity scrolled backwards - see the
+            // Match Events scroll view's own comment for the measured proof of that), but
+            // magnitude 1 itself is Unity's stock default and reads as sluggish on this
+            // project's 1920x1080-reference-resolution lists (backlog item, session 12,
+            // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
+            // correct direction) while moving content a comfortable amount per wheel notch.
+            scrollRect.scrollSensitivity = 25f;
 
             // Slim vertical scrollbar in the 16px gap freed up above - see the comment
             // on scrollViewRect.offsetMax.

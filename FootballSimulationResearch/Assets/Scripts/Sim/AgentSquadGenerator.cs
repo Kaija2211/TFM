@@ -361,17 +361,34 @@ namespace Sim
             // an ambiguous CS0104 (see feedback_random_namespace_ambiguity).
             player.PlayerId = System.Guid.NewGuid().ToString();
 
-            // Strengthened from 0.35 (session 11, explicit authorization) - the old
-            // damping meant even a genuinely elite attacking side (e.g. real trained
-            // AttackStrength ~1.5, 50% more goals than league average) only pulled
-            // starting XI attributes ~18% of the way toward that strength, capping
-            // top-club starters in the low-to-mid 70s Overall - Thomas wanted Liverpool's
-            // actual XI to mostly read 80+ on its own honest GetOverallRating(), not via
-            // a display-layer stretch. Calibrated empirically via TEMP_TestSquadStrength
-            // (see session 11 handoff/memory for full before/after numbers and the
-            // Research Mode goals/match re-check this required).
-            float attackMultiplier = Mathf.Lerp(1f, attackStrength, 0.75f);
-            float defenceMultiplier = Mathf.Lerp(1f, 1f / defenceStrength, 0.75f);
+            // Strengthened from 0.35 to 0.75 (session 11, explicit authorization) so
+            // Liverpool's XI would honestly read 80+ under the old attribute generation.
+            // Session 12: once the maxed-stat overhaul made attribute generation honest
+            // (no more clamping at 100 doing the real work), that same uniform 0.75
+            // reproduced a much bigger club-to-club Overall spread than intended - real
+            // trained strengths span AttackStrength 0.70 (Burnley) to 1.66 (Man City), and
+            // a single symmetric lerp punishes the weak end exactly as hard as it rewards
+            // the strong end. Thomas's own reference point: EA FC's Career Mode has
+            // Wolves (a real lower-table side) averaging ~75 against Man City's ~84 - a
+            // ~9-point gap, not the ~23 a uniform 0.75 lerp was producing. Split
+            // asymmetric: strong clubs (strength >= 1) keep the full 0.75 effect so the
+            // ceiling stays where session 11 wanted it; weak clubs (strength < 1) get a
+            // much gentler 0.3, softening how hard a bottom-table side gets pulled down -
+            // the Premier League being competitive is mostly a "no one fields genuinely
+            // bad players" thing, not a "everyone is equally elite" thing. Calibrated
+            // empirically against real trained strengths (Man City/Wolves/Burnley) via
+            // GenerateReservePlayer, isolated generator instances, no live-state side
+            // effects - see session 12 memory for the full before/after numbers.
+            const float strongFactor = 0.75f;
+            const float weakFactor = 0.3f;
+
+            float attackTarget = attackStrength;
+            float attackFactor = attackTarget >= 1f ? strongFactor : weakFactor;
+            float attackMultiplier = Mathf.Lerp(1f, attackTarget, attackFactor);
+
+            float defenceTarget = 1f / defenceStrength;
+            float defenceFactor = defenceTarget >= 1f ? strongFactor : weakFactor;
+            float defenceMultiplier = Mathf.Lerp(1f, defenceTarget, defenceFactor);
 
             ApplyBaseAttributes(player);
 
@@ -449,19 +466,19 @@ namespace Sim
             Random.State savedState = Random.state;
 
             (float longShotsMin, float longShotsMax) = GetLongShotsRange(position);
-            player.LongShots = RollAttribute(longShotsMin, longShotsMax) * attackMultiplier;
+            player.LongShots = RollBoostedAttribute(longShotsMin, longShotsMax, attackMultiplier);
 
             (float throughBallsMin, float throughBallsMax) = GetThroughBallsRange(position);
-            player.ThroughBalls = RollAttribute(throughBallsMin, throughBallsMax) * attackMultiplier;
+            player.ThroughBalls = RollBoostedAttribute(throughBallsMin, throughBallsMax, attackMultiplier);
 
             (float offTheBallMin, float offTheBallMax) = GetOffTheBallRange(position);
-            player.OffTheBall = RollAttribute(offTheBallMin, offTheBallMax) * attackMultiplier;
+            player.OffTheBall = RollBoostedAttribute(offTheBallMin, offTheBallMax, attackMultiplier);
 
             (float markingMin, float markingMax) = GetMarkingRange(position);
-            player.Marking = RollAttribute(markingMin, markingMax) * defenceMultiplier;
+            player.Marking = RollBoostedAttribute(markingMin, markingMax, defenceMultiplier);
 
             (float freeKicksMin, float freeKicksMax) = GetFreeKicksRange(position);
-            player.FreeKicks = RollAttribute(freeKicksMin, freeKicksMax) * attackMultiplier;
+            player.FreeKicks = RollBoostedAttribute(freeKicksMin, freeKicksMax, attackMultiplier);
 
             // Leadership (session 7, captaincy pass) - deliberately flat across positions
             // and NOT scaled by attackMultiplier/defenceMultiplier, unlike every other stat
@@ -719,11 +736,83 @@ namespace Sim
         // rare but real, so the band below is a center of gravity, not a limit. The
         // existing ClampAttributes 1-100 wall is the only true clamp, no separate one
         // needed here (unlike height, which had no pre-existing wall to reuse).
+        //
+        // stdDev divisor tightened 4->6 (session 12, real bug report from Thomas's own
+        // save - "quite a few stats at 100, even on low rated players"): /4 put the 100
+        // ceiling as close as ~2.3 sigma away for some of the higher bands below, which
+        // is a genuinely common outcome (~1%) once multiplied across ~20 attributes per
+        // player x 25 players per squad x 20 clubs - not the rare "GOAT tier" event 100
+        // is supposed to represent. /6 keeps the same center of gravity, just narrower,
+        // so 100 is still reachable but meaningfully rarer.
         private float RollAttribute(float min, float max)
         {
             float mean = (min + max) / 2f;
-            float stdDev = (max - min) / 4f;
+            float stdDev = (max - min) / 6f;
             return RandomGaussian(mean, stdDev);
+        }
+
+        // Boosted variant for attributes that scale with attackMultiplier/
+        // defenceMultiplier (session 12 fix). The old pattern - `RollAttribute(min,max) *
+        // multiplier` - scaled the ALREADY-rolled value, which scales the Gaussian's mean
+        // AND stdDev together by the same factor. At an elite club's ~1.4x multiplier
+        // (strengthened last session for honest squad-strength calibration), several
+        // bands' boosted MEAN already sat at or above 100 before any randomness was even
+        // applied - e.g. GenerateWinger's Dribbling (baseline mean 76 x 1.4 ~ 106) - so
+        // hitting the ceiling became the typical outcome for these specific attributes at
+        // strong clubs, not a rare tail event (confirmed live against Thomas's real save:
+        // a 74-rated CM with Passing=100, Through Balls=100, Tackling=99 all at once).
+        //
+        // First attempt (same session) shifted the whole band down by however much the
+        // boosted max overshot a flat ceiling before rolling - preserved band width, but
+        // for a wide band at a strong club the shift could be big enough to drag the
+        // MEAN below what a weaker, unshifted club produced for the same attribute
+        // (confirmed live: Liverpool's shifted Finishing band landed a lower mean than
+        // mid-table's untouched one - the exact opposite of what attackMultiplier is
+        // supposed to represent). A shift is fundamentally the wrong tool near a ceiling,
+        // since it treats every point in the band identically instead of compressing
+        // harder the further past the ceiling something lands.
+        //
+        // This version rolls the FULL boosted band exactly as before (mean and spread
+        // both still scale with `multiplier`, so a stronger club still visibly produces a
+        // stronger roll everywhere in the normal range), then only reshapes the result if
+        // it lands above `softCeiling`: an exponential squash asymptotically approaching
+        // (never quite reaching) 100. Strictly monotonic in the raw roll - a bigger raw
+        // value always produces a bigger final value, so two clubs' relative strength can
+        // never invert the way the shift-based version did - while still making 100
+        // require a genuinely extreme roll rather than being the common outcome for any
+        // band whose boosted mean happens to sit near the ceiling.
+        private float RollBoostedAttribute(float min, float max, float multiplier)
+        {
+            float raw = RollAttribute(min * multiplier, max * multiplier);
+
+            const float softCeiling = 85f;
+            if (raw <= softCeiling)
+            {
+                return raw;
+            }
+
+            const float compressionScale = 25f;
+            float excess = raw - softCeiling;
+            float compressed = (100f - softCeiling) * (1f - Mathf.Exp(-excess / compressionScale));
+            return softCeiling + compressed;
+        }
+
+        // Dampened boost for general footballing-quality attributes that were sitting at
+        // a flat, unboosted band inside a role method even though they aren't that
+        // player's specialty (session 12 - Thomas's own example: an 88-rated Liverpool
+        // striker, Rohan Park, with Passing 42/Creativity 38, "embarrassing for a premier
+        // league striker"). These aren't the role's PRIMARY skill (a striker's game is
+        // still built on Finishing, not Passing), so they only get 40% of the club's full
+        // multiplier effect - enough that a genuinely elite side fields players who are at
+        // least competent outside their specialty, without homogenizing every player into
+        // an equally-good-at-everything generalist. Deliberately NOT applied to
+        // attributes that are genuinely irrelevant to a role regardless of club quality
+        // (a striker's Tackling, a centre-back's Finishing) - those staying low is
+        // realistic specialization, not the bug being fixed here.
+        private float RollSecondaryAttribute(float min, float max, float multiplier)
+        {
+            float dampened = 1f + (multiplier - 1f) * 0.4f;
+            return RollBoostedAttribute(min, max, dampened);
         }
 
         private void ApplyBaseAttributes(PlayerAgent player)
@@ -754,11 +843,11 @@ namespace Sim
 
         private void GenerateGoalkeeper(PlayerAgent player, float defenceMultiplier)
         {
-            player.Goalkeeping = RollAttribute(65f, 88f) * defenceMultiplier;
-            player.Reflexes = RollAttribute(65f, 90f) * defenceMultiplier;
-            player.Positioning = RollAttribute(55f, 80f) * defenceMultiplier;
-            player.Passing = RollAttribute(35f, 70f);
-            player.Composure = RollAttribute(50f, 80f);
+            player.Goalkeeping = RollBoostedAttribute(65f, 88f, defenceMultiplier);
+            player.Reflexes = RollBoostedAttribute(65f, 90f, defenceMultiplier);
+            player.Positioning = RollBoostedAttribute(55f, 80f, defenceMultiplier);
+            player.Passing = RollSecondaryAttribute(35f, 70f, defenceMultiplier);
+            player.Composure = RollSecondaryAttribute(50f, 80f, defenceMultiplier);
 
             player.Finishing = RollAttribute(18f, 32f);
             player.Dribbling = RollAttribute(20f, 35f);
@@ -771,29 +860,31 @@ namespace Sim
 
         private void GenerateCentreBack(PlayerAgent player, float defenceMultiplier)
         {
-            player.Defending = RollAttribute(60f, 85f) * defenceMultiplier;
-            player.Tackling = RollAttribute(60f, 85f) * defenceMultiplier;
-            player.Heading = RollAttribute(60f, 85f) * defenceMultiplier;
-            player.Aerial = RollAttribute(65f, 90f) * defenceMultiplier;
+            player.Defending = RollBoostedAttribute(60f, 85f, defenceMultiplier);
+            player.Tackling = RollBoostedAttribute(60f, 85f, defenceMultiplier);
+            player.Heading = RollBoostedAttribute(60f, 85f, defenceMultiplier);
+            player.Aerial = RollBoostedAttribute(65f, 90f, defenceMultiplier);
             player.Strength = RollAttribute(65f, 90f);
-            player.Positioning = RollAttribute(55f, 80f) * defenceMultiplier;
-            player.Passing = RollAttribute(35f, 65f);
+            player.Positioning = RollBoostedAttribute(55f, 80f, defenceMultiplier);
+            player.Passing = RollSecondaryAttribute(35f, 65f, defenceMultiplier);
+            player.Crossing = RollSecondaryAttribute(22f, 42f, defenceMultiplier);
+            player.Composure = RollSecondaryAttribute(45f, 75f, defenceMultiplier);
 
             player.Finishing = RollAttribute(20f, 38f);
             player.Dribbling = RollAttribute(20f, 50f);
-            player.Crossing = RollAttribute(22f, 42f);
             player.Stamina = RollAttribute(55f, 78f);
         }
 
         private void GenerateFullBack(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Defending = RollAttribute(50f, 75f) * defenceMultiplier;
-            player.Tackling = RollAttribute(50f, 75f) * defenceMultiplier;
-            player.Crossing = RollAttribute(50f, 78f) * attackMultiplier;
+            player.Defending = RollBoostedAttribute(50f, 75f, defenceMultiplier);
+            player.Tackling = RollBoostedAttribute(50f, 75f, defenceMultiplier);
+            player.Crossing = RollBoostedAttribute(50f, 78f, attackMultiplier);
             player.Pace = RollAttribute(60f, 88f);
             player.Stamina = RollAttribute(65f, 90f);
-            player.Passing = RollAttribute(45f, 70f);
-            player.Dribbling = RollAttribute(45f, 72f);
+            player.Passing = RollSecondaryAttribute(45f, 70f, attackMultiplier);
+            player.Dribbling = RollSecondaryAttribute(45f, 72f, attackMultiplier);
+            player.Composure = RollSecondaryAttribute(45f, 72f, defenceMultiplier);
 
             player.Finishing = RollAttribute(22f, 42f);
             player.Heading = RollAttribute(35f, 65f);
@@ -802,55 +893,57 @@ namespace Sim
 
         private void GenerateWingBack(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Defending = RollAttribute(45f, 70f) * defenceMultiplier;
-            player.Tackling = RollAttribute(45f, 72f) * defenceMultiplier;
-            player.Crossing = RollAttribute(55f, 82f) * attackMultiplier;
+            player.Defending = RollBoostedAttribute(45f, 70f, defenceMultiplier);
+            player.Tackling = RollBoostedAttribute(45f, 72f, defenceMultiplier);
+            player.Crossing = RollBoostedAttribute(55f, 82f, attackMultiplier);
             player.Pace = RollAttribute(65f, 90f);
             player.Stamina = RollAttribute(70f, 92f);
-            player.Dribbling = RollAttribute(50f, 76f) * attackMultiplier;
-            player.Passing = RollAttribute(45f, 70f);
+            player.Dribbling = RollBoostedAttribute(50f, 76f, attackMultiplier);
+            player.Passing = RollSecondaryAttribute(45f, 70f, attackMultiplier);
+            player.Composure = RollSecondaryAttribute(45f, 72f, defenceMultiplier);
 
             player.Finishing = RollAttribute(24f, 44f);
         }
 
         private void GenerateDefensiveMidfielder(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Defending = RollAttribute(55f, 80f) * defenceMultiplier;
-            player.Tackling = RollAttribute(55f, 82f) * defenceMultiplier;
-            player.Passing = RollAttribute(55f, 80f) * attackMultiplier;
-            player.Positioning = RollAttribute(55f, 82f) * defenceMultiplier;
+            player.Defending = RollBoostedAttribute(55f, 80f, defenceMultiplier);
+            player.Tackling = RollBoostedAttribute(55f, 82f, defenceMultiplier);
+            player.Passing = RollBoostedAttribute(55f, 80f, attackMultiplier);
+            player.Positioning = RollBoostedAttribute(55f, 82f, defenceMultiplier);
             player.Strength = RollAttribute(55f, 80f);
             player.Stamina = RollAttribute(65f, 90f);
-            player.Creativity = RollAttribute(40f, 70f) * attackMultiplier;
+            player.Creativity = RollBoostedAttribute(40f, 70f, attackMultiplier);
+            player.Dribbling = RollSecondaryAttribute(35f, 65f, attackMultiplier);
+            player.Composure = RollSecondaryAttribute(45f, 75f, defenceMultiplier);
 
             player.Finishing = RollAttribute(25f, 45f);
-            player.Dribbling = RollAttribute(35f, 65f);
             player.Heading = RollAttribute(40f, 70f);
             player.Aerial = RollAttribute(40f, 70f);
         }
 
         private void GenerateCentralMidfielder(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Passing = RollAttribute(60f, 85f) * attackMultiplier;
-            player.Creativity = RollAttribute(55f, 82f) * attackMultiplier;
-            player.Positioning = RollAttribute(50f, 78f);
-            player.Composure = RollAttribute(55f, 82f);
+            player.Passing = RollBoostedAttribute(60f, 85f, attackMultiplier);
+            player.Creativity = RollBoostedAttribute(55f, 82f, attackMultiplier);
+            player.Positioning = RollSecondaryAttribute(50f, 78f, defenceMultiplier);
+            player.Composure = RollSecondaryAttribute(55f, 82f, attackMultiplier);
             player.Stamina = RollAttribute(65f, 90f);
-            player.Defending = RollAttribute(40f, 70f) * defenceMultiplier;
-            player.Tackling = RollAttribute(40f, 70f) * defenceMultiplier;
-            player.Dribbling = RollAttribute(45f, 75f) * attackMultiplier;
+            player.Defending = RollBoostedAttribute(40f, 70f, defenceMultiplier);
+            player.Tackling = RollBoostedAttribute(40f, 70f, defenceMultiplier);
+            player.Dribbling = RollBoostedAttribute(45f, 75f, attackMultiplier);
 
-            player.Finishing = RollAttribute(25f, 55f) * attackMultiplier;
+            player.Finishing = RollBoostedAttribute(25f, 55f, attackMultiplier);
         }
 
         private void GenerateAttackingMidfielder(PlayerAgent player, float attackMultiplier)
         {
-            player.Passing = RollAttribute(60f, 85f) * attackMultiplier;
-            player.Creativity = RollAttribute(65f, 90f) * attackMultiplier;
-            player.Dribbling = RollAttribute(60f, 88f) * attackMultiplier;
-            player.Composure = RollAttribute(55f, 85f);
-            player.Finishing = RollAttribute(40f, 70f) * attackMultiplier;
-            player.Positioning = RollAttribute(50f, 78f);
+            player.Passing = RollBoostedAttribute(60f, 85f, attackMultiplier);
+            player.Creativity = RollBoostedAttribute(65f, 90f, attackMultiplier);
+            player.Dribbling = RollBoostedAttribute(60f, 88f, attackMultiplier);
+            player.Composure = RollSecondaryAttribute(55f, 85f, attackMultiplier);
+            player.Finishing = RollBoostedAttribute(40f, 70f, attackMultiplier);
+            player.Positioning = RollSecondaryAttribute(50f, 78f, attackMultiplier);
 
             player.Defending = RollAttribute(25f, 48f);
             player.Tackling = RollAttribute(25f, 48f);
@@ -861,26 +954,26 @@ namespace Sim
 
         private void GenerateWideMidfielder(PlayerAgent player, float attackMultiplier, float defenceMultiplier)
         {
-            player.Crossing = RollAttribute(58f, 84f) * attackMultiplier;
-            player.Dribbling = RollAttribute(55f, 82f) * attackMultiplier;
+            player.Crossing = RollBoostedAttribute(58f, 84f, attackMultiplier);
+            player.Dribbling = RollBoostedAttribute(55f, 82f, attackMultiplier);
             player.Pace = RollAttribute(60f, 88f);
             player.Stamina = RollAttribute(65f, 90f);
-            player.Passing = RollAttribute(48f, 74f) * attackMultiplier;
-            player.Defending = RollAttribute(35f, 65f) * defenceMultiplier;
-            player.Tackling = RollAttribute(35f, 65f) * defenceMultiplier;
+            player.Passing = RollBoostedAttribute(48f, 74f, attackMultiplier);
+            player.Defending = RollBoostedAttribute(35f, 65f, defenceMultiplier);
+            player.Tackling = RollBoostedAttribute(35f, 65f, defenceMultiplier);
 
-            player.Finishing = RollAttribute(25f, 55f) * attackMultiplier;
+            player.Finishing = RollBoostedAttribute(25f, 55f, attackMultiplier);
         }
 
         private void GenerateWinger(PlayerAgent player, float attackMultiplier)
         {
             player.Pace = RollAttribute(68f, 94f);
-            player.Dribbling = RollAttribute(62f, 90f) * attackMultiplier;
-            player.Crossing = RollAttribute(55f, 84f) * attackMultiplier;
-            player.Creativity = RollAttribute(50f, 78f) * attackMultiplier;
-            player.Passing = RollAttribute(45f, 72f) * attackMultiplier;
-            player.Finishing = RollAttribute(35f, 68f) * attackMultiplier;
-            player.Composure = RollAttribute(45f, 75f);
+            player.Dribbling = RollBoostedAttribute(62f, 90f, attackMultiplier);
+            player.Crossing = RollBoostedAttribute(55f, 84f, attackMultiplier);
+            player.Creativity = RollBoostedAttribute(50f, 78f, attackMultiplier);
+            player.Passing = RollBoostedAttribute(45f, 72f, attackMultiplier);
+            player.Finishing = RollBoostedAttribute(35f, 68f, attackMultiplier);
+            player.Composure = RollSecondaryAttribute(45f, 75f, attackMultiplier);
 
             player.Defending = RollAttribute(22f, 42f);
             player.Tackling = RollAttribute(22f, 42f);
@@ -891,17 +984,17 @@ namespace Sim
 
         private void GenerateStriker(PlayerAgent player, float attackMultiplier)
         {
-            player.Finishing = RollAttribute(62f, 90f) * attackMultiplier;
-            player.Positioning = RollAttribute(60f, 88f) * attackMultiplier;
-            player.Composure = RollAttribute(58f, 88f) * attackMultiplier;
-            player.Heading = RollAttribute(45f, 82f) * attackMultiplier;
-            player.Aerial = RollAttribute(45f, 82f) * attackMultiplier;
+            player.Finishing = RollBoostedAttribute(62f, 90f, attackMultiplier);
+            player.Positioning = RollBoostedAttribute(60f, 88f, attackMultiplier);
+            player.Composure = RollBoostedAttribute(58f, 88f, attackMultiplier);
+            player.Heading = RollBoostedAttribute(45f, 82f, attackMultiplier);
+            player.Aerial = RollBoostedAttribute(45f, 82f, attackMultiplier);
             player.Strength = RollAttribute(45f, 82f);
             player.Pace = RollAttribute(50f, 88f);
-            player.Dribbling = RollAttribute(40f, 75f) * attackMultiplier;
+            player.Dribbling = RollBoostedAttribute(40f, 75f, attackMultiplier);
 
-            player.Passing = RollAttribute(30f, 60f);
-            player.Creativity = RollAttribute(25f, 60f);
+            player.Passing = RollSecondaryAttribute(30f, 60f, attackMultiplier);
+            player.Creativity = RollSecondaryAttribute(25f, 60f, attackMultiplier);
             player.Defending = RollAttribute(20f, 40f);
             player.Tackling = RollAttribute(20f, 40f);
             player.Stamina = RollAttribute(55f, 80f);
