@@ -291,7 +291,19 @@ namespace Manager
         // Optional and defaulted to null so every non-academy caller (AI first team,
         // uncalled reserves, unsigned scouting youth) is completely unaffected - only
         // ManagerAcademy's own prospects ever have a real focus set to pass in.
-        public static void ApplySeasonProgression(PlayerAgent player, float playingTimeFactor, IReadOnlyCollection<string> focusAttributes = null)
+        //
+        // exemptFromErosion (bug fix, session 13 - caught while answering an unrelated
+        // question about academy growth rate): the neglect-erosion block below exists
+        // to punish a SENIOR player who could be given minutes or loaned out but isn't
+        // (see its own comment). Academy/unclaimed-youth-prospect callers pass a low
+        // playingTimeFactor purely as a growth-rate throttle (these players structurally
+        // can't have real senior appearances at their age), but that same low value was
+        // ALSO tripping the erosion threshold every single season - a 14-year-old
+        // academy kid was having their Potential permanently ground down every year
+        // just for existing in the pool, the exact opposite of what a development
+        // pipeline should do. Defaults false so every other caller (AI first team,
+        // uncalled reserves, loan returns) keeps the original, intentional behavior.
+        public static void ApplySeasonProgression(PlayerAgent player, float playingTimeFactor, IReadOnlyCollection<string> focusAttributes = null, bool exemptFromErosion = false)
         {
             playingTimeFactor = Mathf.Clamp01(playingTimeFactor);
 
@@ -307,7 +319,7 @@ namespace Manager
             // erode. Confirmed live: 10 seasons of zero playing time eroded a 90
             // Potential down to 75 while Overall only reached 74.6 - a real, permanent
             // cost, not a cosmetic slowdown (see HANDOFF).
-            if (playingTimeFactor < NeglectPlayingTimeThreshold && player.Age < GetGrowthEligibleUntilAge(player) && player.Potential > player.GetOverallRating())
+            if (!exemptFromErosion && playingTimeFactor < NeglectPlayingTimeThreshold && player.Age < GetGrowthEligibleUntilAge(player) && player.Potential > player.GetOverallRating())
             {
                 float neglectFactor = (NeglectPlayingTimeThreshold - playingTimeFactor) / NeglectPlayingTimeThreshold;
                 player.Potential = Mathf.Max(player.GetOverallRating(), player.Potential - neglectFactor * MaxPotentialErosionPerSeason);

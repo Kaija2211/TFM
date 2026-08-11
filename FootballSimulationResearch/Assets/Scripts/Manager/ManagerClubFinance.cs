@@ -131,22 +131,6 @@ namespace Manager
             return Mathf.Max(value, 0.2f);
         }
 
-        // Even a generous bid can be refused outright sometimes - a selling club simply
-        // not wanting to weaken their own squad, independent of price. Above that, the
-        // accept threshold is itself randomised around MarketValue (0.85x-1.2x) - a
-        // fair-value bid is a real gamble, a well-over-the-odds one is close to a sure
-        // thing without being completely guaranteed.
-        public static bool TryResolveBid(PlayerAgent player, float bidAmount)
-        {
-            if (Random.value < 0.08f)
-            {
-                return false;
-            }
-
-            float acceptThreshold = GetMarketValue(player) * Random.Range(0.85f, 1.2f);
-            return bidAmount >= acceptThreshold;
-        }
-
         // Your own player - no random refusal (you're not asking permission), just a
         // haircut off full MarketValue, since you already know their true stats with
         // certainty (no scouting-style uncertainty), unlike buying blind on an AI

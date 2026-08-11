@@ -151,6 +151,8 @@ namespace Manager
         private readonly ManagerLoanTracker loanTracker = new();
         private readonly ManagerClubFinance finance = new();
         private readonly ManagerCareerHistory careerHistory = new();
+        private readonly ManagerTransferNegotiation transferNegotiation = new();
+        private readonly ManagerInbox inbox = new();
         private SeasonRecord lastSeasonRecord;
         private bool seasonEndRewardsAppliedForCurrentSeason;
         private readonly AgentSquadGenerator squadGenerator = new();
@@ -252,6 +254,7 @@ namespace Manager
         private RectTransform matchdayPrepPitchContainer;
 
         private bool hubChromeBuilt;
+        private Button inboxButton; // code-built (real now, session 13 - see BuildHubChrome), stored so RefreshHubUI can show an unread-count badge
 
         // --- Season loop (career-arc addition, replaces the old dead end where fixtures
         // just ran out and Next Matchday/Simulate Season quietly disabled forever) ---
@@ -1889,16 +1892,21 @@ namespace Manager
 
             float inboxTop = trophyRoomTop + subRowHeight + rowGap;
 
-            // "Inbox" is new copy from the mockup with no backing inbox system anywhere
-            // in Manager Mode - treated as a disabled placeholder, same as
-            // Transfers/Settings, rather than faking a feature that doesn't exist.
+            // Real now (session 13) - phase 3 of the manager influence arc, the last
+            // unclaimed item from the original session 7 plan (captaincy/fitness/morale
+            // all shipped already, see project_manager_influence_arc in memory). Same
+            // real-button styling as Squad/Transfers/Scouting/Career rather than the
+            // disabled placeholder this used to be.
             GameObject inboxObj = new GameObject("InboxButton", typeof(RectTransform), typeof(Image), typeof(Button));
             inboxObj.transform.SetParent(seasonHubPanel.transform, false);
             ManagerUITheme.SetPointAnchor(inboxObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(contentLeft, -inboxTop), new Vector2(menuWidth, subRowHeight));
-            Button inboxButton = inboxObj.GetComponent<Button>();
+            inboxButton = inboxObj.GetComponent<Button>();
             inboxButton.targetGraphic = inboxObj.GetComponent<Image>();
             ManagerUITheme.BuildLabel(inboxObj.transform, "INBOX", 17, ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.UpperCase | FontStyles.Bold);
-            ManagerUITheme.SetDisabledPlaceholder(inboxButton, "INBOX");
+            StyleHubActionButton(inboxButton);
+            ManagerUITheme.NormalizeButtonLabel(inboxButton, "INBOX", ManagerUITheme.TextBody, 17);
+            inboxButton.onClick.AddListener(OnOpenInboxClicked);
+            inboxButton.onClick.AddListener(ManagerAudio.PlayClick);
 
             float settingsTop = inboxTop + subRowHeight + rowGap;
 
@@ -1990,6 +1998,15 @@ namespace Manager
             {
                 bylineLabel.text = $"Manager {managerName}   ·   Matchday {currentFixtureIndex + 1}";
                 bylineLabel.ForceMeshUpdate();
+            }
+
+            // Unread badge (session 13) - "INBOX (2)" style, same NormalizeButtonLabel
+            // convention every other Hub button's label goes through.
+            if (inboxButton != null)
+            {
+                int unread = inbox.UnreadCount;
+                string inboxLabel = unread > 0 ? $"INBOX ({unread})" : "INBOX";
+                ManagerUITheme.NormalizeButtonLabel(inboxButton, inboxLabel, ManagerUITheme.TextBody, 17);
             }
 
             bool hasNextFixture = currentFixtureIndex < managedTeamFixtures.Count;
@@ -2293,7 +2310,7 @@ namespace Manager
 
             currentFixtureIndex = 0;
             simulatedMatchdays.Clear();
-            scouting.ForceResolveAllPending();
+            transferNegotiation.ForceResolveAllPending(finance, managedTeamName, inbox, FindTeamContainingPlayer, currentFixtureIndex);
 
             foreach (ManagerSquadRoles roles in squadRolesByTeamName.Values)
             {
@@ -2326,18 +2343,11 @@ namespace Manager
                 foreach (PlayerAgent player in reservePool) player.Age += 1;
             }
 
-            // Unsigned youth prospects keep developing whether or not you've scouted
-            // them yet - procrastinate and a hidden wonderkid becomes obviously great
-            // (and obviously expensive) by the time you finally look, real tension for
-            // the "discover them early" fantasy. AgeAndExpireProspects (session 10)
-            // folds in expiry/refresh on the same tick - a prospect who ages out
-            // unbought gets swapped for a fresh 16-19-year-old instead of just getting
-            // older forever (see its own comment in ManagerScouting).
-            foreach (string region in scouting.GetPoolRegions())
-            {
-                scouting.GetOrCreateYouthPool(region, squadGenerator);
-                scouting.AgeAndExpireProspects(region, squadGenerator);
-            }
+            // Discovered-but-unclaimed youth prospects keep developing whether or not
+            // you've brought them into the Academy yet (session 13 mission rework) - no
+            // more age-out-and-replace, the 3-matchday poach timer already keeps this
+            // list from accumulating indefinitely (see ManagerScouting).
+            scouting.AgeDiscoveredProspects();
 
             // Youth academy (session 9) - same "keeps developing whether or not you're
             // watching" reasoning as the scouting pool above.
@@ -2398,6 +2408,12 @@ namespace Manager
         private const float AssumedPlayingTimeFactorAiFirstTeam = 0.65f;
         private const float AssumedPlayingTimeFactorUncalledReserve = 0.15f;
         private const float AssumedPlayingTimeFactorYouthProspect = 0.1f;
+        // Session 13 - meaningfully higher than an unclaimed youth prospect's factor,
+        // reflecting dedicated academy coaching/development attention rather than a kid
+        // just sitting in a scouting report somewhere. Both are now passed with
+        // exemptFromErosion: true (see ApplySeasonProgression's own comment) - this
+        // value only shapes growth RATE, not whether erosion applies.
+        private const float AssumedPlayingTimeFactorAcademyProspect = 0.8f;
 
         // Higher than the AI-first-team assumption above - the whole point of a loan
         // (session 9) is escaping a bench role for regular minutes elsewhere, which
@@ -2447,27 +2463,30 @@ namespace Manager
                 }
             }
 
-            // Unsigned youth prospects (session 8, Phase 2) - no real matches at all, so
-            // the lowest playing-time assumption of any pool.
-            foreach (string region in scouting.GetPoolRegions())
+            // Discovered-but-unclaimed youth prospects (session 8, Phase 2; mission
+            // rework session 13) - no real matches at all, so a low playing-time
+            // assumption for growth-rate purposes, but exempted from neglect erosion
+            // (see ApplySeasonProgression's own comment - they can't accrue real senior
+            // appearances at this age, so a low factor here was never meant to read as
+            // "being neglected").
+            foreach (PlayerAgent player in scouting.DiscoveredProspects)
             {
-                foreach (PlayerAgent player in scouting.GetOrCreateYouthPool(region, squadGenerator))
-                {
-                    ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect);
-                }
+                ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect, exemptFromErosion: true);
             }
 
-            // Youth academy (session 9) - same reasoning/rate as unsigned youth
-            // prospects above; reuses ManagerPlayerDevelopment's existing Potential/
-            // growth system completely unchanged, exactly as agreed when this was
-            // first floated, so academy kids visibly grow before they're even
-            // promotion-eligible. Focus stats (session 10) ride along on the same call -
-            // GetFocusAttributes returns an empty list for a prospect nobody's picked
-            // anything for yet, which ApplySeasonProgression already treats as "no
-            // doubling" the same as a null set.
+            // Youth academy (session 9) - a genuine development pipeline gets a
+            // meaningfully higher assumed factor than an unclaimed prospect still out in
+            // the world (session 13, in response to Thomas asking whether academy growth
+            // should be faster than senior development while sitting untouched - the
+            // honest answer turned out to be "it should also never have been eroding,"
+            // see the bug fix note above). Also exempt from erosion for the same reason.
+            // Focus stats (session 10) ride along on the same call - GetFocusAttributes
+            // returns an empty list for a prospect nobody's picked anything for yet,
+            // which ApplySeasonProgression already treats as "no doubling" the same as a
+            // null set.
             foreach (PlayerAgent player in academy.GetAcademyPoolForAging())
             {
-                ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect, academy.GetFocusAttributes(player));
+                ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorAcademyProspect, academy.GetFocusAttributes(player), exemptFromErosion: true);
             }
         }
 
@@ -2623,10 +2642,13 @@ namespace Manager
                 }
             }
 
-            // Youth academy (session 9) - see ManagerSaveData.AcademyPool's comment.
-            foreach (PlayerAgent academyProspect in academy.GetAcademyPoolForAging())
+            // Youth academy (session 9; empty-slot rework session 13) - positional, see
+            // ManagerSaveData.AcademySlots' comment.
+            foreach (PlayerAgent slot in academy.GetFullAcademySlots())
             {
-                data.AcademyPool.Add(PlayerAgentSaveData.FromPlayer(academyProspect));
+                data.AcademySlots.Add(slot == null
+                    ? new AcademySlotSaveData { IsEmpty = true }
+                    : new AcademySlotSaveData { IsEmpty = false, Prospect = PlayerAgentSaveData.FromPlayer(slot) });
             }
 
             foreach (LeagueTable.Entry entry in playableTable.Sorted())
@@ -2660,22 +2682,28 @@ namespace Manager
                 });
             }
 
-            foreach (string region in scouting.GetPoolRegions())
+            // Youth scouting missions + discoveries (session 13 rework) - positional
+            // mission briefs, plus every still-unclaimed discovery paired with the
+            // matchday it was found on so the poach timer resumes correctly.
+            for (int slot = 0; slot < ManagerScouting.ScoutSlots; slot++)
             {
-                YouthPoolSaveData poolData = new YouthPoolSaveData { Region = region };
-
-                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(region, squadGenerator))
-                {
-                    poolData.Prospects.Add(PlayerAgentSaveData.FromPlayer(prospect));
-
-                    if (scouting.IsScouted(prospect))
-                    {
-                        data.ScoutedPlayerIds.Add(prospect.PlayerId);
-                    }
-                }
-
-                data.YouthPools.Add(poolData);
+                data.ScoutMissions.Add(new ScoutMissionSaveData { TargetPositions = new List<PlayerPosition>(scouting.GetMissionPositions(slot)) });
             }
+
+            foreach (PlayerAgent prospect in scouting.DiscoveredProspects)
+            {
+                data.DiscoveredProspects.Add(new DiscoveredProspectSaveData
+                {
+                    Prospect = PlayerAgentSaveData.FromPlayer(prospect),
+                    DiscoveredMatchday = scouting.GetDiscoveredMatchday(prospect)
+                });
+            }
+
+            // Inbox + transfer negotiation (session 13) - see ManagerSaveData's own
+            // comment on PendingBidRefundOnLoad for why in-flight bids/transfer-scout
+            // assignments don't round-trip by reference and are refunded instead.
+            data.InboxMessages = inbox.BuildSaveList();
+            data.PendingBidRefundOnLoad = transferNegotiation.GetTotalEscrowed();
 
             return data;
         }
@@ -2718,6 +2746,7 @@ namespace Manager
             simulatedMatchdays.Clear();
             loanTracker.Clear();
             academy.Clear();
+            transferNegotiation.Clear();
 
             AgentTeam managedTeam = data.ManagedSquad.ToTeam();
             squadsByTeamName[managedTeamName] = managedTeam;
@@ -2738,17 +2767,21 @@ namespace Manager
                 loanTracker.SendOnLoan(dto.ToPlayer(), managedTeamName);
             }
 
-            // Youth academy (session 9) - only restore if the pool was actually
-            // generated before saving (data.AcademyPool.Count > 0). If the player never
-            // opened the Academy tab this career, nothing was ever generated to save -
-            // restoring an EMPTY list here would still mark the pool as "already
-            // created" (GetOrCreateAcademyPool's null-check would never trigger again),
-            // permanently freezing it at zero prospects instead of lazily generating
-            // fresh ones the first time it's actually opened after loading.
-            if (data.AcademyPool.Count > 0)
+            // Youth academy (session 9; empty-slot rework session 13) - only restore if
+            // the pool was actually generated before saving (data.AcademySlots.Count >
+            // 0). If the player never opened the Academy tab this career, nothing was
+            // ever generated to save - restoring an EMPTY list here would still mark the
+            // pool as "already created" (GetOrCreateAcademyPool's null-check would never
+            // trigger again), permanently freezing it at zero prospects instead of
+            // lazily generating fresh ones the first time it's actually opened after
+            // loading. Positional - a saved empty slot restores to the same index.
+            if (data.AcademySlots.Count > 0)
             {
                 List<PlayerAgent> restoredAcademy = new();
-                foreach (PlayerAgentSaveData dto in data.AcademyPool) restoredAcademy.Add(dto.ToPlayer());
+                foreach (AcademySlotSaveData slotData in data.AcademySlots)
+                {
+                    restoredAcademy.Add(slotData.IsEmpty ? null : slotData.Prospect.ToPlayer());
+                }
                 academy.RestoreAcademyPool(restoredAcademy);
             }
 
@@ -2779,7 +2812,10 @@ namespace Manager
 
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
             finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
-            finance.AdjustBudget(managedTeamName, data.ManagedBudget - finance.GetBudget(managedTeamName));
+            // + PendingBidRefundOnLoad - any bid still pending at save time was dropped
+            // above (transferNegotiation.Clear()), so its escrowed amount is credited
+            // back here instead of being silently lost (see ManagerSaveData's comment).
+            finance.AdjustBudget(managedTeamName, data.ManagedBudget + data.PendingBidRefundOnLoad - finance.GetBudget(managedTeamName));
             finance.SetTotalTransferSpend(managedTeamName, data.ManagedTotalTransferSpend);
             finance.SetTotalTransferIncome(managedTeamName, data.ManagedTotalTransferIncome);
 
@@ -2799,25 +2835,22 @@ namespace Manager
                 });
             }
 
-            HashSet<string> scoutedIds = new HashSet<string>(data.ScoutedPlayerIds);
-
-            foreach (YouthPoolSaveData poolData in data.YouthPools)
+            // Youth scouting missions + discoveries (session 13 rework).
+            for (int slot = 0; slot < data.ScoutMissions.Count && slot < ManagerScouting.ScoutSlots; slot++)
             {
-                List<PlayerAgent> pool = new List<PlayerAgent>();
-
-                foreach (PlayerAgentSaveData dto in poolData.Prospects)
-                {
-                    PlayerAgent prospect = dto.ToPlayer();
-                    pool.Add(prospect);
-
-                    if (scoutedIds.Contains(prospect.PlayerId))
-                    {
-                        scouting.RestoreScoutedPlayer(prospect);
-                    }
-                }
-
-                scouting.RestoreYouthPool(poolData.Region, pool);
+                scouting.RestoreMissionBrief(slot, data.ScoutMissions[slot].TargetPositions);
             }
+
+            List<PlayerAgent> restoredDiscoveries = new();
+            List<int> restoredDiscoveryMatchdays = new();
+            foreach (DiscoveredProspectSaveData dto in data.DiscoveredProspects)
+            {
+                restoredDiscoveries.Add(dto.Prospect.ToPlayer());
+                restoredDiscoveryMatchdays.Add(dto.DiscoveredMatchday);
+            }
+            scouting.RestoreDiscoveredProspects(restoredDiscoveries, restoredDiscoveryMatchdays);
+
+            inbox.RestoreFromSave(data.InboxMessages);
 
             seasonEndRewardsAppliedForCurrentSeason = true;
 
@@ -2923,6 +2956,14 @@ namespace Manager
             ShowSeasonHub();
         }
 
+        // Extra vertical room reserved above the scroll list, only on the Missions tab,
+        // for the two scout-mission brief boxes (session 13 rework) - toggled per tab in
+        // RefreshScoutingUI rather than built into two separate screens.
+        private const float ScoutingMissionsAreaHeight = 210f;
+        private GameObject scoutingMissionsContainer;
+        private RectTransform scoutingScrollViewRect;
+        private readonly List<GameObject> spawnedMissionBoxes = new();
+
         private void BuildScoutingChrome()
         {
             if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
@@ -2946,7 +2987,10 @@ namespace Manager
             GameObject titleObj = new GameObject("Title", typeof(RectTransform));
             titleObj.transform.SetParent(header.transform, false);
             ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(300f, 34f));
-            ManagerUITheme.BuildLabel(titleObj.transform, "SCOUTING", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            // Renamed from "SCOUTING" (session 13) - Thomas: the page covers both the
+            // youth missions and the Academy that develops what they find, "Youth"
+            // covers the whole page better than "Scouting" ever did.
+            ManagerUITheme.BuildLabel(titleObj.transform, "YOUTH", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             GameObject bylineObj = new GameObject("Byline", typeof(RectTransform));
             bylineObj.transform.SetParent(header.transform, false);
@@ -2966,16 +3010,26 @@ namespace Manager
             ManagerUITheme.SetPointAnchor(scoutingAcademyTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-276f, -27f), new Vector2(120f, 36f));
             scoutingAcademyTabButton.onClick.AddListener(OnScoutingAcademyTabClicked);
 
-            scoutingWorldTabButton = ManagerUITheme.BuildButton(header.transform, "WORLD SCOUTING", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
-            ManagerUITheme.SetPointAnchor(scoutingWorldTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-406f, -27f), new Vector2(170f, 36f));
+            // Renamed from "WORLD SCOUTING" (session 13 mission rework).
+            scoutingWorldTabButton = ManagerUITheme.BuildButton(header.transform, "SCOUTING MISSIONS", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
+            ManagerUITheme.SetPointAnchor(scoutingWorldTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-436f, -27f), new Vector2(200f, 36f));
             scoutingWorldTabButton.onClick.AddListener(OnScoutingWorldTabClicked);
 
             const float contentWidth = 1600f;
             const float sideMargin = (1920f - contentWidth) / 2f;
 
+            // Mission brief area (session 13) - built once here, shown/hidden and
+            // repopulated per refresh (see RefreshScoutingUI/RefreshMissionsArea)
+            // rather than living inside the scrollable grid content, so it can sit at a
+            // fixed position independent of how many rows the list below has.
+            scoutingMissionsContainer = new GameObject("MissionsArea", typeof(RectTransform));
+            scoutingMissionsContainer.transform.SetParent(scoutingPanel.transform, false);
+            ManagerUITheme.AnchorTopStretch(scoutingMissionsContainer, headerHeight + 10f, ScoutingMissionsAreaHeight, sideMargin);
+
             GameObject scrollViewObj = new GameObject("ScoutingScrollView", typeof(RectTransform), typeof(ScrollRect));
             scrollViewObj.transform.SetParent(scoutingPanel.transform, false);
             RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scoutingScrollViewRect = scrollViewRect;
             scrollViewRect.anchorMin = new Vector2(0f, 0f);
             scrollViewRect.anchorMax = new Vector2(1f, 1f);
             scrollViewRect.offsetMin = new Vector2(sideMargin, 40f);
@@ -3068,7 +3122,7 @@ namespace Manager
             if (scoutingWorldTabButton != null && scoutingWorldTabButton.TryGetComponent(out Image worldImage))
             {
                 worldImage.color = !scoutingShowingAcademyTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
-                ManagerUITheme.NormalizeButtonLabel(scoutingWorldTabButton, "WORLD SCOUTING", !scoutingShowingAcademyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+                ManagerUITheme.NormalizeButtonLabel(scoutingWorldTabButton, "SCOUTING MISSIONS", !scoutingShowingAcademyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
             }
 
             if (scoutingAcademyTabButton != null && scoutingAcademyTabButton.TryGetComponent(out Image academyImage))
@@ -3076,6 +3130,23 @@ namespace Manager
                 academyImage.color = scoutingShowingAcademyTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
                 ManagerUITheme.NormalizeButtonLabel(scoutingAcademyTabButton, "ACADEMY", scoutingShowingAcademyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
             }
+
+            // Mission boxes (session 13) only make sense on the Missions tab - toggled
+            // here, along with pushing the scroll list further down to make room while
+            // they're visible (see BuildScoutingChrome's own comment on the fixed
+            // ScoutingMissionsAreaHeight reservation).
+            const float headerHeight = 90f;
+            bool showMissions = !scoutingShowingAcademyTab;
+
+            if (scoutingMissionsContainer != null) scoutingMissionsContainer.SetActive(showMissions);
+
+            if (scoutingScrollViewRect != null)
+            {
+                float top = showMissions ? headerHeight + 10f + ScoutingMissionsAreaHeight + 30f : headerHeight + 40f;
+                scoutingScrollViewRect.offsetMax = new Vector2(scoutingScrollViewRect.offsetMax.x, -top);
+            }
+
+            if (showMissions) RefreshMissionsArea();
 
             scoutingListView.Clear();
 
@@ -3089,17 +3160,163 @@ namespace Manager
             }
         }
 
+        // --- Scout mission briefs (session 13) - two fixed slots, each up to 3 target
+        // positions, reusing the same absolute-positioned chip-toggle technique the
+        // Academy focus-stats picker already established (see BuildFocusStatsPicker). ---
+
+        private void RefreshMissionsArea()
+        {
+            foreach (GameObject box in spawnedMissionBoxes)
+            {
+                if (box != null) Destroy(box);
+            }
+            spawnedMissionBoxes.Clear();
+
+            if (scoutingMissionsContainer == null) return;
+
+            const float boxWidth = 780f;
+            const float gap = 40f;
+
+            for (int slot = 0; slot < ManagerScouting.ScoutSlots; slot++)
+            {
+                GameObject box = BuildMissionBox(slot, slot * (boxWidth + gap), boxWidth);
+                spawnedMissionBoxes.Add(box);
+            }
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(scoutingMissionsContainer.transform));
+        }
+
+        private GameObject BuildMissionBox(int slotIndex, float x, float width)
+        {
+            GameObject box = new GameObject($"MissionBox_{slotIndex}", typeof(RectTransform), typeof(Image));
+            box.transform.SetParent(scoutingMissionsContainer.transform, false);
+            RectTransform boxRect = box.GetComponent<RectTransform>();
+            boxRect.anchorMin = new Vector2(0f, 1f);
+            boxRect.anchorMax = new Vector2(0f, 1f);
+            boxRect.pivot = new Vector2(0f, 1f);
+            boxRect.anchoredPosition = new Vector2(x, 0f);
+            boxRect.sizeDelta = new Vector2(width, ScoutingMissionsAreaHeight);
+            box.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            IReadOnlyList<PlayerPosition> briefed = scouting.GetMissionPositions(slotIndex);
+            bool active = scouting.IsMissionActive(slotIndex);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(box.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(16f, -14f), new Vector2(width - 200f, 24f));
+            ManagerUITheme.BuildLabel(titleObj.transform, $"SCOUT {slotIndex + 1}", 16, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            string statusText = active
+                ? $"Searching for: {string.Join(", ", briefed)}"
+                : "No brief set - pick up to 3 positions and send them out.";
+            GameObject statusObj = new GameObject("Status", typeof(RectTransform));
+            statusObj.transform.SetParent(box.transform, false);
+            ManagerUITheme.SetPointAnchor(statusObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(16f, -38f), new Vector2(width - 32f, 20f));
+            ManagerUITheme.BuildLabel(statusObj.transform, statusText, 13, active ? ManagerUITheme.Accent : ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+
+            // Position chip grid - selection is staged in missionBriefSelection until
+            // SEND is clicked, so browsing positions doesn't reassign a live mission
+            // brief on every click.
+            if (!missionBriefSelection.TryGetValue(slotIndex, out List<PlayerPosition> staged))
+            {
+                staged = new List<PlayerPosition>(briefed);
+                missionBriefSelection[slotIndex] = staged;
+            }
+
+            PlayerPosition[] allPositions = (PlayerPosition[])System.Enum.GetValues(typeof(PlayerPosition));
+            const float chipWidth = 74f;
+            const float chipHeight = 28f;
+            const float chipGapX = 6f;
+            const float chipGapY = 6f;
+            const int chipsPerRow = 7;
+
+            for (int i = 0; i < allPositions.Length; i++)
+            {
+                PlayerPosition position = allPositions[i];
+                bool isSelected = staged.Contains(position);
+
+                int row = i / chipsPerRow;
+                int col = i % chipsPerRow;
+                float chipX = 16f + col * (chipWidth + chipGapX);
+                float chipY = -68f - row * (chipHeight + chipGapY);
+
+                GameObject chip = new GameObject($"PosChip_{position}", typeof(RectTransform), typeof(Image), typeof(Button));
+                chip.transform.SetParent(box.transform, false);
+                RectTransform chipRect = chip.GetComponent<RectTransform>();
+                chipRect.anchorMin = new Vector2(0f, 1f);
+                chipRect.anchorMax = new Vector2(0f, 1f);
+                chipRect.pivot = new Vector2(0f, 1f);
+                chipRect.sizeDelta = new Vector2(chipWidth, chipHeight);
+                chipRect.anchoredPosition = new Vector2(chipX, chipY);
+
+                Image chipImage = chip.GetComponent<Image>();
+                chipImage.color = isSelected ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+
+                Button chipButton = chip.GetComponent<Button>();
+                chipButton.targetGraphic = chipImage;
+                chipButton.onClick.AddListener(() => OnMissionPositionToggled(slotIndex, position));
+
+                ManagerUITheme.BuildLabel(chip.transform, position.ToString(), 12, isSelected ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.Bold);
+            }
+
+            Button sendButton = ManagerUITheme.BuildButton(box.transform, active ? "UPDATE BRIEF" : "SEND", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
+            ManagerUITheme.SetPointAnchor(sendButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(16f + 75f, 20f), new Vector2(150f, 34f));
+            int capturedSlot = slotIndex;
+            sendButton.onClick.AddListener(() => OnSendMissionClicked(capturedSlot));
+
+            Button cancelButton = ManagerUITheme.BuildButton(box.transform, "CANCEL", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(cancelButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(16f, 20f), new Vector2(140f, 34f));
+            cancelButton.onClick.AddListener(() => OnCancelMissionClicked(capturedSlot));
+
+            return box;
+        }
+
+        // Staged position picks per slot, cleared to match the real brief whenever a
+        // mission is actually sent/cancelled - see BuildMissionBox's own comment.
+        private readonly Dictionary<int, List<PlayerPosition>> missionBriefSelection = new();
+
+        private void OnMissionPositionToggled(int slotIndex, PlayerPosition position)
+        {
+            if (!missionBriefSelection.TryGetValue(slotIndex, out List<PlayerPosition> staged))
+            {
+                staged = new List<PlayerPosition>();
+                missionBriefSelection[slotIndex] = staged;
+            }
+
+            if (staged.Contains(position))
+            {
+                staged.Remove(position);
+            }
+            else if (staged.Count < ManagerScouting.MaxTargetPositions)
+            {
+                staged.Add(position);
+            }
+
+            RefreshMissionsArea();
+        }
+
+        private void OnSendMissionClicked(int slotIndex)
+        {
+            List<PlayerPosition> staged = missionBriefSelection.TryGetValue(slotIndex, out List<PlayerPosition> s) ? s : new List<PlayerPosition>();
+            scouting.SetMissionBrief(slotIndex, staged);
+            RefreshMissionsArea();
+        }
+
+        private void OnCancelMissionClicked(int slotIndex)
+        {
+            scouting.CancelMission(slotIndex);
+            missionBriefSelection[slotIndex] = new List<PlayerPosition>();
+            RefreshMissionsArea();
+        }
+
+        // --- Discovered prospects list (session 13) - a discovery IS the scouting act,
+        // so every row here already has full real stats (only Potential stays fuzzy,
+        // same as Academy's own kids - see ManagerScouting.GetDisplayPotential). No more
+        // per-row "assign a scout" action; clicking a row just opens full detail. ---
+
         private void RefreshWorldScoutingUI()
         {
-            List<PlayerAgent> allProspects = new List<PlayerAgent>();
-
-            // World-scattered rework (session 9) - unaffiliated free agents pooled by
-            // region (see ManagerScouting), not tied to any real Premier League club.
-            foreach (string region in ManagerPlayerNationality.AllRegions)
-            {
-                List<PlayerAgent> pool = scouting.GetOrCreateYouthPool(region, squadGenerator);
-                allProspects.AddRange(pool);
-            }
+            List<PlayerAgent> allProspects = new List<PlayerAgent>(scouting.DiscoveredProspects);
 
             if (scoutingSortColumn >= 0)
             {
@@ -3111,7 +3328,7 @@ namespace Manager
                 TextMeshProUGUI bylineTMP = scoutingBylineObj.GetComponentInChildren<TextMeshProUGUI>();
                 if (bylineTMP != null)
                 {
-                    bylineTMP.text = $"{scouting.ActiveAssignmentCount}/{ManagerScouting.MaxConcurrentAssignments} scouts assigned   ·   reports land after one matchday   ·   click a prospect to assign";
+                    bylineTMP.text = $"{allProspects.Count} discovered   ·   unclaimed for {ManagerScouting.MatchdaysUntilPoached} matchdays and they're poached   ·   bring them into an empty Academy slot to keep them";
                 }
             }
 
@@ -3120,9 +3337,8 @@ namespace Manager
             foreach (PlayerAgent prospect in allProspects)
             {
                 string nation = ManagerPlayerNationality.GetNationality(prospect).Name;
-                string status = scouting.IsScouted(prospect) ? "<color=#3ddc84>SCOUTED</color>"
-                    : scouting.IsAssigned(prospect) ? "<color=#e8c547>SCOUTING...</color>"
-                    : "";
+                int left = scouting.GetMatchdaysUntilPoached(prospect, currentFixtureIndex);
+                string expiresCell = left <= 1 ? $"<color=#e05a5a>{left} MD left</color>" : $"{left} MD left";
 
                 string[] cells =
                 {
@@ -3132,39 +3348,53 @@ namespace Manager
                     nation,
                     GetDisplayRating(prospect.GetOverallRating()).ToString(),
                     scouting.GetDisplayPotential(prospect),
-                    status
+                    expiresCell
                 };
 
-                scoutingListView.AddCustomGridRow(prospect, cells, ScoutingColumnFractions, OnScoutingProspectClicked,
+                scoutingListView.AddCustomGridRow(prospect, cells, ScoutingColumnFractions, p => OpenScoutedProspectDetail(p, allProspects),
                     onNameClicked: p => OpenScoutedProspectDetail(p, allProspects));
             }
         }
 
-        private static readonly string[] ScoutingColumnHeaders = { "PROSPECT", "POS", "AGE", "NATION", "OVR", "POTENTIAL", "STATUS" };
+        private static readonly string[] ScoutingColumnHeaders = { "PROSPECT", "POS", "AGE", "NATION", "OVR", "POTENTIAL", "EXPIRES" };
         private static readonly float[] ScoutingColumnFractions = { 0.20f, 0.07f, 0.07f, 0.22f, 0.09f, 0.14f, 0.21f };
 
-        // Youth academy (session 9) - "grew them myself," complementary to World
-        // Scouting's "found them abroad" (see ManagerAcademy). Deliberately no sortable
-        // headers here (only 5 slots - sorting adds little for a list that short) and
-        // no NATION column (they're your own kids, not a scouted discovery).
+        // Youth academy (session 9) - "grew them myself," complementary to the Missions
+        // tab's "found them abroad." Deliberately no sortable headers here (short, fixed-
+        // order list of slots - sorting adds little) and no NATION column (they're your
+        // own kids, not a scouted discovery). Empty slots (session 13) render their own
+        // row with a "BRING IN SCOUTED PLAYER" action instead of a normal grid row - see
+        // AddPrebuiltRow.
         private void RefreshAcademyUI()
         {
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
-            List<PlayerAgent> pool = academy.GetOrCreateAcademyPool(squadGenerator, strength.AttackStrength, strength.DefenceStrength);
+            academy.GetOrCreateAcademyPool(squadGenerator, strength.AttackStrength, strength.DefenceStrength);
+            IReadOnlyList<PlayerAgent> slots = academy.GetFullAcademySlots();
 
             if (scoutingBylineObj != null)
             {
                 TextMeshProUGUI bylineTMP = scoutingBylineObj.GetComponentInChildren<TextMeshProUGUI>();
                 if (bylineTMP != null)
                 {
-                    bylineTMP.text = $"{ManagerAcademy.AcademySlots} academy prospects   ·   promotable to reserves at age {ManagerAcademy.PromotionAge}   ·   click a promotable prospect to promote";
+                    int emptyCount = academy.GetEmptySlotIndices().Count;
+                    bylineTMP.text = $"{ManagerAcademy.AcademySlots} academy slots ({emptyCount} empty)   ·   promotable to reserves at age {ManagerAcademy.PromotionAge}   ·   click a promotable prospect to promote";
                 }
             }
 
             scoutingListView.AddCustomGridHeaderRow(AcademyColumnHeaders, AcademyColumnFractions);
 
-            foreach (PlayerAgent prospect in pool)
+            List<PlayerAgent> filledOnly = new List<PlayerAgent>(academy.GetAcademyPoolForAging());
+
+            for (int i = 0; i < slots.Count; i++)
             {
+                PlayerAgent prospect = slots[i];
+
+                if (prospect == null)
+                {
+                    scoutingListView.AddPrebuiltRow(BuildEmptyAcademySlotRow(i));
+                    continue;
+                }
+
                 bool promotable = academy.CanPromote(prospect);
                 string status = promotable ? "<color=#3ddc84>PROMOTABLE</color>" : "DEVELOPING";
 
@@ -3179,12 +3409,93 @@ namespace Manager
                 };
 
                 scoutingListView.AddCustomGridRow(prospect, cells, AcademyColumnFractions, OnAcademyProspectClicked,
-                    onNameClicked: p => OpenAcademyProspectDetail(p, pool));
+                    onNameClicked: p => OpenAcademyProspectDetail(p, filledOnly));
             }
         }
 
         private static readonly string[] AcademyColumnHeaders = { "PROSPECT", "POS", "AGE", "OVR", "POTENTIAL", "STATUS" };
         private static readonly float[] AcademyColumnFractions = { 0.24f, 0.10f, 0.10f, 0.12f, 0.18f, 0.26f };
+
+        // Session 13 - an empty slot is a real row (same rowHeight as a normal grid
+        // row, via its own LayoutElement) with a single "BRING IN SCOUTED PLAYER"
+        // action, rather than just vanishing from the list - the manager should be able
+        // to see exactly how many open slots exist and fill them deliberately.
+        private GameObject BuildEmptyAcademySlotRow(int slotIndex)
+        {
+            const float rowHeight = 40f;
+
+            GameObject row = new GameObject($"EmptySlot_{slotIndex}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            row.transform.SetParent(scoutingListView.transform, false);
+            row.GetComponent<LayoutElement>().preferredHeight = rowHeight;
+            row.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
+
+            GameObject labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(row.transform, false);
+            RectTransform labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0f, 0f);
+            labelRect.anchorMax = new Vector2(0.6f, 1f);
+            labelRect.offsetMin = new Vector2(10f, 0f);
+            labelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.BuildLabel(labelObj.transform, "EMPTY SLOT", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Italic);
+
+            Button bringInButton = ManagerUITheme.BuildButton(row.transform, "BRING IN SCOUTED PLAYER", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 12);
+            ManagerUITheme.SetPointAnchor(bringInButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-10f, 0f), new Vector2(240f, 30f));
+            bringInButton.onClick.AddListener(() => OnBringInScoutedPlayerClicked(slotIndex));
+
+            return row;
+        }
+
+        // Reuses the exact dropdown scaffold/option-row technique the Tactics screen's
+        // role-assignment pickers already established (BuildEmptyDropdownScaffold/
+        // PopulateDropdownOptions) - a scrollable "pick a player from a list" UI, just
+        // sourced from ManagerScouting.DiscoveredProspects instead of the squad.
+        private GameObject academyIntakeDropdown;
+
+        private void OnBringInScoutedPlayerClicked(int slotIndex)
+        {
+            if (academyIntakeDropdown != null)
+            {
+                Destroy(academyIntakeDropdown);
+                academyIntakeDropdown = null;
+            }
+
+            List<PlayerAgent> options = new List<PlayerAgent>(scouting.DiscoveredProspects);
+
+            academyIntakeDropdown = BuildEmptyDropdownScaffold(scoutingPanel.transform, options.Count);
+            RectTransform dropdownRect = academyIntakeDropdown.GetComponent<RectTransform>();
+            dropdownRect.anchorMin = new Vector2(0.5f, 0.5f);
+            dropdownRect.anchorMax = new Vector2(0.5f, 0.5f);
+            dropdownRect.pivot = new Vector2(0.5f, 0.5f);
+            dropdownRect.anchoredPosition = Vector2.zero;
+            dropdownRect.sizeDelta = new Vector2(600f, dropdownRect.sizeDelta.y);
+            academyIntakeDropdown.transform.SetAsLastSibling();
+
+            Transform content = academyIntakeDropdown.transform.Find("Viewport/Content");
+            PopulateDropdownOptions(content, options, prospect => OnScoutedPlayerChosenForSlot(slotIndex, prospect),
+                p => new[] { p.PrimaryPosition.ToString(), p.Age.ToString(), GetDisplayRating(p.GetOverallRating()).ToString() });
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(academyIntakeDropdown.transform));
+        }
+
+        private void OnScoutedPlayerChosenForSlot(int slotIndex, PlayerAgent prospect)
+        {
+            if (academyIntakeDropdown != null)
+            {
+                Destroy(academyIntakeDropdown);
+                academyIntakeDropdown = null;
+            }
+
+            // prospect is null when "— None —" was picked (PopulateDropdownOptions'
+            // built-in cancel option) - just closes the picker with no change.
+            if (prospect == null) return;
+
+            if (academy.PlaceProspectInSlot(slotIndex, prospect))
+            {
+                scouting.RemoveDiscoveredProspect(prospect);
+            }
+
+            RefreshScoutingUI();
+        }
 
         private void OnAcademyProspectClicked(PlayerAgent prospect)
         {
@@ -3202,13 +3513,12 @@ namespace Manager
             RefreshScoutingUI();
         }
 
-        // Manual release (backlog item 8, session 11) - see ManagerAcademy.
-        // ReleaseProspect's own comment for why this backfills the same slot instead of
-        // just shrinking the pool the way promotion does.
+        // Manual release (backlog item 8, session 11; empty-slot rework session 13) -
+        // leaves the slot genuinely empty now instead of auto-backfilling, see
+        // ManagerAcademy.ReleaseProspect's own comment.
         private void OnReleaseAcademyProspectClicked(PlayerAgent prospect)
         {
-            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
-            academy.ReleaseProspect(prospect, squadGenerator, strength.AttackStrength, strength.DefenceStrength);
+            academy.ReleaseProspect(prospect);
 
             OnInspectBackClicked();
         }
@@ -3264,7 +3574,10 @@ namespace Manager
                     result = GetScoutingPotentialSortKey(a).CompareTo(GetScoutingPotentialSortKey(b));
                     break;
                 case 6:
-                    result = GetScoutingStatusSortKey(a).CompareTo(GetScoutingStatusSortKey(b));
+                    // Ascending = most urgent (fewest matchdays left) first by default,
+                    // matching how every other column's "descending: true" first click
+                    // already reads as "most interesting first" for that column.
+                    result = scouting.GetMatchdaysUntilPoached(b, currentFixtureIndex).CompareTo(scouting.GetMatchdaysUntilPoached(a, currentFixtureIndex));
                     break;
                 default:
                     result = 0;
@@ -3281,19 +3594,6 @@ namespace Manager
             return float.TryParse(firstPart, out float value) ? value : 0f;
         }
 
-        private int GetScoutingStatusSortKey(PlayerAgent prospect)
-        {
-            if (scouting.IsScouted(prospect)) return 2;
-            if (scouting.IsAssigned(prospect)) return 1;
-            return 0;
-        }
-
-        private void OnScoutingProspectClicked(PlayerAgent prospect)
-        {
-            scouting.TryAssignScout(prospect, currentFixtureIndex);
-            RefreshScoutingUI();
-        }
-
         // Session 9 - Thomas: "click a prospect's name to see detailed stats" instead of
         // buying/scouting blind off just Age/OVR. browseList is the exact same list
         // (allProspects) Prev/Next will cycle through - browsing every scouted prospect
@@ -3306,15 +3606,20 @@ namespace Manager
             OpenPlayerInspect(prospect, browseList, ownSquad: false);
         }
 
-        // --- Transfer Market (career-arc addition, session 8, Phase 3): Buy tab browses
-        // every other club's squad plus already-scouted youth prospects, one-click bid at
-        // a competitive 1.15x MarketValue; Sell tab lists only your own Bench (Starting
-        // XI deliberately excluded - selling your best XI by a misclick is the one
-        // mistake this screen shouldn't let you make casually), one-click sell at 0.9x
-        // MarketValue. No AI-vs-AI transfer activity (explicit scope boundary, see
-        // HANDOFF) - rival squads only change via progression/retirement, never trading
-        // amongst themselves. Same code-built-panel/scroll-view pattern as Squad/
-        // Scouting. ---
+        // --- Transfer Market (career-arc addition, session 8, Phase 3; bid/negotiation
+        // redesign session 13): Buy tab browses every other club's squad plus already-
+        // scouted youth prospects. AI-squad targets need their own transfer scout
+        // assigned first (separate pool from World Scouting/Academy, see
+        // ManagerTransferNegotiation) before a price range and Make Bid unlock - no more
+        // one-click instant buy. A submitted bid escrows the amount and resolves a
+        // matchday later via Inbox, with the selling club's own squad depth at that
+        // position feeding how reluctant they are to sell. Sell tab is unchanged from
+        // session 8: only your own Bench (Starting XI deliberately excluded - selling
+        // your best XI by a misclick is the one mistake this screen shouldn't let you
+        // make casually), one-click sell at 0.9x MarketValue. No AI-vs-AI transfer
+        // activity (explicit scope boundary, see HANDOFF) - rival squads only change via
+        // progression/retirement, never trading amongst themselves. Same code-built-
+        // panel/scroll-view pattern as Squad/Scouting. ---
 
         private bool transferMarketChromeBuilt;
         private GameObject transferMarketPanel;
@@ -3327,7 +3632,24 @@ namespace Manager
         private Button transferMarketBuyTabButton;
         private Button transferMarketSellTabButton;
         private bool transferMarketShowingBuyTab = true;
-        private const float TransferBidMultiplier = 1.15f;
+
+        // Session 13 - looks up a player's current AI club purely by scanning
+        // squadsByTeamName, rather than trusting transferMarketRowClubs (only ever
+        // populated for whichever tab is currently rendered, cleared on every refresh -
+        // unreliable once a matchday tick needs to resolve a bid/scouting assignment
+        // outside the Transfer Market screen entirely). Returns null for a scouted
+        // prospect (never in squadsByTeamName, lives in the scouting pools instead) -
+        // ManagerTransferNegotiation already treats a null selling team as "no depth
+        // information available," the same case a prospect is meant to hit.
+        private AgentTeam FindTeamContainingPlayer(PlayerAgent player)
+        {
+            foreach (KeyValuePair<string, AgentTeam> kvp in squadsByTeamName)
+            {
+                if (kvp.Value.Players.Contains(player)) return kvp.Value;
+            }
+
+            return null;
+        }
 
         public void OnOpenTransferMarketClicked()
         {
@@ -3526,8 +3848,13 @@ namespace Manager
                     // against an accidental first-teamer sale, but nothing said so on
                     // screen, so a ~10-player bench-sized list read as suspiciously
                     // short/broken. Buy tab keeps its original plain budget line.
+                    // Session 13 - budget already reflects escrowed bids (TryPlaceBid
+                    // deducts immediately, see ManagerTransferNegotiation), so the plain
+                    // £Xm figure is still the honest "what you can spend right now"
+                    // number; the extra clauses just surface why it might look lower
+                    // than expected and how close the two new caps are to being hit.
                     bylineTMP.text = transferMarketShowingBuyTab
-                        ? $"Transfer budget: £{budget:F1}m"
+                        ? $"Transfer budget: £{budget:F1}m   ·   {transferNegotiation.PendingBidCount}/{ManagerTransferNegotiation.MaxConcurrentBids} bids pending (£{transferNegotiation.GetTotalEscrowed():F1}m committed)   ·   {transferNegotiation.ActiveTransferScoutAssignmentCount}/{ManagerTransferNegotiation.MaxConcurrentTransferScouts} scouts assigned"
                         : $"Transfer budget: £{budget:F1}m   ·   Only bench players can be sold - your Starting XI is protected from an accidental sale.";
                 }
             }
@@ -3561,8 +3888,8 @@ namespace Manager
         // already shipped for Scouting - see RefreshScoutingUI) replacing the old flat
         // concatenated-string label, which didn't align into columns since name lengths
         // vary (backlog item, see HANDOFF).
-        private static readonly string[] TransferBuyColumnHeaders = { "PLAYER", "POS", "AGE", "CLUB/NATION", "OVR", "BID" };
-        private static readonly float[] TransferBuyColumnFractions = { 0.28f, 0.10f, 0.08f, 0.24f, 0.10f, 0.20f };
+        private static readonly string[] TransferBuyColumnHeaders = { "PLAYER", "POS", "AGE", "CLUB/NATION", "OVR", "STATUS" };
+        private static readonly float[] TransferBuyColumnFractions = { 0.24f, 0.09f, 0.07f, 0.20f, 0.09f, 0.31f };
         private static readonly string[] TransferSellColumnHeaders = { "PLAYER", "POS", "AGE", "OVR", "SELL FOR" };
         private static readonly float[] TransferSellColumnFractions = { 0.34f, 0.14f, 0.12f, 0.14f, 0.26f };
 
@@ -3586,25 +3913,11 @@ namespace Manager
                 }
             }
 
-            // World-scattered rework (session 9) - scouted prospects are unaffiliated
-            // free agents now, so the shared "CLUB" column shows their nation instead
-            // for these rows specifically (same transferMarketRowClubs dictionary, just
-            // a different kind of string stored in it - every reader of that dictionary
-            // already just displays/sorts whatever string is there, so no other call
-            // site needed to change).
-            foreach (string region in ManagerPlayerNationality.AllRegions)
-            {
-                foreach (PlayerAgent prospect in scouting.GetOrCreateYouthPool(region, squadGenerator))
-                {
-                    if (!scouting.IsScouted(prospect))
-                    {
-                        continue;
-                    }
-
-                    transferMarketRowClubs[prospect] = ManagerPlayerNationality.GetNationality(prospect).Name;
-                    players.Add(prospect);
-                }
-            }
+            // Scouted youth prospects deliberately do NOT appear here anymore (session
+            // 13 Youth rework) - Thomas's explicit call: the Missions/Youth page is
+            // genuinely for youth now, every discovery has to be brought into the
+            // Academy first regardless of age, never bid on directly. See
+            // ManagerScouting/OnBringInScoutedPlayerClicked for where they actually go.
 
             if (transferBuySortColumn >= 0)
             {
@@ -3659,7 +3972,7 @@ namespace Manager
                     result = a.GetOverallRating().CompareTo(b.GetOverallRating());
                     break;
                 case 5:
-                    result = GetTransferAskingPrice(a).CompareTo(GetTransferAskingPrice(b));
+                    result = GetTransferStatusSortKey(a).CompareTo(GetTransferStatusSortKey(b));
                     break;
                 default:
                     result = 0;
@@ -3669,18 +3982,62 @@ namespace Manager
             return descending ? -result : result;
         }
 
-        private float GetTransferAskingPrice(PlayerAgent player)
+        // Session 13 redesign - STATUS is no longer a single price, it's a state
+        // (unscouted/scouting/ready-to-bid/pending/awaiting signature), so sorting on it
+        // needs a tiered key rather than a plain price comparison: awaiting-signature
+        // bids float to the top (the most actionable state), then pending bids, then
+        // ready-to-bid targets (secondary-sorted by recommended price), then in-progress
+        // scouting, then still-unscouted targets last.
+        private float GetTransferStatusSortKey(PlayerAgent player)
         {
-            return ManagerClubFinance.GetMarketValue(player) * TransferBidMultiplier;
+            ManagerTransferNegotiation.PendingBid pendingBid = transferNegotiation.GetPendingBid(player);
+
+            if (pendingBid != null && pendingBid.Status == ManagerTransferNegotiation.BidStatus.AwaitingSignature) return 4000f + pendingBid.BidAmount;
+            if (pendingBid != null) return 3000f + pendingBid.BidAmount;
+
+            bool scouted = transferNegotiation.IsTransferScouted(player);
+            if (scouted)
+            {
+                AgentTeam sourceTeam = FindTeamContainingPlayer(player);
+                return 2000f + ManagerTransferNegotiation.GetRecommendedBid(player, sourceTeam);
+            }
+
+            return transferNegotiation.IsTransferScoutAssigned(player) ? 1000f : 0f;
         }
 
         private void AddBuyRow(PlayerAgent player, string teamName, float budget, List<PlayerAgent> browseList)
         {
-            float value = ManagerClubFinance.GetMarketValue(player);
-            float askingPrice = value * TransferBidMultiplier;
-            string bidCell = askingPrice <= budget
-                ? $"£{askingPrice:F1}m"
-                : $"£{askingPrice:F1}m  <color=#e05a5a>(over budget)</color>";
+            bool scouted = transferNegotiation.IsTransferScouted(player);
+            bool scoutAssigned = transferNegotiation.IsTransferScoutAssigned(player);
+            ManagerTransferNegotiation.PendingBid pendingBid = transferNegotiation.GetPendingBid(player);
+
+            string ovrCell = scouted ? GetDisplayRating(player.GetOverallRating()).ToString() : ManagerTransferNegotiation.GetDisplayOverallBand(player);
+
+            string statusCell;
+            if (pendingBid != null && pendingBid.Status == ManagerTransferNegotiation.BidStatus.AwaitingSignature)
+            {
+                statusCell = $"<color=#3ddc84>ACCEPTED £{pendingBid.BidAmount:F1}m - CLICK TO SIGN</color>";
+            }
+            else if (pendingBid != null)
+            {
+                statusCell = $"<color=#e8c547>BID PENDING £{pendingBid.BidAmount:F1}m</color>";
+            }
+            else if (!scouted)
+            {
+                // Click-to-cancel (session 13 - Thomas: "I accidentally started
+                // scouting a player I didn't want and couldn't undo it") - the row's
+                // own click handler already branches on IsTransferScoutAssigned (see
+                // OnBuyRowClicked), this is just the matching label.
+                statusCell = scoutAssigned ? "<color=#e8c547>SCOUTING... (click to cancel)</color>" : "SCOUT TO REVEAL";
+            }
+            else
+            {
+                AgentTeam sourceTeam = FindTeamContainingPlayer(player);
+                float recommended = ManagerTransferNegotiation.GetRecommendedBid(player, sourceTeam);
+                statusCell = recommended <= budget
+                    ? $"~£{recommended:F1}m  ·  MAKE BID"
+                    : $"~£{recommended:F1}m  ·  MAKE BID  <color=#e05a5a>(over budget)</color>";
+            }
 
             string[] cells =
             {
@@ -3688,15 +4045,16 @@ namespace Manager
                 player.PrimaryPosition.ToString(),
                 player.Age.ToString(),
                 teamName,
-                GetDisplayRating(player.GetOverallRating()).ToString(),
-                bidCell
+                ovrCell,
+                statusCell
             };
 
-            // Session 9 - Thomas: "click a name to see detailed stats" instead of buying
-            // blind off just Age/OVR. See OpenScoutedProspectDetail's comment - same
-            // pattern, ownSquad:false since these are other clubs' players.
+            // Session 13 redesign - name click no longer opens full detail for an
+            // unscouted target (that would leak exact stats straight past the new
+            // scouting gate, see the design notes above AddBuyRow's own comment
+            // history); it falls back to the same row action instead.
             transferMarketListView.AddCustomGridRow(player, cells, TransferBuyColumnFractions, OnBuyRowClicked,
-                onNameClicked: p => OpenTransferTargetDetail(p, browseList));
+                onNameClicked: p => { if (scouted) OpenTransferTargetDetail(p, browseList); else OnBuyRowClicked(p); });
         }
 
         private void OpenTransferTargetDetail(PlayerAgent player, List<PlayerAgent> browseList)
@@ -3792,53 +4150,232 @@ namespace Manager
             return descending ? -result : result;
         }
 
+        // Session 13 redesign - single click handler for whichever state a Buy row is
+        // currently in, branching the same way the row's own STATUS cell does (see
+        // AddBuyRow). Replaces the old instant-buy OnBuyRowClicked entirely - no state
+        // in the new flow resolves in one click anymore.
         private void OnBuyRowClicked(PlayerAgent target)
         {
-            string sourceTeam = transferMarketRowClubs.TryGetValue(target, out string t) ? t : null;
+            ManagerTransferNegotiation.PendingBid pendingBid = transferNegotiation.GetPendingBid(target);
 
-            StatisticalModel.TeamStrength managedStrength = statisticalModel.GetTeamStrength(managedTeamName);
-            float budget = finance.GetOrSeedBudget(managedTeamName, managedStrength.AttackStrength, managedStrength.DefenceStrength);
-
-            float askingPrice = ManagerClubFinance.GetMarketValue(target) * TransferBidMultiplier;
-
-            if (askingPrice > budget)
+            if (pendingBid != null && pendingBid.Status == ManagerTransferNegotiation.BidStatus.AwaitingSignature)
             {
-                SetTransferMarketStatus($"Can't afford {target.Name} - £{askingPrice:F1}m bid exceeds your £{budget:F1}m budget.");
+                // Convenience path - the same Sign action the Inbox message offers,
+                // just reachable straight from the row too. Walk Away deliberately
+                // stays Inbox-only (see OnInboxWalkAwayClicked) so declining a done
+                // deal is a deliberate visit to the message, not an accidental click.
+                OnSignPlayerClicked(target);
                 return;
             }
 
-            if (!ManagerClubFinance.TryResolveBid(target, askingPrice))
+            if (pendingBid != null)
             {
-                SetTransferMarketStatus($"{target.Name}'s club rejected your £{askingPrice:F1}m bid.");
+                SetTransferMarketStatus($"Still waiting to hear back on {target.Name} - check your Inbox after the next matchday.");
                 return;
             }
 
-            // Move the player onto the managed squad. Scouted youth prospects live in
-            // the scouting pool, not squadsByTeamName - remove from whichever source
-            // they actually came from. World-scattered rework (session 9) - sourceTeam
-            // is now a NATION name for a scouted prospect (see RefreshTransferMarketBuyList),
-            // not a pool key, so which pool to remove from is looked up via the
-            // prospect's own REGION instead of trying to reuse that string directly.
-            string prospectRegion = ManagerPlayerNationality.GetNationality(target).Region;
-            bool wasProspect = scouting.GetOrCreateYouthPool(prospectRegion, squadGenerator).Contains(target);
+            bool scouted = transferNegotiation.IsTransferScouted(target);
 
-            if (wasProspect)
+            if (!scouted)
             {
-                scouting.GetOrCreateYouthPool(prospectRegion, squadGenerator).Remove(target);
+                // Click-to-cancel (session 13 - Thomas: "I accidentally started
+                // scouting a player I didn't want and couldn't undo it").
+                if (transferNegotiation.IsTransferScoutAssigned(target))
+                {
+                    transferNegotiation.CancelTransferScout(target);
+                    SetTransferMarketStatus($"Cancelled the scout assignment on {target.Name}.");
+                }
+                else if (transferNegotiation.TryAssignTransferScout(target, currentFixtureIndex))
+                {
+                    SetTransferMarketStatus($"Scout assigned to {target.Name} - report lands in your Inbox after the next matchday.");
+                }
+                else if (transferNegotiation.ActiveTransferScoutAssignmentCount >= ManagerTransferNegotiation.MaxConcurrentTransferScouts)
+                {
+                    SetTransferMarketStatus($"All {ManagerTransferNegotiation.MaxConcurrentTransferScouts} transfer scouts are already assigned - wait for a report to land first.");
+                }
+
+                RefreshTransferMarketUI();
+                return;
             }
-            else if (sourceTeam != null && squadsByTeamName.TryGetValue(sourceTeam, out AgentTeam sourceSquad))
+
+            string sourceTeamDisplay = transferMarketRowClubs.TryGetValue(target, out string t) ? t : "Unknown";
+            AgentTeam sellingTeam = FindTeamContainingPlayer(target);
+            ShowBidDialog(target, sellingTeam, sourceTeamDisplay);
+        }
+
+        // --- Bid-amount dialog (session 13) - reuses BuildSliderRow's discrete-option
+        // picker (same component the Tactics sliders and Match Speed setting already
+        // use) inside a ShowConfirmDialog-style modal card, rather than a bespoke
+        // continuous drag slider - lets the manager pick a bid rather than a single
+        // fixed ask, per Thomas's explicit design call. ---
+
+        private GameObject bidDialogPanel;
+        private float[] bidDialogAmounts;
+        private int bidDialogSelectedIndex;
+        private PlayerAgent bidDialogTarget;
+        private string bidDialogSourceTeam;
+
+        private void ShowBidDialog(PlayerAgent target, AgentTeam sellingTeam, string sourceTeamDisplay)
+        {
+            if (bidDialogPanel != null)
+            {
+                Destroy(bidDialogPanel);
+            }
+
+            float recommended = ManagerTransferNegotiation.GetRecommendedBid(target, sellingTeam);
+            bidDialogAmounts = new[] { recommended * 0.8f, recommended * 0.9f, recommended, recommended * 1.15f, recommended * 1.35f };
+            bidDialogSelectedIndex = 2;
+            bidDialogTarget = target;
+            bidDialogSourceTeam = sourceTeamDisplay;
+
+            Transform root = titlePanel.transform.parent;
+            bidDialogPanel = new GameObject("BidDialogPanel", typeof(RectTransform), typeof(Image));
+            bidDialogPanel.transform.SetParent(root, false);
+            RectTransform panelRect = bidDialogPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            bidDialogPanel.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.7f);
+            bidDialogPanel.transform.SetAsLastSibling();
+
+            GameObject card = new GameObject("Card", typeof(RectTransform), typeof(Image));
+            card.transform.SetParent(bidDialogPanel.transform, false);
+            RectTransform cardRect = card.GetComponent<RectTransform>();
+            cardRect.anchorMin = new Vector2(0.5f, 0.5f);
+            cardRect.anchorMax = new Vector2(0.5f, 0.5f);
+            cardRect.pivot = new Vector2(0.5f, 0.5f);
+            cardRect.sizeDelta = new Vector2(760f, 300f);
+            cardRect.anchoredPosition = Vector2.zero;
+            card.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(card.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -32f), new Vector2(680f, 30f));
+            ManagerUITheme.BuildLabel(titleObj.transform, $"MAKE A BID: {target.Name.ToUpperInvariant()}", 20, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            GameObject subtitleObj = new GameObject("Subtitle", typeof(RectTransform));
+            subtitleObj.transform.SetParent(card.transform, false);
+            ManagerUITheme.SetPointAnchor(subtitleObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -64f), new Vector2(680f, 24f));
+            ManagerUITheme.BuildLabel(subtitleObj.transform, $"Market value ~£{ManagerClubFinance.GetMarketValue(target):F1}m   ·   scout's recommendation ~£{recommended:F1}m", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
+
+            string[] optionLabels = new string[bidDialogAmounts.Length];
+            for (int i = 0; i < bidDialogAmounts.Length; i++) optionLabels[i] = $"£{bidDialogAmounts[i]:F1}m";
+
+            GameObject sliderContainer = new GameObject("SliderContainer", typeof(RectTransform));
+            sliderContainer.transform.SetParent(card.transform, false);
+            ManagerUITheme.SetPointAnchor(sliderContainer.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -108f), new Vector2(680f, 80f));
+            BuildSliderRow(sliderContainer.transform, "BID AMOUNT (higher = better odds)", 0f, optionLabels, bidDialogSelectedIndex, OnBidDialogAmountSelected);
+
+            Button confirmButton = ManagerUITheme.BuildButton(card.transform, "SUBMIT BID", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 15);
+            ManagerUITheme.SetPointAnchor(confirmButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(-100f, 36f), new Vector2(180f, 48f));
+            confirmButton.onClick.AddListener(OnConfirmBidClicked);
+
+            Button cancelButton = ManagerUITheme.BuildButton(card.transform, "CANCEL", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 15);
+            ManagerUITheme.SetPointAnchor(cancelButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(100f, 36f), new Vector2(180f, 48f));
+            cancelButton.onClick.AddListener(CloseBidDialog);
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(bidDialogPanel.transform));
+        }
+
+        private void OnBidDialogAmountSelected(int index)
+        {
+            bidDialogSelectedIndex = index;
+        }
+
+        private void OnConfirmBidClicked()
+        {
+            if (bidDialogTarget == null)
+            {
+                CloseBidDialog();
+                return;
+            }
+
+            PlayerAgent target = bidDialogTarget;
+            float amount = bidDialogAmounts[bidDialogSelectedIndex];
+
+            if (transferNegotiation.TryPlaceBid(target, amount, bidDialogSourceTeam, currentFixtureIndex, finance, managedTeamName))
+            {
+                SetTransferMarketStatus($"Bid of £{amount:F1}m submitted for {target.Name} - you'll hear back after the next matchday.");
+            }
+            else
+            {
+                SetTransferMarketStatus($"Couldn't submit that bid for {target.Name} - check your budget or your {ManagerTransferNegotiation.MaxConcurrentBids}-bid pending limit.");
+            }
+
+            CloseBidDialog();
+            RefreshTransferMarketUI();
+        }
+
+        private void CloseBidDialog()
+        {
+            if (bidDialogPanel != null)
+            {
+                Destroy(bidDialogPanel);
+                bidDialogPanel = null;
+            }
+
+            bidDialogTarget = null;
+        }
+
+        // Finalizes an accepted bid - moving the player onto the managed squad mirrors
+        // the old OnBuyRowClicked's "remove from whichever source they actually came
+        // from" logic exactly, just triggered from a Sign action instead of happening
+        // automatically the instant a bid was accepted (Thomas's explicit "confirm and
+        // sign" flow). Reachable both from the Buy row (see OnBuyRowClicked) and from
+        // the Inbox message itself (see OnInboxSignClicked).
+        private void OnSignPlayerClicked(PlayerAgent target)
+        {
+            if (!transferNegotiation.TrySign(target, finance, managedTeamName, out ManagerTransferNegotiation.PendingBid resolvedBid))
+            {
+                return;
+            }
+
+            // Every Transfer Market bid target is a regular AI-squad player now (session
+            // 13 Youth rework routes every scouted prospect through the Academy
+            // instead, never through here) - remove from their real club's squad.
+            if (resolvedBid.SourceTeamName != null && squadsByTeamName.TryGetValue(resolvedBid.SourceTeamName, out AgentTeam sourceSquad))
             {
                 sourceSquad.StartingEleven.Remove(target);
                 sourceSquad.Bench.Remove(target);
                 sourceSquad.Players.Remove(target);
             }
 
-            finance.AdjustBudget(managedTeamName, -askingPrice);
-            finance.RecordTransferSpend(managedTeamName, askingPrice);
             GetOrCreateAgentTeam(managedTeamName).AddBenchPlayer(target);
 
-            SetTransferMarketStatus($"Signed {target.Name} for £{askingPrice:F1}m!");
+            MarkInboxMessagesResolvedForPlayer(target);
+            SetTransferMarketStatus($"Signed {target.Name} for £{resolvedBid.BidAmount:F1}m!");
             RefreshTransferMarketUI();
+            if (inboxContentContainer != null) RefreshInboxUI();
+        }
+
+        private void OnWalkAwayClicked(PlayerAgent target)
+        {
+            if (!transferNegotiation.TryWalkAway(target, finance, managedTeamName))
+            {
+                return;
+            }
+
+            MarkInboxMessagesResolvedForPlayer(target);
+            SetTransferMarketStatus($"Walked away from the {target.Name} deal - your money's back in the budget.");
+            RefreshTransferMarketUI();
+            if (inboxContentContainer != null) RefreshInboxUI();
+        }
+
+        // Both Sign and Walk Away leave the triggering message (whichever screen it was
+        // clicked from) without a live action to perform anymore - clears the pending-
+        // action flag on every message still pointing at this player so ResolveAction's
+        // save/load-safety guarantee holds (see ManagerInbox.BuildSaveList) and the
+        // message reads as a closed, historical record instead of a dead button.
+        private void MarkInboxMessagesResolvedForPlayer(PlayerAgent player)
+        {
+            foreach (InboxMessage message in inbox.Messages)
+            {
+                if (message.ActionPlayer == player)
+                {
+                    inbox.ResolveAction(message);
+                }
+            }
         }
 
         private void OnSellRowClicked(PlayerAgent target)
@@ -3871,6 +4408,259 @@ namespace Manager
             {
                 statusTMP.text = message;
             }
+        }
+
+        // --- Inbox (session 13) - phase 3 of the manager influence arc, the last
+        // unclaimed item from the original session 7 plan (captaincy/fitness/morale all
+        // shipped already, see project_manager_influence_arc in memory). Same code-
+        // built-panel/chrome-guard/scroll-content pattern as Trophy Room/Career, just
+        // simpler (no tabs) - a flat newest-first message list. Transfer bid results are
+        // the first real message type, but the shape is deliberately generic (see
+        // ManagerInbox) for whatever gets added here later. ---
+
+        private bool inboxChromeBuilt;
+        private GameObject inboxPanel;
+        private RectTransform inboxContentContainer;
+        private readonly List<GameObject> spawnedInboxRows = new();
+
+        public void OnOpenInboxClicked()
+        {
+            if (!inboxChromeBuilt)
+            {
+                BuildInboxChrome();
+                inboxChromeBuilt = true;
+            }
+
+            if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
+            if (inboxPanel != null) inboxPanel.SetActive(true);
+
+            RefreshInboxUI();
+        }
+
+        public void OnInboxBackClicked()
+        {
+            if (inboxPanel != null) inboxPanel.SetActive(false);
+
+            ShowSeasonHub();
+        }
+
+        private void BuildInboxChrome()
+        {
+            if (seasonHubPanel == null || seasonHubPanel.transform.parent == null)
+            {
+                return;
+            }
+
+            const float headerHeight = 90f;
+
+            inboxPanel = new GameObject("InboxPanel", typeof(RectTransform));
+            inboxPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
+            RectTransform panelRect = inboxPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(inboxPanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(inboxPanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(300f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "INBOX", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK TO HUB", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(200f, 36f));
+            backButton.onClick.AddListener(OnInboxBackClicked);
+
+            const float contentWidth = 1200f;
+            const float sideMargin = (1920f - contentWidth) / 2f;
+
+            GameObject scrollViewObj = new GameObject("InboxScrollView", typeof(RectTransform), typeof(ScrollRect));
+            scrollViewObj.transform.SetParent(inboxPanel.transform, false);
+            RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scrollViewRect.anchorMin = new Vector2(0f, 0f);
+            scrollViewRect.anchorMax = new Vector2(1f, 1f);
+            scrollViewRect.offsetMin = new Vector2(sideMargin, 40f);
+            scrollViewRect.offsetMax = new Vector2(-sideMargin, -(headerHeight + 40f));
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(scrollViewObj.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            inboxContentContainer = contentObj.GetComponent<RectTransform>();
+            inboxContentContainer.anchorMin = new Vector2(0f, 1f);
+            inboxContentContainer.anchorMax = new Vector2(1f, 1f);
+            inboxContentContainer.pivot = new Vector2(0.5f, 1f);
+            inboxContentContainer.anchoredPosition = Vector2.zero;
+            inboxContentContainer.sizeDelta = Vector2.zero;
+
+            VerticalLayoutGroup layout = contentObj.GetComponent<VerticalLayoutGroup>();
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.childControlHeight = true;
+            layout.childControlWidth = true;
+            layout.spacing = 10f;
+
+            ContentSizeFitter fitter = contentObj.GetComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scrollRect.content = inboxContentContainer;
+            scrollRect.viewport = viewportRect;
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = 25f;
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(inboxPanel.transform));
+        }
+
+        private void RefreshInboxUI()
+        {
+            if (inboxContentContainer == null)
+            {
+                return;
+            }
+
+            foreach (GameObject row in spawnedInboxRows)
+            {
+                if (row != null) Destroy(row);
+            }
+            spawnedInboxRows.Clear();
+
+            if (inbox.Messages.Count == 0)
+            {
+                GameObject emptyObj = new GameObject("EmptyState", typeof(RectTransform), typeof(LayoutElement));
+                emptyObj.transform.SetParent(inboxContentContainer, false);
+                emptyObj.GetComponent<LayoutElement>().preferredHeight = 60f;
+                ManagerUITheme.BuildLabel(emptyObj.transform, "Nothing here yet - scouting reports and transfer bid responses will land here.", 16, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+                spawnedInboxRows.Add(emptyObj);
+            }
+            else
+            {
+                // Newest first.
+                for (int i = inbox.Messages.Count - 1; i >= 0; i--)
+                {
+                    spawnedInboxRows.Add(BuildInboxMessageRow(inbox.Messages[i]));
+                }
+            }
+
+            // Marking read happens on VIEW (opening the screen), not per-message - there's
+            // no separate message-detail view to click into (the full body already shows
+            // inline in the list), so "opened the Inbox" is the natural equivalent of
+            // "read your email." Deliberately after building the rows above, so this
+            // visit's unread styling still reflects what was actually true when the
+            // manager opened the screen, not a state this same call already erased first.
+            foreach (InboxMessage message in inbox.Messages)
+            {
+                inbox.MarkRead(message);
+            }
+
+            if (inboxButton != null)
+            {
+                ManagerUITheme.NormalizeButtonLabel(inboxButton, "INBOX", ManagerUITheme.TextBody, 17);
+            }
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(inboxContentContainer));
+        }
+
+        // Session 13 - collapsed banner (headline + matchday only) by default, click to
+        // expand and reveal the body (and Sign/Walk Away for an actionable message).
+        // Requested ahead of the longer Youth scouting-report text about to start
+        // landing here - a wall of always-expanded multi-line messages would make the
+        // list unscannable. Banner itself is a full-row Button toggling IsExpanded; the
+        // Sign/Walk Away buttons sit on top as later siblings so their own clicks
+        // resolve to them instead of bubbling down to the row's own toggle (same
+        // "topmost raycast target wins" convention BuildClickableNameCell already
+        // relies on elsewhere).
+        private const float InboxBannerHeight = 56f;
+
+        private GameObject BuildInboxMessageRow(InboxMessage message)
+        {
+            bool actionable = message.HasPendingAction;
+            float bodyHeight = actionable ? 110f : 70f;
+            float height = message.IsExpanded ? InboxBannerHeight + bodyHeight : InboxBannerHeight;
+
+            GameObject row = new GameObject($"Message_{message.Id}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            row.transform.SetParent(inboxContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = height;
+            Image rowImage = row.GetComponent<Image>();
+            rowImage.color = message.IsRead
+                ? ManagerUITheme.CardNeutralAlt
+                : new Color(ManagerUITheme.Accent.r, ManagerUITheme.Accent.g, ManagerUITheme.Accent.b, 0.10f);
+
+            Button rowButton = row.GetComponent<Button>();
+            rowButton.targetGraphic = rowImage;
+            rowButton.onClick.AddListener(() => OnInboxMessageBannerClicked(message));
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(row.transform, false);
+            RectTransform titleRect = titleObj.GetComponent<RectTransform>();
+            titleRect.anchorMin = new Vector2(0f, 1f);
+            titleRect.anchorMax = new Vector2(1f, 1f);
+            titleRect.pivot = new Vector2(0f, 1f);
+            titleRect.anchoredPosition = new Vector2(16f, -14f);
+            titleRect.sizeDelta = new Vector2(-260f, 26f);
+            // Plain ASCII, not a unicode bullet (Oswald SDF has no glyph for "●" - the
+            // same reason the Tactics Board formation dropdown uses a plain "v" instead
+            // of a unicode arrow; confirmed live, see feedback_random_namespace_ambiguity-
+            // adjacent font gotcha in HANDOFF).
+            string unreadMarker = message.IsRead ? "" : "<color=#3ddc84>NEW</color> ";
+            string expandMarker = message.IsExpanded ? "v " : "> ";
+            ManagerUITheme.BuildLabel(titleObj.transform, $"{expandMarker}{unreadMarker}{message.Title}", 17, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, message.IsRead ? FontStyles.Normal : FontStyles.Bold);
+
+            GameObject matchdayObj = new GameObject("Matchday", typeof(RectTransform));
+            matchdayObj.transform.SetParent(row.transform, false);
+            RectTransform matchdayRect = matchdayObj.GetComponent<RectTransform>();
+            matchdayRect.anchorMin = new Vector2(1f, 1f);
+            matchdayRect.anchorMax = new Vector2(1f, 1f);
+            matchdayRect.pivot = new Vector2(1f, 1f);
+            matchdayRect.anchoredPosition = new Vector2(-16f, -14f);
+            matchdayRect.sizeDelta = new Vector2(160f, 26f);
+            ManagerUITheme.BuildLabel(matchdayObj.transform, $"Matchday {message.MatchdayReceived}", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
+
+            if (!message.IsExpanded)
+            {
+                return row;
+            }
+
+            GameObject bodyObj = new GameObject("Body", typeof(RectTransform));
+            bodyObj.transform.SetParent(row.transform, false);
+            RectTransform bodyRect = bodyObj.GetComponent<RectTransform>();
+            bodyRect.anchorMin = new Vector2(0f, 1f);
+            bodyRect.anchorMax = new Vector2(1f, 1f);
+            bodyRect.pivot = new Vector2(0f, 1f);
+            bodyRect.anchoredPosition = new Vector2(16f, -(InboxBannerHeight + 2f));
+            bodyRect.sizeDelta = new Vector2(-32f, actionable ? bodyHeight - 44f : bodyHeight - 10f);
+            ManagerUITheme.BuildLabel(bodyObj.transform, message.Body, 14, ManagerUITheme.TextBody, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
+
+            if (actionable)
+            {
+                PlayerAgent actionPlayer = message.ActionPlayer;
+
+                Button signButton = ManagerUITheme.BuildButton(row.transform, "SIGN PLAYER", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
+                ManagerUITheme.SetPointAnchor(signButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-16f, 24f), new Vector2(160f, 40f));
+                signButton.onClick.AddListener(() => OnSignPlayerClicked(actionPlayer));
+
+                Button walkAwayButton = ManagerUITheme.BuildButton(row.transform, "WALK AWAY", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+                ManagerUITheme.SetPointAnchor(walkAwayButton.GetComponent<RectTransform>(), new Vector2(1f, 0f), new Vector2(-184f, 24f), new Vector2(160f, 40f));
+                walkAwayButton.onClick.AddListener(() => OnWalkAwayClicked(actionPlayer));
+            }
+
+            return row;
+        }
+
+        private void OnInboxMessageBannerClicked(InboxMessage message)
+        {
+            message.IsExpanded = !message.IsExpanded;
+            RefreshInboxUI();
         }
 
         // --- Trophy Room (career-arc addition, session 8, Phase 4): season-by-season
@@ -8367,7 +9157,10 @@ namespace Manager
                 SimulateOtherFixturesInMatchday(fixture.Matchday);
 
                 currentFixtureIndex++;
-                scouting.ResolveDueAssignments(currentFixtureIndex);
+                scouting.ResolveMatchdayTick(currentFixtureIndex, squadGenerator, inbox);
+                transferNegotiation.ResolveDueTransferScoutAssignments(currentFixtureIndex, inbox, FindTeamContainingPlayer);
+                transferNegotiation.ResolveDueBids(currentFixtureIndex, finance, managedTeamName, inbox, FindTeamContainingPlayer);
+                transferNegotiation.ResolveExpiredSignatures(currentFixtureIndex, finance, managedTeamName, inbox);
             }
 
             RefreshHubUI();
@@ -9308,7 +10101,10 @@ namespace Manager
             ApplyFixtureResult(currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
-            scouting.ResolveDueAssignments(currentFixtureIndex);
+            scouting.ResolveMatchdayTick(currentFixtureIndex, squadGenerator, inbox);
+            transferNegotiation.ResolveDueTransferScoutAssignments(currentFixtureIndex, inbox, FindTeamContainingPlayer);
+            transferNegotiation.ResolveDueBids(currentFixtureIndex, finance, managedTeamName, inbox, FindTeamContainingPlayer);
+            transferNegotiation.ResolveExpiredSignatures(currentFixtureIndex, finance, managedTeamName, inbox);
 
             matchPaused = false;
             Time.timeScale = 1f;

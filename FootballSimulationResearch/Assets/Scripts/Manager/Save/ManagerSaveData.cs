@@ -169,13 +169,51 @@ namespace Manager.Save
         public int Points;
     }
 
-    // TeamName renamed to Region (world-scattered scouting rework, session 9) - scouted
-    // prospects are pooled by region now, not tied to a real club at all.
+    // Academy slots (session 13 rework) - explicit IsEmpty flag rather than a raw
+    // nullable list entry, since JsonUtility doesn't reliably round-trip a literal null
+    // inside a List<T> of a reference type. Positional (index in the outer list ==
+    // slot index), so an empty slot restores to the same place it was released from.
     [Serializable]
-    public class YouthPoolSaveData
+    public class AcademySlotSaveData
     {
-        public string Region;
-        public List<PlayerAgentSaveData> Prospects = new();
+        public bool IsEmpty;
+        public PlayerAgentSaveData Prospect;
+    }
+
+    // Youth scouting missions (session 13 mission rework) - two fixed slots
+    // (ManagerScouting.ScoutSlots), each briefed with up to 3 target positions.
+    [Serializable]
+    public class ScoutMissionSaveData
+    {
+        public List<PlayerPosition> TargetPositions = new();
+    }
+
+    // A discovered-but-unclaimed prospect, paired with the matchday it was found on so
+    // the poach-timer (ManagerScouting.MatchdaysUntilPoached) can resume correctly
+    // after a load instead of silently resetting everyone's countdown.
+    [Serializable]
+    public class DiscoveredProspectSaveData
+    {
+        public PlayerAgentSaveData Prospect;
+        public int DiscoveredMatchday;
+    }
+
+    // Inbox (session 13) - lives here, not in ManagerInbox.cs (namespace Manager), so
+    // Manager.Save never has to depend upward on Manager (same one-directional
+    // layering every other enum/DTO in this file already follows, e.g. PlayerRole/
+    // PlayerPosition/Formation living in Sim rather than Manager). Deliberately just
+    // Title/Body strings, not a live PlayerAgent reference - see InboxMessage's own
+    // comment in ManagerInbox.cs for why a message is a baked snapshot, not a live view.
+    public enum InboxMessageType { ScoutingReport, BidAccepted, BidDeclined }
+
+    [Serializable]
+    public class InboxMessageSaveData
+    {
+        public InboxMessageType Type;
+        public string Title;
+        public string Body;
+        public int MatchdayReceived;
+        public bool IsRead;
     }
 
     // Only the managed team's designations are saved (the only ManagerSquadRoles
@@ -212,8 +250,13 @@ namespace Manager.Save
         public float ManagedTotalTransferSpend;
         public float ManagedTotalTransferIncome;
         public List<SeasonRecordSaveData> CareerHistory = new();
-        public List<YouthPoolSaveData> YouthPools = new();
-        public List<string> ScoutedPlayerIds = new();
+
+        // Youth scouting missions + discoveries (session 13 rework) - replaces the old
+        // region-keyed YouthPools/ScoutedPlayerIds entirely (no fixed pool exists
+        // anymore to save). ScoutMissions is always exactly ManagerScouting.ScoutSlots
+        // long, positional by slot index, same convention as AcademySlots below.
+        public List<ScoutMissionSaveData> ScoutMissions = new();
+        public List<DiscoveredProspectSaveData> DiscoveredProspects = new();
 
         // Loan system (session 9) - a loaned-out player is removed from ManagedSquad
         // entirely (they're not on your bench, they're playing elsewhere), so without
@@ -223,9 +266,24 @@ namespace Manager.Save
         // only, not worth the extra DTO fields.
         public List<PlayerAgentSaveData> LoanedOutPlayers = new();
 
-        // Youth academy (session 9) - same reasoning as LoanedOutPlayers above: academy
-        // prospects aren't in ManagedSquad/ManagedReservePool at all, so without this
-        // list they'd be silently lost on save/load.
-        public List<PlayerAgentSaveData> AcademyPool = new();
+        // Youth academy (session 9; empty-slot rework session 13) - academy prospects
+        // aren't in ManagedSquad/ManagedReservePool at all, so without this list they'd
+        // be silently lost on save/load. Always exactly ManagerAcademy.AcademySlots
+        // long, positional (see AcademySlotSaveData).
+        public List<AcademySlotSaveData> AcademySlots = new();
+
+        // Transfer negotiation + Inbox (session 13). InboxMessages round-trips fully -
+        // every entry is a resolved, action-free historical record (see
+        // ManagerInbox.BuildSaveList). Pending/awaiting-signature bids do NOT round-trip
+        // by reference - both an AI club's own squad players AND the exact PlayerAgent
+        // objects behind them regenerate fresh every session (same limitation
+        // ManagedReservePool's own class comment already documents for AI squads more
+        // generally), so there's no stable object to resume a live negotiation against.
+        // Rather than silently losing the escrowed money, PendingBidRefundOnLoad carries
+        // the total £m still committed to in-flight bids at save time, credited straight
+        // back to ManagedBudget on load - the negotiations themselves are simply dropped
+        // and would need to be started over.
+        public List<InboxMessageSaveData> InboxMessages = new();
+        public float PendingBidRefundOnLoad;
     }
 }

@@ -17,7 +17,7 @@ namespace Manager
     // like a real decision" than an automatic promotion).
     public class ManagerAcademy
     {
-        public const int AcademySlots = 5;
+        public const int AcademySlots = 11;
         private const int MinAcademyAge = 14;
         private const int MaxAcademyAge = 15;
         public const int PromotionAge = 16;
@@ -146,14 +146,14 @@ namespace Manager
             return true;
         }
 
-        // Manual release (backlog item 8, session 11) - "no way to release a dud
-        // prospect to free a slot" (unlike ManagerScouting's world pool, which already
-        // ages prospects out automatically). Unlike promotion, which deliberately
-        // shrinks the pool permanently (a graduated prospect earned their spot on the
-        // real squad), releasing immediately backfills the SAME slot index with a fresh
-        // 14-15-year-old - "release" only makes sense as an action if it actually frees
-        // real capacity for new talent, matching how Thomas originally framed the gap.
-        public bool ReleaseProspect(PlayerAgent player, AgentSquadGenerator generator, float attackStrength, float defenceStrength)
+        // Manual release (backlog item 8, session 11; leaves a genuinely empty slot as
+        // of session 13). Unlike promotion, which deliberately shrinks the pool
+        // permanently (a graduated prospect earned their spot on the real squad),
+        // releasing frees the slot for a manual "bring in a scouted player" action
+        // (see PlaceProspectInSlot) rather than auto-backfilling with a fresh random
+        // kid - Thomas's own call, session 13: an empty slot should be a deliberate
+        // decision to fill, not something the game quietly does for you.
+        public bool ReleaseProspect(PlayerAgent player)
         {
             if (academyPool == null)
             {
@@ -167,13 +167,50 @@ namespace Manager
                 return false;
             }
 
-            // Same reasoning as ManagerScouting's expiry clearing scouting/assignment
-            // state for the expiring reference - the replacement is a genuinely new,
-            // unrelated PlayerAgent instance, so any focus picks tied to the released
-            // player's specific object reference would otherwise just leak forever.
+            // Same reasoning as ManagerScouting's poach-timer clearing a claimed
+            // prospect's tracked state - the eventual replacement (if any) is a
+            // genuinely new, unrelated PlayerAgent instance, so any focus picks tied to
+            // the released player's specific object reference would otherwise leak
+            // forever.
             focusAttributesByProspect.Remove(player);
 
-            academyPool[index] = GenerateProspect(index, generator, attackStrength, defenceStrength);
+            academyPool[index] = null;
+            return true;
+        }
+
+        public bool HasEmptySlot()
+        {
+            if (academyPool == null) return false;
+            foreach (PlayerAgent p in academyPool) if (p == null) return true;
+            return false;
+        }
+
+        public IReadOnlyList<int> GetEmptySlotIndices()
+        {
+            List<int> empty = new List<int>();
+            if (academyPool == null) return empty;
+
+            for (int i = 0; i < academyPool.Count; i++)
+            {
+                if (academyPool[i] == null) empty.Add(i);
+            }
+
+            return empty;
+        }
+
+        // Fills an empty slot with an already-generated prospect from elsewhere (the
+        // ManagerScouting discovery list, session 13's mission rework) rather than
+        // generating a fresh one here - the caller is responsible for removing the
+        // prospect from wherever it came from (see ManagerScouting.
+        // RemoveDiscoveredProspect), this method only owns the academy side of the move.
+        public bool PlaceProspectInSlot(int slotIndex, PlayerAgent prospect)
+        {
+            if (academyPool == null || slotIndex < 0 || slotIndex >= academyPool.Count || academyPool[slotIndex] != null)
+            {
+                return false;
+            }
+
+            academyPool[slotIndex] = prospect;
             return true;
         }
 
@@ -181,13 +218,30 @@ namespace Manager
         // called from ManagerPrototypeController alongside the reserve pool/scouting
         // pool aging, using ManagerPlayerDevelopment.ApplySeasonProgression unchanged
         // (reuses the existing Potential/growth system exactly as agreed, so academy
-        // kids visibly grow before they're even promotion-eligible).
+        // kids visibly grow before they're even promotion-eligible). Empty slots
+        // (session 13) are filtered out here - aging/progression/save only ever care
+        // about real prospects, not the gaps between them.
         public IReadOnlyList<PlayerAgent> GetAcademyPoolForAging()
+        {
+            if (academyPool == null) return System.Array.Empty<PlayerAgent>();
+
+            List<PlayerAgent> filled = new List<PlayerAgent>();
+            foreach (PlayerAgent p in academyPool) if (p != null) filled.Add(p);
+            return filled;
+        }
+
+        // Positional view INCLUDING empty (null) slots - used by the UI to render every
+        // slot in order, and distinct from GetAcademyPoolForAging above precisely
+        // because save/load and the UI both need to know WHICH index is empty, not just
+        // how many real prospects exist.
+        public IReadOnlyList<PlayerAgent> GetFullAcademySlots()
         {
             return academyPool ?? (IReadOnlyList<PlayerAgent>)System.Array.Empty<PlayerAgent>();
         }
 
-        // Save/load restoration - same pattern as ManagerScouting.RestoreYouthPool.
+        // Save/load restoration - same pattern as ManagerScouting.RestoreDiscoveredProspects.
+        // Nulls in the incoming list are preserved as empty slots (see
+        // ManagerSaveData.AcademySlots' own comment for how null is represented there).
         public void RestoreAcademyPool(List<PlayerAgent> pool)
         {
             academyPool = pool;

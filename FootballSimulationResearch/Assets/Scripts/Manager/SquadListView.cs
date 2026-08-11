@@ -147,6 +147,22 @@ namespace Manager
             spawnedRows.Add(BuildCustomGridRow(player, cellTexts, columnFractions, onRowClicked, onNameClicked));
         }
 
+        // Escape hatch for a row shape this class doesn't build itself (e.g. an empty
+        // Academy slot's own "bring in a scouted player" row - no PlayerAgent exists to
+        // key it off of, so AddCustomGridRow's PlayerAgent-keyed API doesn't fit).
+        // Caller builds the GameObject (with its own LayoutElement so the row container's
+        // VerticalLayoutGroup sizes it correctly) and parents it here purely so it's
+        // tracked and destroyed by Clear() like every other row, instead of leaking or
+        // duplicating on the next refresh.
+        public void AddPrebuiltRow(GameObject row)
+        {
+            EnsureLayoutComponents();
+            if (row == null) return;
+
+            row.transform.SetParent(rowContainer, false);
+            spawnedRows.Add(row);
+        }
+
         private GameObject BuildGridHeaderRow(Action<int> onColumnClicked, int activeSortColumn, bool sortDescending)
         {
             GameObject row = new GameObject("GridHeader", typeof(RectTransform), typeof(LayoutElement));

@@ -107,12 +107,43 @@ namespace Manager
         // branch exactly), so this is a strict generalization, not a rebalance.
         public void ApplyPostMatchCondition(PlayerAgent player, float minutesPlayed, int age, float stamina)
         {
+            float minutesFraction = Mathf.Clamp01(minutesPlayed / 90f);
+
+            // Session 13 rebalance - Thomas: "Condition needs to recover way faster, I
+            // cannot stop my players from getting injured as is." Root cause wasn't the
+            // injury-chance formula itself (TryRollInjury's fatigueRisk term is 0 above
+            // Condition 70 and caps at a real but sane +9% at Condition 0 - reasonably
+            // tuned) - it was that the old linear recovery (+8 to +14/matchday) was far
+            // smaller than the fatigue cost of actually playing (-12 to -25/matchday for
+            // a full 90), so even a manager who DID rotate barely climbed out of the
+            // danger zone (confirmed: reaching 100 from empty took 10-13 STRAIGHT rest
+            // matchdays under the old formula). A genuinely unused bench week now fully
+            // restores Condition - matches Thomas's own explicit ask and makes rotation
+            // actually function as the escape valve it was always meant to be, while a
+            // squad that's never rotated at all still wears down exactly as before (this
+            // only changes what a real rest is worth, not what playing costs).
+            if (minutesFraction <= 0f)
+            {
+                condition[player] = 100f;
+                return;
+            }
+
             float youthRecoveryFactor = Mathf.Clamp01((28f - age) / 12f);
             float recovery = 8f + youthRecoveryFactor * 6f;
 
-            float minutesFraction = Mathf.Clamp01(minutesPlayed / 90f);
             float staminaFactor = Mathf.Clamp01((100f - stamina) / 100f);
             float fullMatchFatigue = 12f + staminaFactor * 13f;
+
+            // Goalkeepers barely move over 90 minutes compared to an outfield player and
+            // are almost never rotated for fitness reasons in real football (Thomas,
+            // session 13) - same reasoning applied here as the in-match fatigue system
+            // already gives keepers implicitly via low positional workload, just made
+            // explicit for this matchday-to-matchday tracker too.
+            if (player.PrimaryPosition == PlayerPosition.GK)
+            {
+                fullMatchFatigue *= 0.35f;
+            }
+
             float delta = recovery - fullMatchFatigue * minutesFraction;
 
             condition[player] = Mathf.Clamp(GetCondition(player) + delta, 0f, 100f);
