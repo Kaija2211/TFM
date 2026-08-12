@@ -204,9 +204,15 @@ namespace Manager
         // Sprite + Image rather than a TMP Sprite Asset.
         private Sprite tfmLogoSprite;
 
-        // Developer easter egg - see ApplyDeveloperEasterEggPlayer. A real portrait, only
-        // ever shown on this one specific player's Player Detail screen.
+        // Developer easter eggs - see ApplyDeveloperEasterEggPlayer. Real portraits, only
+        // ever shown on these specific players' Player Detail screens. All four source
+        // PNGs are pre-cropped to shoulders-and-above (same framing) - portrait display
+        // (RefreshPlayerInspectUI) just needs a name-to-sprite lookup, not any cropping
+        // logic of its own.
         private Sprite hiddePortraitSprite;
+        private Sprite thomasPortraitSprite;
+        private Sprite charliePortraitSprite;
+        private Sprite victorPortraitSprite;
 
         // Splash screen logo (backlog item 12, session 11) - studio name "Eucna".
         private Sprite eucnaLogoSprite;
@@ -446,6 +452,9 @@ namespace Manager
             footballIconSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/football-icon");
             tfmLogoSprite = Resources.Load<Sprite>("Manager/tfm-logo");
             hiddePortraitSprite = Resources.Load<Sprite>("Manager/hidde_playerportrait");
+            thomasPortraitSprite = Resources.Load<Sprite>("Manager/thomas_playerportrait");
+            charliePortraitSprite = Resources.Load<Sprite>("Manager/charlie_playerportrait");
+            victorPortraitSprite = Resources.Load<Sprite>("Manager/victor_playerportrait");
             eucnaLogoSprite = Resources.Load<Sprite>("Manager/eucna_logo_2");
 
             if (playNextMatchButton != null) playNextMatchButton.onClick.AddListener(OnNextMatchdayClicked);
@@ -8098,13 +8107,22 @@ namespace Manager
             photoRect.sizeDelta = new Vector2(220f, 220f);
             photoRect.anchoredPosition = new Vector2(36f, -40f);
 
-            // Developer easter egg (see ApplyDeveloperEasterEggPlayer) - a real portrait
-            // for this one specific player, everyone else keeps the plain placeholder
+            // Developer easter eggs (see ApplyDeveloperEasterEggPlayer) - real portraits
+            // for these specific players, everyone else keeps the plain placeholder
             // color since there's no actual photo pipeline for generated players.
             Image photoImage = photo.GetComponent<Image>();
-            if (player.Name == "Hidde Rietberg" && hiddePortraitSprite != null)
+            Sprite easterEggPortrait = player.Name switch
             {
-                photoImage.sprite = hiddePortraitSprite;
+                "Hidde Rietberg" => hiddePortraitSprite,
+                "Thomas Bernards" => thomasPortraitSprite,
+                "Charles Herring" => charliePortraitSprite,
+                "Victor Hamber" => victorPortraitSprite,
+                _ => null
+            };
+
+            if (easterEggPortrait != null)
+            {
+                photoImage.sprite = easterEggPortrait;
                 photoImage.color = Color.white;
                 photoImage.preserveAspect = true;
             }
@@ -11717,26 +11735,44 @@ namespace Manager
         // generation loop itself would shift the RNG draw sequence and silently change
         // every other generated player's stats too (the same risk flagged when GK stats
         // were discussed earlier this session). Applied strictly *after* GenerateSquad
-        // returns, overwriting only Name/Age/Height on one already-generated player -
-        // attributes/Overall are whatever normal generation rolled, untouched.
+        // returns, overwriting only Name/Age/Height/nationality on one already-generated
+        // player - attributes/Overall are whatever normal generation rolled, untouched
+        // (Thomas, session 16: "stats can be randomized just like before, but everything
+        // else is fixed"). Three more friends added this session alongside Hidde -
+        // Liverpool gets two (a CB and a DM), Tottenham gets one.
         private void ApplyDeveloperEasterEggPlayer(AgentTeam team)
         {
-            if (team.TeamName != "Arsenal")
+            switch (team.TeamName)
             {
-                return;
-            }
+                case "Arsenal":
+                    ApplyEasterEggIdentity(team, PlayerPosition.ST, "Hidde Rietberg", 25, 183f, "Netherlands");
+                    break;
 
-            PlayerAgent target = team.StartingEleven.Find(p => p.PrimaryPosition == PlayerPosition.ST)
-                ?? team.Bench.Find(p => p.PrimaryPosition == PlayerPosition.ST);
+                case "Liverpool":
+                    ApplyEasterEggIdentity(team, PlayerPosition.CB, "Thomas Bernards", 25, 200f, "Germany");
+                    ApplyEasterEggIdentity(team, PlayerPosition.DM, "Charles Herring", 25, 175f, "England");
+                    break;
+
+                case "Tottenham Hotspur":
+                    ApplyEasterEggIdentity(team, PlayerPosition.ST, "Victor Hamber", 26, 195f, "Sweden");
+                    break;
+            }
+        }
+
+        private void ApplyEasterEggIdentity(AgentTeam team, PlayerPosition position, string name, int age, float height, string nationName)
+        {
+            PlayerAgent target = team.StartingEleven.Find(p => p.PrimaryPosition == position)
+                ?? team.Bench.Find(p => p.PrimaryPosition == position);
 
             if (target == null)
             {
                 return;
             }
 
-            target.Name = "Hidde Rietberg";
-            target.Age = 25;
-            target.Height = 183f;
+            target.Name = name;
+            target.Age = age;
+            target.Height = height;
+            ManagerPlayerNationality.SetNationality(target, new ManagerPlayerNationality.Nation(nationName, "Western Europe"));
         }
     }
 }

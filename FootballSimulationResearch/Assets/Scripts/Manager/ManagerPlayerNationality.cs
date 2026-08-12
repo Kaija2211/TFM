@@ -44,7 +44,7 @@ namespace Manager
             new("England", "Western Europe"), new("Wales", "Western Europe"), new("Scotland", "Western Europe"),
             new("Ireland", "Western Europe"), new("France", "Western Europe"), new("Germany", "Western Europe"),
             new("Netherlands", "Western Europe"), new("Belgium", "Western Europe"), new("Portugal", "Western Europe"),
-            new("Spain", "Western Europe"), new("Italy", "Western Europe"),
+            new("Spain", "Western Europe"), new("Italy", "Western Europe"), new("Sweden", "Western Europe"),
 
             new("Poland", "Eastern Europe"), new("Serbia", "Eastern Europe"), new("Croatia", "Eastern Europe"),
             new("Ukraine", "Eastern Europe"), new("Czech Republic", "Eastern Europe"), new("Romania", "Eastern Europe"),
