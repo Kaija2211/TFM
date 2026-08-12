@@ -2,7 +2,7 @@
 
 This file is intended as a stable project-context document for AI assistants working on the repository. It summarises the MSc project, course context, research framing, implementation direction, evaluation plan, and current project boundaries without relying on source-code details.
 
-Last updated: 2026-08-06
+Last updated: 2026-08-12
 Student: Thomas Kaija Bernards — 100475
 Programme: MSc Professional Practice in Games Programming, SAE Institute London
 Working project title: **The Art of the Trade-off: Balancing Realism and Performance in Large-Scale Football Simulations**
@@ -354,6 +354,7 @@ When working on this repo, follow these constraints:
 11. **Multithreading/parallelism is out of scope.** Do not suggest or implement it (e.g. `Task.Run`, `Thread`, `Parallel.For`) as a performance fix for Research Mode or Manager Mode — this is a deliberate scope-control decision, and it keeps the recorded SM-vs-ABM execution time / sims-per-minute comparison on a consistent single-threaded basis.
 12. **"Don't touch the match simulator" means the original, not Manager Mode's fork.** `Assets/Scripts/Sim/AgentMatchSimulator.cs` must stay untouched (guardrail #1 above). `Assets/Scripts/ManagerSim/AgentMatchSimulator.cs` is a deliberate, free-to-edit Manager Mode-only duplicate (see section 6) - editing it is normal Manager Mode work, not a Research Mode violation. Always verify with `git diff` on the `Sim/` original specifically (not just "no errors") before considering a match-logic change to be Research-Mode-safe.
 13. **Any change to `ManagerSim/AgentMatchSimulator.cs`'s scoring/shot/save probability logic must be checked against real goals/match, both-teams-scored%, and scoreless-draw% before being considered done - not just "no compile errors."** The goals-per-match/MAE figures in section 7 took real calibration effort to get realistic, and it's easy to silently break that balance elsewhere (e.g. session 6: adding a genuine on/off-target split for the Shots on Target stat accidentally stacked a second probability filter in front of the existing goal roll, quietly cutting Manager Mode's goals/match from a realistic ~2.8 to ~1.2 and pushing scoreless draws to ~30% - not caught until Thomas noticed goals felt too rare in actual play). The fastest real check: instantiate `Manager.AgentMatchSimulator` and `Sim.AgentMatchSimulator` directly in a throwaway script (via `Unity_RunCommand` or similar), simulate ~200 matches between the same freshly-generated teams through both, and compare average goals/match and BTTS% side by side - they should track closely (protected original's own generated-team output is the ground truth to match against, not just "feels plausible").
+14. **At the end of a working session, append a dated entry to `DEVLOG.md` (repo root)** summarising what was done, problems encountered and how they were fixed, and any academic-honesty/architecture notes worth keeping for the dissertation write-up. `DEVLOG.md` is a single running journal - new entries go at the **top** - not a per-session file (no `devlog1.md`, `devlog2.md`, etc.); this keeps it a single citable, chronologically readable artefact rather than a set of files a future session has to go hunting for. This is separate from `HANDOFF.md`, which is overwritten each session to hand off *current* state and is not a history.
 
 Useful rule:
 
@@ -372,6 +373,7 @@ For dissertation/evidence folders, preserve:
 - screenshots of Manager Mode title/new career/hub/squad/player/matchday screens;
 - screenshots or notes showing full league table progression;
 - Git commit history demonstrating iteration;
+- `DEVLOG.md` (repo root) - dated development journal, problems/fixes per session;
 - AI-use log or summary;
 - user-study materials and anonymised results if completed.
 
