@@ -41,6 +41,44 @@ namespace Manager
             }
         }
 
+        public void ApplyTeamPerformanceTick(
+    int goalsFor,
+    int goalsAgainst,
+    int shotsFor,
+    int shotsAgainst,
+    bool isDominatingPossession = false)
+        {
+            List<string> names = new List<string>(ratingByPlayerName.Keys);
+
+            int goalDifference = goalsFor - goalsAgainst;
+            int shotDifference = shotsFor - shotsAgainst;
+
+            float teamDrift = 0f;
+
+            // Scoreline matters.
+            if (goalDifference > 0) teamDrift += 0.04f * Mathf.Min(goalDifference, 3);
+            if (goalDifference < 0) teamDrift += 0.035f * Mathf.Max(goalDifference, -3);
+
+            // Match control matters too.
+            if (shotDifference > 0) teamDrift += 0.01f * Mathf.Min(shotDifference, 8);
+            if (shotDifference < 0) teamDrift += 0.008f * Mathf.Max(shotDifference, -8);
+
+            if (isDominatingPossession)
+            {
+                teamDrift += 0.03f;
+            }
+
+            foreach (string name in names)
+            {
+                float individualNoise = Random.Range(-0.025f, 0.055f);
+                ratingByPlayerName[name] = Mathf.Clamp(
+                    ratingByPlayerName[name] + teamDrift + individualNoise,
+                    MinRating,
+                    MaxRating
+                );
+            }
+        }
+
         // Called when a substitute enters the XI mid-match (see OnBenchPlayerDroppedOnPin)
         // - starts them at the same baseline everyone kicks off at, not whatever the
         // player they replaced had earned. No-ops if already tracked (e.g. re-adding the
@@ -120,7 +158,9 @@ namespace Manager
 
             foreach (string name in names)
             {
-                float drift = Random.Range(-0.04f, 0.06f);
+                // More generous than the original -0.04 to +0.06.
+                // Most players slowly drift into the 6.3-7.0 range unless bad events pull them down.
+                float drift = Random.Range(-0.03f, 0.12f);
                 ratingByPlayerName[name] = Mathf.Clamp(ratingByPlayerName[name] + drift, MinRating, MaxRating);
             }
         }

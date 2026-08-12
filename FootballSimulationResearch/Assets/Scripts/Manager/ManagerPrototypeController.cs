@@ -3447,11 +3447,41 @@ namespace Manager
             dateRect.anchorMin = new Vector2(1f, 0.5f);
             dateRect.anchorMax = new Vector2(1f, 0.5f);
             dateRect.pivot = new Vector2(1f, 0.5f);
-            dateRect.anchoredPosition = new Vector2(-20f, 0f);
-            dateRect.sizeDelta = new Vector2(220f, 30f);
+            dateRect.anchoredPosition = new Vector2(-110f, 0f);
+            dateRect.sizeDelta = new Vector2(160f, 30f);
             ManagerUITheme.BuildLabel(dateObj.transform, FormatSaveTimestamp(data.LastSavedUtc), 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
 
+            // Session 16 - Thomas: "an option to delete a save... a crap top now from
+            // testing... a confirmation thing too before you actually delete so i dont
+            // accidentally delete my main one." ManagerSaveService.Delete already existed
+            // (session 15) but was never wired to any UI. A child Button drawn on top of
+            // the row's own full-row load Button correctly intercepts its own clicks via
+            // normal Unity UI raycasting - clicking DELETE never also fires the row's own
+            // load-this-save handler underneath it.
+            Button deleteButton = ManagerUITheme.BuildButton(row.transform, "DELETE", ManagerUITheme.Danger, ManagerUITheme.TextPrimary, 13);
+            RectTransform deleteRect = deleteButton.GetComponent<RectTransform>();
+            deleteRect.anchorMin = new Vector2(1f, 0.5f);
+            deleteRect.anchorMax = new Vector2(1f, 0.5f);
+            deleteRect.pivot = new Vector2(1f, 0.5f);
+            deleteRect.anchoredPosition = new Vector2(-20f, 0f);
+            deleteRect.sizeDelta = new Vector2(80f, 36f);
+            string capturedSaveName = data.SaveName;
+            deleteButton.onClick.AddListener(() => OnDeleteSaveClicked(capturedSaveId, capturedSaveName));
+
             return row;
+        }
+
+        private void OnDeleteSaveClicked(string saveId, string saveName)
+        {
+            ShowConfirmDialog(
+                $"Delete \"{saveName}\"? This can't be undone.",
+                "DELETE", () =>
+                {
+                    ManagerSaveService.Delete(saveId);
+                    RefreshSaveBrowserUI();
+                    RefreshTitleScreenButtons();
+                },
+                "CANCEL", null);
         }
 
         // LastSavedUtc is stored as DateTime.ToString("o") (round-trip ISO 8601) purely
@@ -3511,6 +3541,8 @@ namespace Manager
 
         public void OnOpenScoutingClicked()
         {
+            CloseAcademyIntakeDropdown();
+
             if (!scoutingChromeBuilt)
             {
                 BuildScoutingChrome();
@@ -3527,18 +3559,24 @@ namespace Manager
 
         private void OnScoutingWorldTabClicked()
         {
+            CloseAcademyIntakeDropdown();
+
             scoutingShowingAcademyTab = false;
             RefreshScoutingUI();
         }
 
         private void OnScoutingAcademyTabClicked()
         {
+            CloseAcademyIntakeDropdown();
+
             scoutingShowingAcademyTab = true;
             RefreshScoutingUI();
         }
 
         public void OnScoutingBackClicked()
         {
+            CloseAcademyIntakeDropdown();
+
             if (scoutingPanel != null) scoutingPanel.SetActive(false);
 
             ShowSeasonHub();
@@ -3967,21 +4005,27 @@ namespace Manager
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
             academy.GetOrCreateAcademyPool(squadGenerator, strength.AttackStrength, strength.DefenceStrength);
             IReadOnlyList<PlayerAgent> slots = academy.GetFullAcademySlots();
+            IReadOnlyList<int> emptySlotIndices = academy.GetEmptySlotIndices();
 
             if (scoutingBylineObj != null)
             {
                 TextMeshProUGUI bylineTMP = scoutingBylineObj.GetComponentInChildren<TextMeshProUGUI>();
                 if (bylineTMP != null)
                 {
-                    int emptyCount = academy.GetEmptySlotIndices().Count;
+                    int emptyCount = emptySlotIndices.Count;
                     bylineTMP.text = $"{ManagerAcademy.AcademySlots} academy slots ({emptyCount} empty)   ·   promotable to reserves at age {ManagerAcademy.PromotionAge}   ·   click a promotable prospect to promote";
                 }
             }
 
-            scoutingListView.AddCustomGridHeaderRow(AcademyColumnHeaders, AcademyColumnFractions, OnAcademyColumnHeaderClicked, academySortColumn, academySortDescending);
+            scoutingListView.AddCustomGridHeaderRow(
+                AcademyColumnHeaders,
+                AcademyColumnFractions,
+                OnAcademyColumnHeaderClicked,
+                academySortColumn,
+                academySortDescending
+            );
 
             List<PlayerAgent> filledOnly = new List<PlayerAgent>(academy.GetAcademyPoolForAging());
-            int emptySlotCount = academy.GetEmptySlotIndices().Count;
 
             if (academySortColumn >= 0)
             {
@@ -3993,9 +4037,11 @@ namespace Manager
                     BuildAcademyRow(prospect, filledOnly);
                 }
 
-                for (int i = 0; i < emptySlotCount; i++)
+                // Important: use the REAL empty slot indices.
+                // The old version used 0..emptySlotCount, which can point at filled slots after sorting.
+                foreach (int emptySlotIndex in emptySlotIndices)
                 {
-                    scoutingListView.AddPrebuiltRow(BuildEmptyAcademySlotRow(i));
+                    scoutingListView.AddPrebuiltRow(BuildEmptyAcademySlotRow(emptySlotIndex));
                 }
 
                 return;
@@ -4131,9 +4177,22 @@ namespace Manager
                 academyIntakeDropdown = null;
             }
 
+            IReadOnlyList<PlayerAgent> academySlots = academy.GetFullAcademySlots();
+            bool validSlot = slotIndex >= 0 && slotIndex < academySlots.Count;
+            bool slotEmpty = validSlot && academySlots[slotIndex] == null;
+
+            if (!validSlot || !slotEmpty)
+            {
+                Debug.LogWarning(
+                    $"Academy intake blocked: slotIndex={slotIndex}, validSlot={validSlot}, slotEmpty={slotEmpty}."
+                );
+                return;
+            }
+
             List<PlayerAgent> options = new List<PlayerAgent>(scouting.DiscoveredProspects);
 
             academyIntakeDropdown = BuildEmptyDropdownScaffold(scoutingPanel.transform, options.Count);
+
             RectTransform dropdownRect = academyIntakeDropdown.GetComponent<RectTransform>();
             dropdownRect.anchorMin = new Vector2(0.5f, 0.5f);
             dropdownRect.anchorMax = new Vector2(0.5f, 0.5f);
@@ -4142,9 +4201,30 @@ namespace Manager
             dropdownRect.sizeDelta = new Vector2(600f, dropdownRect.sizeDelta.y);
             academyIntakeDropdown.transform.SetAsLastSibling();
 
+            // Defensive: if the shared dropdown scaffold starts inactive, this makes the picker visible.
+            academyIntakeDropdown.SetActive(true);
+
             Transform content = academyIntakeDropdown.transform.Find("Viewport/Content");
-            PopulateDropdownOptions(content, options, prospect => OnScoutedPlayerChosenForSlot(slotIndex, prospect),
-                p => new[] { p.PrimaryPosition.ToString(), p.Age.ToString(), GetDisplayRating(p.GetOverallRating()).ToString() });
+
+            if (content == null)
+            {
+                Debug.LogWarning("Academy intake dropdown failed: could not find Viewport/Content.");
+                Destroy(academyIntakeDropdown);
+                academyIntakeDropdown = null;
+                return;
+            }
+
+            PopulateDropdownOptions(
+                content,
+                options,
+                prospect => OnScoutedPlayerChosenForSlot(slotIndex, prospect),
+                p => new[]
+                {
+            p.PrimaryPosition.ToString(),
+            p.Age.ToString(),
+            GetDisplayRating(p.GetOverallRating()).ToString()
+                }
+            );
 
             StartCoroutine(RecoverBlankLabelsNextFrame(academyIntakeDropdown.transform));
         }
@@ -4157,13 +4237,29 @@ namespace Manager
                 academyIntakeDropdown = null;
             }
 
-            // prospect is null when "— None —" was picked (PopulateDropdownOptions'
-            // built-in cancel option) - just closes the picker with no change.
-            if (prospect == null) return;
+            // prospect is null when "— None —" was picked.
+            if (prospect == null)
+            {
+                return;
+            }
 
-            if (academy.PlaceProspectInSlot(slotIndex, prospect))
+            IReadOnlyList<PlayerAgent> academySlots = academy.GetFullAcademySlots();
+            bool validSlot = slotIndex >= 0 && slotIndex < academySlots.Count;
+            bool slotEmpty = validSlot && academySlots[slotIndex] == null;
+            bool wasDiscovered = scouting.DiscoveredProspects.Contains(prospect);
+
+            bool placed = academy.PlaceProspectInSlot(slotIndex, prospect);
+
+            if (placed)
             {
                 scouting.RemoveDiscoveredProspect(prospect);
+                Debug.Log($"Academy intake complete: brought in {prospect.Name} to academy slot {slotIndex}.");
+            }
+            else
+            {
+                Debug.LogWarning(
+                    $"Academy intake failed: player={prospect.Name}, slotIndex={slotIndex}, validSlot={validSlot}, slotEmpty={slotEmpty}, wasDiscovered={wasDiscovered}."
+                );
             }
 
             RefreshScoutingUI();
@@ -8116,7 +8212,7 @@ namespace Manager
                 "Hidde Rietberg" => hiddePortraitSprite,
                 "Thomas Bernards" => thomasPortraitSprite,
                 "Charles Herring" => charliePortraitSprite,
-                "Victor Hamber" => victorPortraitSprite,
+                "Victor Hamberg" => victorPortraitSprite,
                 _ => null
             };
 
@@ -10757,6 +10853,15 @@ namespace Manager
             }
         }
 
+        private void CloseAcademyIntakeDropdown()
+        {
+            if (academyIntakeDropdown != null)
+            {
+                Destroy(academyIntakeDropdown);
+                academyIntakeDropdown = null;
+            }
+        }
+
         // Real per-player minutes for this match (session 10 fix, see
         // ManagerSquadRoles.ApplyPostMatchCondition's own comment for the bug this
         // replaces). matchSubsLog only ever gets an entry for a genuine MID-match
@@ -10960,7 +11065,23 @@ namespace Manager
                 // ApplyAmbientTick's own comment for the tuning reasoning.
                 if (minute % 5 == 0)
                 {
+                    bool managedTeamIsHome = currentFixture.HomeTeam == managedTeamName;
+
+                    int managedGoalsSoFar = managedTeamIsHome ? liveHomeGoalsSoFar : liveAwayGoalsSoFar;
+                    int opponentGoalsSoFar = managedTeamIsHome ? liveAwayGoalsSoFar : liveHomeGoalsSoFar;
+
+                    int managedShotsSoFar = managedTeamIsHome ? homeShots : awayShots;
+                    int opponentShotsSoFar = managedTeamIsHome ? awayShots : homeShots;
+
                     matchRatings.ApplyAmbientTick();
+
+                    matchRatings.ApplyTeamPerformanceTick(
+                        managedGoalsSoFar,
+                        opponentGoalsSoFar,
+                        managedShotsSoFar,
+                        opponentShotsSoFar
+                    );
+
                     RefreshMatchRatingsGrid();
                 }
             }
@@ -11742,25 +11863,48 @@ namespace Manager
         // Liverpool gets two (a CB and a DM), Tottenham gets one.
         private void ApplyDeveloperEasterEggPlayer(AgentTeam team)
         {
+            if (team == null)
+            {
+                return;
+            }
+
             switch (team.TeamName)
             {
                 case "Arsenal":
                     ApplyEasterEggIdentity(team, PlayerPosition.ST, "Hidde Rietberg", 25, 183f, "Netherlands");
+
+                    BoostStrikerEasterEgg(team, "Hidde Rietberg");
                     break;
 
                 case "Liverpool":
                     ApplyEasterEggIdentity(team, PlayerPosition.CB, "Thomas Bernards", 25, 200f, "Germany");
                     ApplyEasterEggIdentity(team, PlayerPosition.DM, "Charles Herring", 25, 175f, "England");
+
+                    BoostDefensiveMidfielderEasterEgg(team, "Charles Herring");
                     break;
 
                 case "Tottenham Hotspur":
-                    ApplyEasterEggIdentity(team, PlayerPosition.ST, "Victor Hamber", 26, 195f, "Sweden");
+                    ApplyEasterEggIdentity(team, PlayerPosition.ST, "Victor Hamberg", 26, 195f, "Sweden");
+                    
+
+                    BoostStrikerEasterEgg(team, "Victor Hamberg");
                     break;
             }
         }
 
-        private void ApplyEasterEggIdentity(AgentTeam team, PlayerPosition position, string name, int age, float height, string nationName)
+        private void ApplyEasterEggIdentity(
+            AgentTeam team,
+            PlayerPosition position,
+            string name,
+            int age,
+            float height,
+            string nationName)
         {
+            if (team == null)
+            {
+                return;
+            }
+
             PlayerAgent target = team.StartingEleven.Find(p => p.PrimaryPosition == position)
                 ?? team.Bench.Find(p => p.PrimaryPosition == position);
 
@@ -11772,7 +11916,70 @@ namespace Manager
             target.Name = name;
             target.Age = age;
             target.Height = height;
-            ManagerPlayerNationality.SetNationality(target, new ManagerPlayerNationality.Nation(nationName, "Western Europe"));
+            ManagerPlayerNationality.SetNationality(
+                target,
+                new ManagerPlayerNationality.Nation(nationName, "Western Europe")
+            );
+        }
+
+        private void BoostStrikerEasterEgg(AgentTeam team, string playerName)
+        {
+            if (team == null)
+            {
+                return;
+            }
+
+            PlayerAgent player = team.Players.Find(p => p.Name == playerName);
+
+            if (player == null)
+            {
+                return;
+            }
+
+            player.Finishing = Mathf.Max(player.Finishing, 88f);
+            player.Pace = Mathf.Max(player.Pace, 85f);
+            player.Dribbling = Mathf.Max(player.Dribbling, 84f);
+            player.Composure = Mathf.Max(player.Composure, 82f);
+            player.Positioning = Mathf.Max(player.Positioning, 81f);
+            player.Heading = Mathf.Max(player.Heading, 87f);
+            player.Strength = Mathf.Max(player.Strength, 78f);
+            player.Aerial = Mathf.Max(player.Aerial, 82f);
+
+
+            // Make sure the boost does not leave him with no development room.
+            player.Potential = Mathf.Max(player.Potential, player.GetOverallRating() + 3f);
+        }
+
+        private void BoostDefensiveMidfielderEasterEgg(AgentTeam team, string playerName)
+        {
+            if (team == null)
+            {
+                return;
+            }
+
+            PlayerAgent player = team.Players.Find(p => p.Name == playerName);
+
+            if (player == null)
+            {
+                return;
+            }
+
+            player.Passing = Mathf.Max(player.Passing, 82f);
+            player.Positioning = Mathf.Max(player.Positioning, 82f);
+            player.Composure = Mathf.Max(player.Composure, 81f);
+            player.Defending = Mathf.Max(player.Defending, 81f);
+            player.Tackling = Mathf.Max(player.Tackling, 81f);
+            player.Marking = Mathf.Max(player.Marking, 80f);
+            player.Stamina = Mathf.Max(player.Stamina, 83f);
+            player.Strength = Mathf.Max(player.Strength, 76f);
+            player.ThroughBalls = Mathf.Max(player.ThroughBalls, 78f);
+            player.LongShots = Mathf.Max(player.LongShots, 81f);
+            player.Dribbling = Mathf.Max(player.Dribbling, 85f);
+            player.Pace = Mathf.Max(player.Pace, 77f);
+            player.FreeKicks = Mathf.Max(player.FreeKicks, 89f);
+
+            // Make sure the boost does not leave him with no development room.
+            player.Potential = Mathf.Max(player.Potential, player.GetOverallRating() + 3f);
         }
     }
 }

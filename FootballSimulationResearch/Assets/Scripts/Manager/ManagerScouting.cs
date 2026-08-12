@@ -10,8 +10,10 @@ namespace Manager
     // assign a scout to reveal ONE existing entry's stats" model entirely: the Youth
     // page starts with nobody in it. Two scout slots, each briefed with up to 3 target
     // positions, run indefinitely - every matchday an active mission has a flat chance
-    // to surface a brand-new prospect at one of its briefed positions, added to a
-    // single growing discovered list. A discovery IS the scouting act (finding them and
+    // to surface a batch of 2-3 brand-new prospects at its briefed positions (session
+    // 16 - a single hit used to yield just one, which Thomas felt made finding a real
+    // wonderkid feel like a multi-season grind), added to a single growing discovered
+    // list. A discovery IS the scouting act (finding them and
     // knowing their real stats happen together, unlike Transfer Market's "reveal a
     // known AI player's hidden stats" scouting) - only Potential stays permanently
     // fuzzy (GetDisplayPotential, unchanged from before), since a scout can assess
@@ -111,17 +113,30 @@ namespace Manager
                 if (Random.value > DiscoveryChancePerActiveMissionPerMatchday) continue;
 
                 List<PlayerPosition> positions = missionPositions[slot];
-                PlayerPosition position = positions[Random.Range(0, positions.Count)];
 
-                PlayerAgent prospect = GenerateDiscovery(position, generator);
-                discoveredProspects.Add(prospect);
-                discoveredMatchday[prospect] = currentMatchdayIndex;
+                // Session 16 - Thomas: "MAYBE one every few matchdays... I doubt anyone's
+                // going to find a wonderkid in a save like that... every time a scout
+                // finds one, you get a few?" A batch per successful roll rather than
+                // raising DiscoveryChancePerActiveMissionPerMatchday itself - keeps the
+                // same "does something happen this matchday" cadence, just makes each hit
+                // worth more. 2-3 per hit, each independently rolled against the mission's
+                // own briefed positions (so a batch can span more than one position).
+                int batchSize = Random.Range(2, 4);
 
-                inbox.Add(InboxMessageType.ScoutingReport, $"Scout Find: {prospect.Name}",
-                    $"One of your scouts has found {prospect.Name} ({prospect.PrimaryPosition}, age {prospect.Age}) while searching for a {position}. " +
-                    $"True Overall {Mathf.RoundToInt(prospect.GetOverallRating())}, Potential {GetDisplayPotential(prospect)}. " +
-                    $"Bring them into an empty Academy slot within {MatchdaysUntilPoached} matchdays or another club may snap them up.",
-                    currentMatchdayIndex);
+                for (int i = 0; i < batchSize; i++)
+                {
+                    PlayerPosition position = positions[Random.Range(0, positions.Count)];
+
+                    PlayerAgent prospect = GenerateDiscovery(position, generator);
+                    discoveredProspects.Add(prospect);
+                    discoveredMatchday[prospect] = currentMatchdayIndex;
+
+                    inbox.Add(InboxMessageType.ScoutingReport, $"Scout Find: {prospect.Name}",
+                        $"One of your scouts has found {prospect.Name} ({prospect.PrimaryPosition}, age {prospect.Age}) while searching for a {position}. " +
+                        $"True Overall {Mathf.RoundToInt(prospect.GetOverallRating())}, Potential {GetDisplayPotential(prospect)}. " +
+                        $"Bring them into an empty Academy slot within {MatchdaysUntilPoached} matchdays or another club may snap them up.",
+                        currentMatchdayIndex);
+                }
             }
 
             List<PlayerAgent> poached = new List<PlayerAgent>();
