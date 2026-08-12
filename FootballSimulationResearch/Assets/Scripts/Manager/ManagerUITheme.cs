@@ -320,6 +320,43 @@ namespace Manager
             NormalizeButtonLabel(button, $"{label} (Soon)", DisabledText, fontSize);
         }
 
+        // Code-built TMP_InputField (session 15, multi-save naming) - every input field
+        // in this project up to now was Editor-placed ("aren't worth rebuilding from
+        // scratch in code" per the Team Select screen's own comment), but a second,
+        // independent field (Save Name, alongside the existing Editor-placed Manager
+        // Name field) needed to exist without touching that Editor object at all. Same
+        // three-part TMP_InputField anatomy Unity's own UI > Input Field (TMP) menu item
+        // generates (background Image + a masked Text Area holding Placeholder/Text),
+        // built directly since this project has no Editor-placed field spare to clone.
+        public static TMP_InputField BuildInputField(Transform parent, string placeholderText, int fontSize = 18, int characterLimit = 40)
+        {
+            GameObject fieldObj = new GameObject("InputField", typeof(RectTransform), typeof(Image), typeof(TMP_InputField));
+            fieldObj.transform.SetParent(parent, false);
+
+            Image background = fieldObj.GetComponent<Image>();
+            background.color = PanelDark;
+
+            GameObject textArea = new GameObject("Text Area", typeof(RectTransform), typeof(RectMask2D));
+            textArea.transform.SetParent(fieldObj.transform, false);
+            RectTransform textAreaRect = textArea.GetComponent<RectTransform>();
+            textAreaRect.anchorMin = Vector2.zero;
+            textAreaRect.anchorMax = Vector2.one;
+            textAreaRect.offsetMin = new Vector2(14f, 4f);
+            textAreaRect.offsetMax = new Vector2(-14f, -4f);
+
+            TextMeshProUGUI placeholderLabel = BuildLabel(textArea.transform, placeholderText, fontSize, TextDim, TextAlignmentOptions.MidlineLeft, FontStyles.Italic);
+            TextMeshProUGUI textLabel = BuildLabel(textArea.transform, "", fontSize, TextPrimary, TextAlignmentOptions.MidlineLeft);
+
+            TMP_InputField inputField = fieldObj.GetComponent<TMP_InputField>();
+            inputField.targetGraphic = background;
+            inputField.textViewport = textAreaRect;
+            inputField.textComponent = textLabel;
+            inputField.placeholder = placeholderLabel;
+            inputField.characterLimit = characterLimit;
+
+            return inputField;
+        }
+
         // Shared pitch-pin visual: a bordered circular badge (rating number inside) with a
         // name/position label beneath it. Used by both the interactive Tactics Board pins
         // (accent border, draggable/droppable - caller adds TacticsBoardPlayerCard on the

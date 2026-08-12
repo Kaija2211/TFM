@@ -246,6 +246,22 @@ namespace Manager.Save
     public class ManagerSaveData
     {
         public int SaveVersion = 1;
+
+        // Multi-save support (session 15) - SaveId is a GUID generated once when a
+        // career starts and never changes for that career's lifetime; it's the actual
+        // filename ManagerSaveService writes to (career_{SaveId}.json), so every save
+        // during a session overwrites the same file instead of creating a new one each
+        // time. SaveName is purely the player-facing label shown in the Load Career
+        // browser - deliberately separate from ManagerName/ManagedTeamName so a player
+        // can tell two careers as the same club apart ("Rebuild Job" vs "Take the Prem
+        // by Storm"). LastSavedUtc (ISO 8601, via DateTime.ToString("o")) is what the
+        // Continue button and the browser's sort both key off - an ordinal string
+        // compare on that format sorts chronologically without needing to parse it back
+        // into a DateTime first.
+        public string SaveId;
+        public string SaveName;
+        public string LastSavedUtc;
+
         public string ManagerName;
         public string ManagedTeamName;
         public int CurrentSeason;

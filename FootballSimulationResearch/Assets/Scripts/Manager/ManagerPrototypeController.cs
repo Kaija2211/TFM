@@ -38,6 +38,14 @@ namespace Manager
         [SerializeField] private Button teamSelectBackButton;
         [SerializeField] private Button confirmTeamButton; // relabeled "Start Career"/"Continue" depending on teamSelectStep
 
+        // Save Name field (session 15, multi-save support) - code-built via
+        // ManagerUITheme.BuildInputField, not Editor-placed like managerNameInput above,
+        // since there's no spare Editor-authored input field to reuse for it. Built once
+        // inside BuildTeamSelectChrome and captioned the same way the Manager Name field
+        // already is.
+        private TMP_InputField saveNameInput;
+        private GameObject teamSelectSaveNameCaption;
+
         // 1 = manager name entry, 2 = club select. Split into two steps so the name
         // field can be a real centered "type your name" screen instead of a squeezed
         // side column, and so a name can actually be required before moving on (it
@@ -188,9 +196,32 @@ namespace Manager
         // Splash screen logo (backlog item 12, session 11) - studio name "Eucna".
         private Sprite eucnaLogoSprite;
 
-        // In-memory only - there is no save system, so this never persists across sessions.
         private string managerName = "Manager";
         private bool titleScreenBuilt;
+
+        // Title screen CONTINUE/LOAD CAREER visibility (session 15) - Thomas: these two
+        // should only be there once a save actually exists, not shown-disabled like the
+        // old placeholder convention. Built once in BuildTitleScreenContent, then shown/
+        // hidden (and everything below re-flowed to close the gap) by
+        // RefreshTitleScreenButtons every time the Title screen is shown - HasAnySaves()
+        // can change mid-session (a brand new career gets its first save on Exit to Hub),
+        // so this can't just be decided once at build time.
+        private GameObject titleContinueButtonObj;
+        private GameObject titleLoadCareerButtonObj;
+        private GameObject titleSettingsButtonObj;
+        private GameObject titleExitButtonObj;
+        private float titleButtonsStartY;
+
+        // Multi-save support (session 15) - identifies which on-disk save file this
+        // session's career is tied to. currentSaveId is a GUID, generated fresh on a
+        // new career (see OnConfirmTeamClicked) or copied from whichever save was
+        // loaded (see ApplySaveData) - every OnExitToTitleClicked save this session
+        // writes to that same file (ManagerSaveService.Save assigns one automatically
+        // if still blank, but it should never be blank by the time a save actually
+        // happens). currentSaveName is just the player-facing label shown in the Load
+        // Career browser, captured from the new Save Name input field.
+        private string currentSaveId;
+        private string currentSaveName;
 
         // Splash screen (backlog item 12, session 11) - shown once before Title on
         // launch. splashAdvanced guards against both the timed auto-advance and a
@@ -783,10 +814,56 @@ namespace Manager
                 titleScreenBuilt = true;
             }
 
+            RefreshTitleScreenButtons();
+
             if (titlePanel != null) titlePanel.SetActive(true);
             if (teamSelectPanel != null) teamSelectPanel.SetActive(false);
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (matchdayPanel != null) matchdayPanel.SetActive(false);
+        }
+
+        // Session 15 - Thomas: CONTINUE/LOAD CAREER should only be there once a save has
+        // actually been made, not shown-disabled. Re-run every time Title is shown
+        // (HasAnySaves() can flip true mid-session - a brand new career's first Exit to
+        // Hub is also its first save), re-flowing SETTINGS/EXIT upward to close the gap
+        // when the two save-dependent buttons are hidden rather than leaving a blank
+        // space where they'd normally sit.
+        private void RefreshTitleScreenButtons()
+        {
+            if (titleContinueButtonObj == null)
+            {
+                return;
+            }
+
+            const float buttonWidth = 340f;
+            const float buttonHeight = 52f;
+            const float spacing = 12f;
+
+            bool hasSaves = ManagerSaveService.HasAnySaves();
+
+            titleContinueButtonObj.SetActive(hasSaves);
+            titleLoadCareerButtonObj.SetActive(hasSaves);
+
+            int slot = 1;
+
+            if (hasSaves)
+            {
+                ManagerUITheme.AnchorTopCenter(titleContinueButtonObj, titleButtonsStartY + slot * (buttonHeight + spacing), buttonWidth, buttonHeight);
+                slot++;
+                ManagerUITheme.AnchorTopCenter(titleLoadCareerButtonObj, titleButtonsStartY + slot * (buttonHeight + spacing), buttonWidth, buttonHeight);
+                slot++;
+            }
+
+            if (titleSettingsButtonObj != null)
+            {
+                ManagerUITheme.AnchorTopCenter(titleSettingsButtonObj, titleButtonsStartY + slot * (buttonHeight + spacing), buttonWidth, buttonHeight);
+            }
+            slot++;
+
+            if (titleExitButtonObj != null)
+            {
+                ManagerUITheme.AnchorTopCenter(titleExitButtonObj, titleButtonsStartY + slot * (buttonHeight + spacing) + 8f, buttonWidth, 40f);
+            }
         }
 
         // Built once at runtime rather than hand-placed in the Editor - logo mark,
@@ -872,6 +949,7 @@ namespace Manager
             const float buttonHeight = 52f;
             const float spacing = 12f;
             const float startY = subtitleTop + 30f + 44f;
+            titleButtonsStartY = startY;
 
             GameObject newCareerObj = new GameObject("NewCareerButton", typeof(RectTransform), typeof(Image), typeof(Button));
             newCareerObj.transform.SetParent(titleContentContainer, false);
@@ -883,55 +961,73 @@ namespace Manager
             newCareerButton.onClick.AddListener(OnTitleNewCareerClicked);
             newCareerButton.onClick.AddListener(ManagerAudio.PlayClick);
 
-            GameObject loadCareerObj = new GameObject("LoadCareerButton", typeof(RectTransform), typeof(Image), typeof(Button));
-            loadCareerObj.transform.SetParent(titleContentContainer, false);
-            ManagerUITheme.AnchorTopCenter(loadCareerObj, startY + buttonHeight + spacing, buttonWidth, buttonHeight);
-            loadCareerObj.GetComponent<Image>().color = ManagerUITheme.CardNeutral;
-            Button loadCareerButton = loadCareerObj.GetComponent<Button>();
-            loadCareerButton.targetGraphic = loadCareerObj.GetComponent<Image>();
+            // CONTINUE (session 15, multi-save support) - jumps straight into whichever
+            // save was written to most recently, no picker. Position is set for real by
+            // RefreshTitleScreenButtons (called every ShowTitleScreen) rather than fixed
+            // here - this call just needs A valid rect to exist before that first runs.
+            titleContinueButtonObj = new GameObject("ContinueButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            titleContinueButtonObj.transform.SetParent(titleContentContainer, false);
+            ManagerUITheme.AnchorTopCenter(titleContinueButtonObj, startY + buttonHeight + spacing, buttonWidth, buttonHeight);
+            titleContinueButtonObj.GetComponent<Image>().color = ManagerUITheme.CardNeutral;
+            Button continueButton = titleContinueButtonObj.GetComponent<Button>();
+            continueButton.targetGraphic = titleContinueButtonObj.GetComponent<Image>();
+            ManagerUITheme.BuildLabel(titleContinueButtonObj.transform, "CONTINUE", 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
+            continueButton.onClick.AddListener(OnContinueClicked);
+            continueButton.onClick.AddListener(ManagerAudio.PlayClick);
 
-            // Real now (career-arc addition, session 8, Phase 5) - only enabled when a
-            // save file actually exists, same "don't fake a feature that doesn't have
-            // anything behind it yet" reasoning that kept it disabled before.
-            // BuildLabel must run in BOTH branches - NormalizeButtonLabel (which
-            // SetDisabledPlaceholder calls internally) only ever UPDATES an existing
-            // label via GetComponentInChildren, it never creates one. Splitting this
-            // into an if/else and only keeping BuildLabel in the "has save" branch left
-            // the common "no save yet" case with a completely unlabeled button - the
-            // exact bug Thomas spotted live.
-            ManagerUITheme.BuildLabel(loadCareerObj.transform, "LOAD CAREER", 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
+            titleLoadCareerButtonObj = new GameObject("LoadCareerButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            titleLoadCareerButtonObj.transform.SetParent(titleContentContainer, false);
+            ManagerUITheme.AnchorTopCenter(titleLoadCareerButtonObj, startY + 2 * (buttonHeight + spacing), buttonWidth, buttonHeight);
+            titleLoadCareerButtonObj.GetComponent<Image>().color = ManagerUITheme.CardNeutral;
+            Button loadCareerButton = titleLoadCareerButtonObj.GetComponent<Button>();
+            loadCareerButton.targetGraphic = titleLoadCareerButtonObj.GetComponent<Image>();
+            // Real now (career-arc addition, session 8, Phase 5; opens the save browser
+            // since session 15 rather than the old single fixed slot directly - see
+            // OnOpenLoadCareerBrowserClicked). Thomas, session 15: this button (and
+            // CONTINUE above) should only be present at all once a save actually exists,
+            // not shown-disabled - RefreshTitleScreenButtons handles that, not a
+            // SetDisabledPlaceholder branch here.
+            ManagerUITheme.BuildLabel(titleLoadCareerButtonObj.transform, "LOAD CAREER", 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
+            loadCareerButton.onClick.AddListener(OnOpenLoadCareerBrowserClicked);
+            loadCareerButton.onClick.AddListener(ManagerAudio.PlayClick);
 
-            if (ManagerSaveService.HasSaveFile())
-            {
-                loadCareerButton.onClick.AddListener(OnLoadCareerClicked);
-                loadCareerButton.onClick.AddListener(ManagerAudio.PlayClick);
-            }
-            else
-            {
-                ManagerUITheme.SetDisabledPlaceholder(loadCareerButton, "LOAD CAREER");
-            }
-
-            GameObject settingsObj = new GameObject("SettingsButton", typeof(RectTransform), typeof(Image), typeof(Button));
-            settingsObj.transform.SetParent(titleContentContainer, false);
-            ManagerUITheme.AnchorTopCenter(settingsObj, startY + 2 * (buttonHeight + spacing), buttonWidth, buttonHeight);
-            settingsObj.GetComponent<Image>().color = ManagerUITheme.CardNeutral;
-            Button settingsButton = settingsObj.GetComponent<Button>();
-            settingsButton.targetGraphic = settingsObj.GetComponent<Image>();
-            ManagerUITheme.BuildLabel(settingsObj.transform, "SETTINGS", 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
+            titleSettingsButtonObj = new GameObject("SettingsButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            titleSettingsButtonObj.transform.SetParent(titleContentContainer, false);
+            ManagerUITheme.AnchorTopCenter(titleSettingsButtonObj, startY + 3 * (buttonHeight + spacing), buttonWidth, buttonHeight);
+            titleSettingsButtonObj.GetComponent<Image>().color = ManagerUITheme.CardNeutral;
+            Button settingsButton = titleSettingsButtonObj.GetComponent<Button>();
+            settingsButton.targetGraphic = titleSettingsButtonObj.GetComponent<Image>();
+            ManagerUITheme.BuildLabel(titleSettingsButtonObj.transform, "SETTINGS", 16, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
             // Real now (backlog item, session 12) - was a disabled placeholder with no
             // settings screen at all.
             settingsButton.onClick.AddListener(() => OnOpenSettingsClicked(titlePanel));
             settingsButton.onClick.AddListener(ManagerAudio.PlayClick);
 
-            GameObject exitObj = new GameObject("ExitButton", typeof(RectTransform), typeof(Image), typeof(Button));
-            exitObj.transform.SetParent(titleContentContainer, false);
-            ManagerUITheme.AnchorTopCenter(exitObj, startY + 3 * (buttonHeight + spacing) + 8f, buttonWidth, 40f);
+            titleExitButtonObj = new GameObject("ExitButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            titleExitButtonObj.transform.SetParent(titleContentContainer, false);
+            ManagerUITheme.AnchorTopCenter(titleExitButtonObj, startY + 4 * (buttonHeight + spacing) + 8f, buttonWidth, 40f);
+            GameObject exitObj = titleExitButtonObj;
             exitObj.GetComponent<Image>().color = ManagerUITheme.PanelDark;
             Button exitButton = exitObj.GetComponent<Button>();
             exitButton.targetGraphic = exitObj.GetComponent<Image>();
             ManagerUITheme.BuildLabel(exitObj.transform, "EXIT", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
             exitButton.onClick.AddListener(OnTitleExitClicked);
             exitButton.onClick.AddListener(ManagerAudio.PlayClick);
+
+            // Version tag (session 15, pre-alpha build prep) - reads Application.version
+            // directly rather than hardcoding "0.1", so it can never silently drift out
+            // of sync with the real PlayerSettings > bundleVersion the build actually
+            // ships under. Anchored to the panel itself, not the button stack, so it
+            // stays put in the corner regardless of how many buttons are showing.
+            GameObject versionObj = new GameObject("VersionTag", typeof(RectTransform));
+            versionObj.transform.SetParent(titlePanel.transform, false);
+            RectTransform versionRect = versionObj.GetComponent<RectTransform>();
+            versionRect.anchorMin = new Vector2(0f, 0f);
+            versionRect.anchorMax = new Vector2(0f, 0f);
+            versionRect.pivot = new Vector2(0f, 0f);
+            versionRect.anchoredPosition = new Vector2(20f, 16f);
+            versionRect.sizeDelta = new Vector2(300f, 20f);
+            ManagerUITheme.BuildLabel(versionObj.transform, $"v{Application.version} · PRE-ALPHA", 12, ManagerUITheme.TextDim, TextAlignmentOptions.MidlineLeft);
         }
 
         // --- Settings screen (backlog item, session 12) - reached from either Title's or
@@ -1305,6 +1401,19 @@ namespace Manager
             nameCaption.transform.SetAsFirstSibling();
             teamSelectNameCaption = nameCaption;
 
+            // Save Name field (session 15) - own caption + code-built input, same
+            // "MANAGER NAME"-style caption treatment, positioned by RefreshTeamSelectStepUI
+            // right below the Manager Name field on step 1 and hidden entirely on step 2
+            // (a save is created once per career, not re-named per club-select visit).
+            GameObject saveNameCaption = new GameObject("SaveNameCaption", typeof(RectTransform));
+            saveNameCaption.transform.SetParent(teamSelectPanel.transform, false);
+            ManagerUITheme.BuildLabel(saveNameCaption.transform, "SAVE NAME", 15, ManagerUITheme.TextMuted, TextAlignmentOptions.Center, FontStyles.Bold);
+            saveNameCaption.transform.SetAsFirstSibling();
+            teamSelectSaveNameCaption = saveNameCaption;
+
+            saveNameInput = ManagerUITheme.BuildInputField(teamSelectPanel.transform, "e.g. Rebuild Job", 22, characterLimit: 40);
+            saveNameInput.transform.SetAsFirstSibling();
+
             GameObject clubCaption = new GameObject("SelectClubCaption", typeof(RectTransform));
             clubCaption.transform.SetParent(teamSelectPanel.transform, false);
             RectTransform clubCaptionRect = clubCaption.GetComponent<RectTransform>();
@@ -1557,6 +1666,34 @@ namespace Manager
                 }
             }
 
+            // Save Name field (session 15) - sits just below the Manager Name field on
+            // step 1 only, same centered-column layout. Never shown on step 2 - a save
+            // is created once per new career, not re-named while picking a club.
+            if (teamSelectSaveNameCaption != null)
+            {
+                teamSelectSaveNameCaption.SetActive(isNameStep);
+
+                if (isNameStep)
+                {
+                    RectTransform captionRect = teamSelectSaveNameCaption.GetComponent<RectTransform>();
+                    ManagerUITheme.SetPointAnchor(captionRect, new Vector2(0.5f, 0.5f), new Vector2(0f, -52f), new Vector2(500f, 20f));
+
+                    TextMeshProUGUI captionLabel = teamSelectSaveNameCaption.GetComponentInChildren<TextMeshProUGUI>();
+                    if (captionLabel != null) captionLabel.alignment = TextAlignmentOptions.Center;
+                }
+            }
+
+            if (saveNameInput != null)
+            {
+                saveNameInput.gameObject.SetActive(isNameStep);
+
+                if (isNameStep)
+                {
+                    RectTransform saveNameRect = saveNameInput.GetComponent<RectTransform>();
+                    ManagerUITheme.SetPointAnchor(saveNameRect, new Vector2(0.5f, 0.5f), new Vector2(0f, -96f), new Vector2(500f, 56f));
+                }
+            }
+
             if (teamGridContainer != null && !isNameStep)
             {
                 RectTransform gridRect = teamGridContainer.GetComponent<RectTransform>();
@@ -1600,6 +1737,23 @@ namespace Manager
                 }
 
                 managerName = managerNameInput.text.Trim();
+
+                // Save Name is optional (unlike Manager Name, doesn't block CONTINUE) -
+                // falls back to a sensible default built from what's already been typed
+                // rather than forcing a second required field for what's really just a
+                // cosmetic label in the Load Career browser.
+                currentSaveName = saveNameInput != null && !string.IsNullOrWhiteSpace(saveNameInput.text)
+                    ? saveNameInput.text.Trim()
+                    : $"{managerName}'s Save";
+
+                // A fresh GUID per new career (session 15) - this is what
+                // ManagerSaveService actually writes to disk as, so every save this
+                // session (and any future one) lands on the same file instead of
+                // minting a new one each time. Must happen here, not lazily inside
+                // ManagerSaveService.Save, since OnExitToTitleClicked's autosave has no
+                // other moment to know "this is a brand new career."
+                currentSaveId = Guid.NewGuid().ToString("N");
+
                 teamSelectStep = 2;
                 RefreshTeamSelectStepUI();
                 return;
@@ -2698,6 +2852,8 @@ namespace Manager
 
             ManagerSaveData data = new ManagerSaveData
             {
+                SaveId = currentSaveId,
+                SaveName = currentSaveName,
                 ManagerName = managerName,
                 ManagedTeamName = managedTeamName,
                 CurrentSeason = currentSeason,
@@ -2812,6 +2968,12 @@ namespace Manager
         // not back at team select.
         private void ApplySaveData(ManagerSaveData data)
         {
+            // Multi-save support (session 15) - so any save made later this session
+            // (OnExitToTitleClicked) overwrites the file this career was actually loaded
+            // from instead of minting a new one.
+            currentSaveId = data.SaveId;
+            currentSaveName = data.SaveName;
+
             managerName = data.ManagerName;
             managedTeamName = data.ManagedTeamName;
             currentSeason = data.CurrentSeason;
@@ -2991,9 +3153,10 @@ namespace Manager
             return null;
         }
 
-        public void OnLoadCareerClicked()
+        // CONTINUE (session 15) - the most recently *saved* career, no picker.
+        public void OnContinueClicked()
         {
-            ManagerSaveData data = ManagerSaveService.Load();
+            ManagerSaveData data = ManagerSaveService.GetMostRecentSave();
             if (data == null)
             {
                 return;
@@ -3002,6 +3165,231 @@ namespace Manager
             if (titlePanel != null) titlePanel.SetActive(false);
 
             ApplySaveData(data);
+        }
+
+        // Called from a Save Browser row (session 15) - loads a specific career by
+        // SaveId rather than just "whichever one's newest."
+        private void OnLoadSpecificCareerClicked(string saveId)
+        {
+            ManagerSaveData data = ManagerSaveService.Load(saveId);
+            if (data == null)
+            {
+                return;
+            }
+
+            if (saveBrowserPanel != null) saveBrowserPanel.SetActive(false);
+            if (titlePanel != null) titlePanel.SetActive(false);
+
+            ApplySaveData(data);
+        }
+
+        // --- Save Browser (session 15, multi-save support) - reached from Title's LOAD
+        // CAREER button. Same code-built-panel/scroll-view pattern as the Inbox screen -
+        // a flat list of every save on disk, newest-saved first, each row a clickable
+        // card loading that specific career. ---
+
+        private bool saveBrowserChromeBuilt;
+        private GameObject saveBrowserPanel;
+        private RectTransform saveBrowserContentContainer;
+        private readonly List<GameObject> spawnedSaveBrowserRows = new();
+
+        public void OnOpenLoadCareerBrowserClicked()
+        {
+            if (!saveBrowserChromeBuilt)
+            {
+                BuildSaveBrowserChrome();
+                saveBrowserChromeBuilt = true;
+            }
+
+            if (titlePanel != null) titlePanel.SetActive(false);
+            if (saveBrowserPanel != null) saveBrowserPanel.SetActive(true);
+
+            RefreshSaveBrowserUI();
+        }
+
+        public void OnSaveBrowserBackClicked()
+        {
+            if (saveBrowserPanel != null) saveBrowserPanel.SetActive(false);
+
+            ShowTitleScreen();
+        }
+
+        private void BuildSaveBrowserChrome()
+        {
+            if (titlePanel == null || titlePanel.transform.parent == null)
+            {
+                return;
+            }
+
+            const float headerHeight = 90f;
+
+            saveBrowserPanel = new GameObject("SaveBrowserPanel", typeof(RectTransform));
+            saveBrowserPanel.transform.SetParent(titlePanel.transform.parent, false);
+            RectTransform panelRect = saveBrowserPanel.GetComponent<RectTransform>();
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            ManagerUITheme.ApplyPanelBackground(saveBrowserPanel);
+
+            GameObject header = ManagerUITheme.BuildAccentBand(saveBrowserPanel.transform, topBand: true, height: headerHeight);
+
+            GameObject titleObj = new GameObject("Title", typeof(RectTransform));
+            titleObj.transform.SetParent(header.transform, false);
+            ManagerUITheme.SetPointAnchor(titleObj.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(60f, -22f), new Vector2(400f, 34f));
+            ManagerUITheme.BuildLabel(titleObj.transform, "LOAD CAREER", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            Button backButton = ManagerUITheme.BuildButton(header.transform, "BACK", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(backButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-60f, -27f), new Vector2(160f, 36f));
+            backButton.onClick.AddListener(OnSaveBrowserBackClicked);
+
+            const float contentWidth = 1200f;
+            const float sideMargin = (1920f - contentWidth) / 2f;
+
+            GameObject scrollViewObj = new GameObject("SaveBrowserScrollView", typeof(RectTransform), typeof(ScrollRect));
+            scrollViewObj.transform.SetParent(saveBrowserPanel.transform, false);
+            RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+            scrollViewRect.anchorMin = new Vector2(0f, 0f);
+            scrollViewRect.anchorMax = new Vector2(1f, 1f);
+            scrollViewRect.offsetMin = new Vector2(sideMargin, 40f);
+            scrollViewRect.offsetMax = new Vector2(-sideMargin, -(headerHeight + 40f));
+
+            GameObject viewportObj = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+            viewportObj.transform.SetParent(scrollViewObj.transform, false);
+            RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+
+            GameObject contentObj = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            contentObj.transform.SetParent(viewportObj.transform, false);
+            saveBrowserContentContainer = contentObj.GetComponent<RectTransform>();
+            saveBrowserContentContainer.anchorMin = new Vector2(0f, 1f);
+            saveBrowserContentContainer.anchorMax = new Vector2(1f, 1f);
+            saveBrowserContentContainer.pivot = new Vector2(0.5f, 1f);
+            saveBrowserContentContainer.anchoredPosition = Vector2.zero;
+            saveBrowserContentContainer.sizeDelta = Vector2.zero;
+
+            VerticalLayoutGroup layout = contentObj.GetComponent<VerticalLayoutGroup>();
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.childControlHeight = true;
+            layout.childControlWidth = true;
+            layout.spacing = 10f;
+
+            ContentSizeFitter fitter = contentObj.GetComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scrollRect.content = saveBrowserContentContainer;
+            scrollRect.viewport = viewportRect;
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = 25f;
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(saveBrowserPanel.transform));
+        }
+
+        private void RefreshSaveBrowserUI()
+        {
+            if (saveBrowserContentContainer == null)
+            {
+                return;
+            }
+
+            foreach (GameObject row in spawnedSaveBrowserRows)
+            {
+                if (row != null) Destroy(row);
+            }
+            spawnedSaveBrowserRows.Clear();
+
+            List<ManagerSaveData> saves = ManagerSaveService.ListAllSaves();
+            // Newest-saved first - same ordinal-string sort GetMostRecentSave uses, just
+            // over the whole list instead of just picking the max.
+            saves.Sort((a, b) => string.CompareOrdinal(b.LastSavedUtc, a.LastSavedUtc));
+
+            if (saves.Count == 0)
+            {
+                GameObject emptyObj = new GameObject("EmptyState", typeof(RectTransform), typeof(LayoutElement));
+                emptyObj.transform.SetParent(saveBrowserContentContainer, false);
+                emptyObj.GetComponent<LayoutElement>().preferredHeight = 60f;
+                ManagerUITheme.BuildLabel(emptyObj.transform, "No saved careers yet.", 18, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Normal, noWrap: false);
+                spawnedSaveBrowserRows.Add(emptyObj);
+            }
+            else
+            {
+                foreach (ManagerSaveData data in saves)
+                {
+                    spawnedSaveBrowserRows.Add(BuildSaveBrowserRow(data));
+                }
+            }
+
+            StartCoroutine(RecoverBlankLabelsNextFrame(saveBrowserContentContainer));
+        }
+
+        private const float SaveBrowserRowHeight = 88f;
+
+        private GameObject BuildSaveBrowserRow(ManagerSaveData data)
+        {
+            GameObject row = new GameObject($"Save_{data.SaveId}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            row.transform.SetParent(saveBrowserContentContainer, false);
+            row.GetComponent<LayoutElement>().preferredHeight = SaveBrowserRowHeight;
+            Image rowImage = row.GetComponent<Image>();
+            rowImage.color = ManagerUITheme.CardNeutralAlt;
+
+            Button rowButton = row.GetComponent<Button>();
+            rowButton.targetGraphic = rowImage;
+            string capturedSaveId = data.SaveId;
+            rowButton.onClick.AddListener(() => OnLoadSpecificCareerClicked(capturedSaveId));
+
+            GameObject nameObj = new GameObject("SaveName", typeof(RectTransform));
+            nameObj.transform.SetParent(row.transform, false);
+            RectTransform nameRect = nameObj.GetComponent<RectTransform>();
+            nameRect.anchorMin = new Vector2(0f, 1f);
+            nameRect.anchorMax = new Vector2(1f, 1f);
+            nameRect.pivot = new Vector2(0f, 1f);
+            nameRect.anchoredPosition = new Vector2(20f, -14f);
+            nameRect.sizeDelta = new Vector2(-260f, 30f);
+            ManagerUITheme.BuildLabel(nameObj.transform, data.SaveName, 20, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+
+            GameObject detailObj = new GameObject("Detail", typeof(RectTransform));
+            detailObj.transform.SetParent(row.transform, false);
+            RectTransform detailRect = detailObj.GetComponent<RectTransform>();
+            detailRect.anchorMin = new Vector2(0f, 1f);
+            detailRect.anchorMax = new Vector2(1f, 1f);
+            detailRect.pivot = new Vector2(0f, 1f);
+            detailRect.anchoredPosition = new Vector2(20f, -48f);
+            detailRect.sizeDelta = new Vector2(-260f, 26f);
+            ManagerUITheme.BuildLabel(detailObj.transform, $"{data.ManagerName} · {data.ManagedTeamName} · Season {data.CurrentSeason}", 15, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+
+            GameObject dateObj = new GameObject("LastSaved", typeof(RectTransform));
+            dateObj.transform.SetParent(row.transform, false);
+            RectTransform dateRect = dateObj.GetComponent<RectTransform>();
+            dateRect.anchorMin = new Vector2(1f, 0.5f);
+            dateRect.anchorMax = new Vector2(1f, 0.5f);
+            dateRect.pivot = new Vector2(1f, 0.5f);
+            dateRect.anchoredPosition = new Vector2(-20f, 0f);
+            dateRect.sizeDelta = new Vector2(220f, 30f);
+            ManagerUITheme.BuildLabel(dateObj.transform, FormatSaveTimestamp(data.LastSavedUtc), 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
+
+            return row;
+        }
+
+        // LastSavedUtc is stored as DateTime.ToString("o") (round-trip ISO 8601) purely
+        // because that format sorts correctly as a plain string - reparsed here just for
+        // a friendlier on-screen "12 Aug 2026, 14:03" instead of the raw ISO string.
+        private static string FormatSaveTimestamp(string lastSavedUtc)
+        {
+            if (string.IsNullOrEmpty(lastSavedUtc))
+            {
+                return "";
+            }
+
+            return DateTime.TryParse(lastSavedUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out DateTime parsed)
+                ? parsed.ToLocalTime().ToString("d MMM yyyy, HH:mm")
+                : "";
         }
 
         // --- Scouting (career-arc addition, session 8, Phase 2): browse every club's
@@ -3028,6 +3416,16 @@ namespace Manager
         // a numeric column); clicking the same column again toggles direction.
         private int scoutingSortColumn = -1;
         private bool scoutingSortDescending = true;
+
+        // Academy sortable columns (session 15, Thomas: "like with our other lists, id
+        // like to be able to sort our academy players") - separate state from
+        // scoutingSortColumn/scoutingSortDescending above since the two grids don't
+        // share a column layout (Academy has no NATION/EXPIRES columns). Originally
+        // built without sorting at all ("short, fixed-order list of slots - sorting
+        // adds little," see RefreshAcademyUI's own older comment) - Thomas asked for it
+        // anyway, so it's wired the same way every other sortable grid in this file is.
+        private int academySortColumn = -1;
+        private bool academySortDescending = true;
 
         // Youth academy tab (session 9) - shares this screen/list with World Scouting.
         private Button scoutingAcademyTabButton;
@@ -3372,14 +3770,18 @@ namespace Manager
                 ManagerUITheme.BuildLabel(chip.transform, position.ToString(), 12, isSelected ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.Bold);
             }
 
-            Button sendButton = ManagerUITheme.BuildButton(box.transform, active ? "UPDATE BRIEF" : "SEND", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
-            ManagerUITheme.SetPointAnchor(sendButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(16f + 75f, 20f), new Vector2(150f, 34f));
-            int capturedSlot = slotIndex;
-            sendButton.onClick.AddListener(() => OnSendMissionClicked(capturedSlot));
-
+            // Session 15 fix: CANCEL spans x=16-156 (16 + its own 140 width) - SEND used
+            // to start at x=91, well inside that span, so the two buttons visibly
+            // overlapped (confirmed live, Thomas caught it on the Youth screen). SEND now
+            // starts after CANCEL's right edge plus a 16px gap.
             Button cancelButton = ManagerUITheme.BuildButton(box.transform, "CANCEL", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(cancelButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(16f, 20f), new Vector2(140f, 34f));
+            int capturedSlot = slotIndex;
             cancelButton.onClick.AddListener(() => OnCancelMissionClicked(capturedSlot));
+
+            Button sendButton = ManagerUITheme.BuildButton(box.transform, active ? "UPDATE BRIEF" : "SEND", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 13);
+            ManagerUITheme.SetPointAnchor(sendButton.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(16f + 140f + 16f, 20f), new Vector2(150f, 34f));
+            sendButton.onClick.AddListener(() => OnSendMissionClicked(capturedSlot));
 
             return box;
         }
@@ -3473,11 +3875,16 @@ namespace Manager
         private static readonly float[] ScoutingColumnFractions = { 0.20f, 0.07f, 0.07f, 0.22f, 0.09f, 0.14f, 0.21f };
 
         // Youth academy (session 9) - "grew them myself," complementary to the Missions
-        // tab's "found them abroad." Deliberately no sortable headers here (short, fixed-
-        // order list of slots - sorting adds little) and no NATION column (they're your
-        // own kids, not a scouted discovery). Empty slots (session 13) render their own
-        // row with a "BRING IN SCOUTED PLAYER" action instead of a normal grid row - see
-        // AddPrebuiltRow.
+        // tab's "found them abroad." No NATION column (they're your own kids, not a
+        // scouted discovery). Empty slots (session 13) render their own row with a
+        // "BRING IN SCOUTED PLAYER" action instead of a normal grid row - see
+        // AddPrebuiltRow. Sortable headers added session 15 (Thomas asked, after this
+        // comment originally argued sorting "adds little" for a short fixed-order list) -
+        // empty slots have no PlayerAgent to sort by, so when a sort is active they're
+        // grouped at the bottom below every real prospect rather than interleaved by
+        // their original slot index; with no sort active (academySortColumn == -1) the
+        // list still renders in plain slot order exactly as before, empty slots included
+        // in place, unchanged from the original behavior.
         private void RefreshAcademyUI()
         {
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
@@ -3494,9 +3901,28 @@ namespace Manager
                 }
             }
 
-            scoutingListView.AddCustomGridHeaderRow(AcademyColumnHeaders, AcademyColumnFractions);
+            scoutingListView.AddCustomGridHeaderRow(AcademyColumnHeaders, AcademyColumnFractions, OnAcademyColumnHeaderClicked, academySortColumn, academySortDescending);
 
             List<PlayerAgent> filledOnly = new List<PlayerAgent>(academy.GetAcademyPoolForAging());
+            int emptySlotCount = academy.GetEmptySlotIndices().Count;
+
+            if (academySortColumn >= 0)
+            {
+                List<PlayerAgent> sortedFilled = new List<PlayerAgent>(filledOnly);
+                sortedFilled.Sort((a, b) => CompareAcademyColumn(a, b, academySortColumn, academySortDescending));
+
+                foreach (PlayerAgent prospect in sortedFilled)
+                {
+                    BuildAcademyRow(prospect, filledOnly);
+                }
+
+                for (int i = 0; i < emptySlotCount; i++)
+                {
+                    scoutingListView.AddPrebuiltRow(BuildEmptyAcademySlotRow(i));
+                }
+
+                return;
+            }
 
             for (int i = 0; i < slots.Count; i++)
             {
@@ -3508,22 +3934,78 @@ namespace Manager
                     continue;
                 }
 
-                bool promotable = academy.CanPromote(prospect);
-                string status = promotable ? "<color=#3ddc84>PROMOTABLE</color>" : "DEVELOPING";
-
-                string[] cells =
-                {
-                    prospect.Name,
-                    prospect.PrimaryPosition.ToString(),
-                    prospect.Age.ToString(),
-                    GetDisplayRating(prospect.GetOverallRating()).ToString(),
-                    scouting.GetDisplayPotential(prospect),
-                    status
-                };
-
-                scoutingListView.AddCustomGridRow(prospect, cells, AcademyColumnFractions, OnAcademyProspectClicked,
-                    onNameClicked: p => OpenAcademyProspectDetail(p, filledOnly));
+                BuildAcademyRow(prospect, filledOnly);
             }
+        }
+
+        private void BuildAcademyRow(PlayerAgent prospect, List<PlayerAgent> filledOnly)
+        {
+            bool promotable = academy.CanPromote(prospect);
+            string status = promotable ? "<color=#3ddc84>PROMOTABLE</color>" : "DEVELOPING";
+
+            string[] cells =
+            {
+                prospect.Name,
+                prospect.PrimaryPosition.ToString(),
+                prospect.Age.ToString(),
+                GetDisplayRating(prospect.GetOverallRating()).ToString(),
+                scouting.GetDisplayPotential(prospect),
+                status
+            };
+
+            scoutingListView.AddCustomGridRow(prospect, cells, AcademyColumnFractions, OnAcademyProspectClicked,
+                onNameClicked: p => OpenAcademyProspectDetail(p, filledOnly));
+        }
+
+        private void OnAcademyColumnHeaderClicked(int column)
+        {
+            if (academySortColumn == column)
+            {
+                academySortDescending = !academySortDescending;
+            }
+            else
+            {
+                academySortColumn = column;
+                academySortDescending = true;
+            }
+
+            RefreshAcademyUI();
+        }
+
+        // Column indices match AcademyColumnHeaders. Potential sorts by the same fuzzy-
+        // band display string a Squad/Transfers list already sorts by (see
+        // GetScoutingPotentialSortKey) rather than the true hidden value. Status sorts
+        // PROMOTABLE before DEVELOPING on a descending (default) click, matching every
+        // other column's "most interesting first" convention.
+        private int CompareAcademyColumn(PlayerAgent a, PlayerAgent b, int column, bool descending)
+        {
+            int result;
+            switch (column)
+            {
+                case 0:
+                    result = string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 1:
+                    result = string.Compare(a.PrimaryPosition.ToString(), b.PrimaryPosition.ToString(), StringComparison.OrdinalIgnoreCase);
+                    break;
+                case 2:
+                    result = a.Age.CompareTo(b.Age);
+                    break;
+                case 3:
+                    result = a.GetOverallRating().CompareTo(b.GetOverallRating());
+                    break;
+                case 4:
+                    result = GetScoutingPotentialSortKey(a).CompareTo(GetScoutingPotentialSortKey(b));
+                    break;
+                case 5:
+                    result = academy.CanPromote(a).CompareTo(academy.CanPromote(b));
+                    break;
+                default:
+                    result = 0;
+                    break;
+            }
+
+            return descending ? -result : result;
         }
 
         private static readonly string[] AcademyColumnHeaders = { "PROSPECT", "POS", "AGE", "OVR", "POTENTIAL", "STATUS" };
@@ -4665,17 +5147,6 @@ namespace Manager
                 }
             }
 
-            // Marking read happens on VIEW (opening the screen), not per-message - there's
-            // no separate message-detail view to click into (the full body already shows
-            // inline in the list), so "opened the Inbox" is the natural equivalent of
-            // "read your email." Deliberately after building the rows above, so this
-            // visit's unread styling still reflects what was actually true when the
-            // manager opened the screen, not a state this same call already erased first.
-            foreach (InboxMessage message in inbox.Messages)
-            {
-                inbox.MarkRead(message);
-            }
-
             if (inboxButton != null)
             {
                 ManagerUITheme.NormalizeButtonLabel(inboxButton, "INBOX", ManagerUITheme.TextBody, 17);
@@ -4693,12 +5164,20 @@ namespace Manager
         // resolve to them instead of bubbling down to the row's own toggle (same
         // "topmost raycast target wins" convention BuildClickableNameCell already
         // relies on elsewhere).
-        private const float InboxBannerHeight = 56f;
+        // Session 15 - Thomas: readability pass. Content text (title/body/matchday)
+        // dropped to Normal weight regardless of read state - Bold was reserved for
+        // emphasis, not baseline body copy, and made every unread row harder to read,
+        // not easier (the "NEW" tag + row background tint already carry the unread
+        // signal on their own). Every dimension bumped up a full tier too ("you might
+        // have 20/20 vision, good sir, but I don't") - banner height, title/matchday/
+        // body font sizes, and the expanded body's reserved height all scaled together
+        // so nothing clips or crowds the larger text.
+        private const float InboxBannerHeight = 80f;
 
         private GameObject BuildInboxMessageRow(InboxMessage message)
         {
             bool actionable = message.HasPendingAction;
-            float bodyHeight = actionable ? 110f : 70f;
+            float bodyHeight = actionable ? 180f : 110f;
             float height = message.IsExpanded ? InboxBannerHeight + bodyHeight : InboxBannerHeight;
 
             GameObject row = new GameObject($"Message_{message.Id}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
@@ -4719,15 +5198,15 @@ namespace Manager
             titleRect.anchorMin = new Vector2(0f, 1f);
             titleRect.anchorMax = new Vector2(1f, 1f);
             titleRect.pivot = new Vector2(0f, 1f);
-            titleRect.anchoredPosition = new Vector2(16f, -14f);
-            titleRect.sizeDelta = new Vector2(-260f, 26f);
+            titleRect.anchoredPosition = new Vector2(20f, -20f);
+            titleRect.sizeDelta = new Vector2(-320f, 36f);
             // Plain ASCII, not a unicode bullet (Oswald SDF has no glyph for "●" - the
             // same reason the Tactics Board formation dropdown uses a plain "v" instead
             // of a unicode arrow; confirmed live, see feedback_random_namespace_ambiguity-
             // adjacent font gotcha in HANDOFF).
             string unreadMarker = message.IsRead ? "" : "<color=#3ddc84>NEW</color> ";
             string expandMarker = message.IsExpanded ? "v " : "> ";
-            ManagerUITheme.BuildLabel(titleObj.transform, $"{expandMarker}{unreadMarker}{message.Title}", 17, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, message.IsRead ? FontStyles.Normal : FontStyles.Bold);
+            ManagerUITheme.BuildLabel(titleObj.transform, $"{expandMarker}{unreadMarker}{message.Title}", 24, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
 
             GameObject matchdayObj = new GameObject("Matchday", typeof(RectTransform));
             matchdayObj.transform.SetParent(row.transform, false);
@@ -4735,9 +5214,9 @@ namespace Manager
             matchdayRect.anchorMin = new Vector2(1f, 1f);
             matchdayRect.anchorMax = new Vector2(1f, 1f);
             matchdayRect.pivot = new Vector2(1f, 1f);
-            matchdayRect.anchoredPosition = new Vector2(-16f, -14f);
-            matchdayRect.sizeDelta = new Vector2(160f, 26f);
-            ManagerUITheme.BuildLabel(matchdayObj.transform, $"Matchday {message.MatchdayReceived}", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight);
+            matchdayRect.anchoredPosition = new Vector2(-20f, -22f);
+            matchdayRect.sizeDelta = new Vector2(200f, 32f);
+            ManagerUITheme.BuildLabel(matchdayObj.transform, $"Matchday {message.MatchdayReceived}", 18, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight, FontStyles.Normal);
 
             if (!message.IsExpanded)
             {
@@ -4750,9 +5229,9 @@ namespace Manager
             bodyRect.anchorMin = new Vector2(0f, 1f);
             bodyRect.anchorMax = new Vector2(1f, 1f);
             bodyRect.pivot = new Vector2(0f, 1f);
-            bodyRect.anchoredPosition = new Vector2(16f, -(InboxBannerHeight + 2f));
-            bodyRect.sizeDelta = new Vector2(-32f, actionable ? bodyHeight - 44f : bodyHeight - 10f);
-            ManagerUITheme.BuildLabel(bodyObj.transform, message.Body, 14, ManagerUITheme.TextBody, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
+            bodyRect.anchoredPosition = new Vector2(20f, -(InboxBannerHeight + 6f));
+            bodyRect.sizeDelta = new Vector2(-40f, actionable ? bodyHeight - 54f : bodyHeight - 16f);
+            ManagerUITheme.BuildLabel(bodyObj.transform, message.Body, 20, ManagerUITheme.TextBody, TextAlignmentOptions.TopLeft, FontStyles.Normal, noWrap: false);
 
             if (actionable)
             {
@@ -4770,9 +5249,25 @@ namespace Manager
             return row;
         }
 
+        // Session 15 fix - Thomas: "as soon as you click the first one, they all turn
+        // grey, despite the other ones still technically being unread." Root cause:
+        // the old design marked EVERY message read the instant the Inbox screen opened
+        // (see the removed comment on RefreshInboxUI), which only reads correctly if
+        // you never look at the screen twice in one visit - the first expand click
+        // re-ran that same screen-wide refresh and repainted every row from state that
+        // had already flipped to all-read the moment the screen opened. Read status is
+        // now genuinely per-message: expanding a specific message is what marks THAT
+        // one read (collapsing doesn't un-read it), so an unopened message stays green
+        // until you actually look at it, no matter what else you click in the meantime.
         private void OnInboxMessageBannerClicked(InboxMessage message)
         {
             message.IsExpanded = !message.IsExpanded;
+
+            if (message.IsExpanded)
+            {
+                inbox.MarkRead(message);
+            }
+
             RefreshInboxUI();
         }
 
