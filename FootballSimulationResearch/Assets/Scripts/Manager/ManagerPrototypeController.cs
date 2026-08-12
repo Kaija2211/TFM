@@ -154,6 +154,21 @@ namespace Manager
         private readonly LeagueTable playableTable = new();
         private readonly Dictionary<string, AgentTeam> squadsByTeamName = new();
         private readonly Dictionary<string, ManagerSquadRoles> squadRolesByTeamName = new();
+
+        // Live team strength (session 16) - see RecalculateLiveTeamStrength for how
+        // these get used. baselineAverageOverallByTeam is captured once per team in
+        // GetOrCreateAgentTeam (or on load, for the managed team - see
+        // RestoreCareerFromSaveData), the moment that team's squad first exists this
+        // session. originalAttackStrengthByTeam/originalDefenceStrengthByTeam are a
+        // separate, one-time-ever snapshot taken immediately after training (see Start)
+        // - deliberately NOT read from the live statisticalModel.GetTeamStrength at
+        // whatever later moment a team's squad happens to be generated, since a mid-
+        // session Exit to Title -> Load a different save of the SAME club would
+        // otherwise baseline the newly-loaded career against the abandoned one's
+        // already-drifted numbers instead of the true historical value.
+        private readonly Dictionary<string, float> baselineAverageOverallByTeam = new();
+        private readonly Dictionary<string, float> originalAttackStrengthByTeam = new();
+        private readonly Dictionary<string, float> originalDefenceStrengthByTeam = new();
         private readonly ManagerScouting scouting = new();
         private readonly ManagerAcademy academy = new();
         private readonly ManagerLoanTracker loanTracker = new();
@@ -399,13 +414,6 @@ namespace Manager
         private bool tacticsBoardOpenedMidMatch;
         private readonly List<(string offName, string offPosition, string onName, string onPosition, int minute)> matchSubsLog = new();
 
-        // Tactics screen is normally reached via the Tactics Board's "TACTICS" button, so
-        // its Back/Save buttons return there by default. The first-match Captain warning's
-        // "GO TO TACTICS" shortcut (OnFirstMatchWarningGoToTacticsClicked) instead jumps
-        // straight there from Matchday Prep without ever opening the board - without this
-        // flag, Back would try to reactivate a tacticsBoardPanel that was never built this
-        // session (null), leaving both panels inactive and the screen blank.
-        private bool tacticsScreenOpenedFromMatchdayPrep;
 
         // Real football doesn't let a substituted-off player return - tracks who's
         // actually left the pitch via a genuine mid-match sub this match (session 10
@@ -504,6 +512,18 @@ namespace Manager
             selectedTeamIndex = defaultIndex >= 0 ? defaultIndex : 0;
 
             TrainStatisticalModel();
+
+            // Live team strength (session 16) - one-time-ever snapshot of the pure
+            // trained values, before any Manager Mode gameplay this session ever gets a
+            // chance to mutate a TeamStrength object. See the dictionaries' own comment
+            // for why this can't just be read lazily from statisticalModel.GetTeamStrength
+            // at whatever later moment each team's squad happens to be generated.
+            foreach (string teamName in availableTeamNames)
+            {
+                StatisticalModel.TeamStrength trainedStrength = statisticalModel.GetTeamStrength(teamName);
+                originalAttackStrengthByTeam[teamName] = trainedStrength.AttackStrength;
+                originalDefenceStrengthByTeam[teamName] = trainedStrength.DefenceStrength;
+            }
 
             ShowSplashScreen();
         }
@@ -1727,6 +1747,60 @@ namespace Manager
             ShowTitleScreen();
         }
 
+        // Session 16 - mirrors ApplySaveData's own clear block (see that method), just
+        // for "starting fresh" instead of "restoring from a save". Every one of these
+        // is a real thing Manager Mode accumulates over a career that has no other
+        // reset point - a second career started in the same running session would
+        // otherwise inherit all of it from whichever career ran before it.
+        private void ResetSessionStateForNewCareer()
+        {
+            currentSeason = 1;
+            currentFixtureIndex = 0;
+            seasonEndRewardsAppliedForCurrentSeason = false;
+
+            playableTable.Reset();
+            foreach (string teamName in availableTeamNames)
+            {
+                playableTable.EnsureTeam(teamRegistry.GetTeamId(teamName));
+            }
+
+            recentFormByTeamId.Clear();
+
+            midSeasonReviewSentForCurrentSeason = false;
+            lastPostMatchReactionMatchday = -PostMatchReactionMinGapMatchdays;
+            lastLowStaminaWarningMatchday = -LowStaminaWarningCooldownMatchdays;
+            poorRunMessageSentForCurrentStreak = false;
+            strongRunMessageSentForCurrentStreak = false;
+            injuredPlayersTracked.Clear();
+            nextMatchOnlyOverrideActive = false;
+            nextMatchOverrideDefaultStartingEleven = null;
+
+            squadsByTeamName.Clear();
+            reservePoolByTeamName.Clear();
+            squadRolesByTeamName.Clear();
+            simulatedMatchdays.Clear();
+            loanTracker.Clear();
+            academy.Clear();
+            transferNegotiation.Clear();
+            scouting.Clear();
+            inbox.Clear();
+            careerHistory.Clear();
+            finance.Clear();
+
+            // Live team strength (session 16) - restore every club's strength back to
+            // the pure trained value BEFORE this new career generates any squads off it
+            // (GetOrCreateAgentTeam reads strength.AttackStrength/DefenceStrength to
+            // build a fresh squad) - otherwise a club that drifted during a previous
+            // career this same session would hand that drift straight into the new one.
+            baselineAverageOverallByTeam.Clear();
+            foreach (string teamName in availableTeamNames)
+            {
+                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+                strength.AttackStrength = originalAttackStrengthByTeam[teamName];
+                strength.DefenceStrength = originalDefenceStrengthByTeam[teamName];
+            }
+        }
+
         public void OnConfirmTeamClicked()
         {
             if (teamSelectStep == 1)
@@ -1768,6 +1842,14 @@ namespace Manager
             {
                 managerName = managerNameInput.text.Trim();
             }
+
+            // Session 16 - real bug Thomas hit live: starting a second career in the
+            // same running session (Editor Play Mode or the built .exe) inherited the
+            // first career's entire Inbox and squad ("everything is the same except i
+            // have a new name"). Nothing here ever reset between careers - only the
+            // Load Save path did. Must run before anything below reads/writes squad,
+            // fixture, or Inbox state for the new career.
+            ResetSessionStateForNewCareer();
 
             managedTeamFixtures = allSeasonFixtures.FindAll(m =>
                 m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
@@ -2591,42 +2673,20 @@ namespace Manager
                 player.Age += 1;
             }
 
-            List<TextAsset> seasonFilePool = new List<TextAsset>();
-            if (seasonFile != null) seasonFilePool.Add(seasonFile);
-
-            if (trainingSeasonFiles != null)
-            {
-                foreach (TextAsset file in trainingSeasonFiles)
-                {
-                    if (file == null) continue;
-
-                    bool alreadyInPool = false;
-                    foreach (TextAsset existing in seasonFilePool)
-                    {
-                        if (existing.name == file.name) { alreadyInPool = true; break; }
-                    }
-
-                    if (!alreadyInPool) seasonFilePool.Add(file);
-                }
-            }
-
-            for (int attempt = 0; attempt < seasonFilePool.Count; attempt++)
-            {
-                int index = (currentSeason - 1 + attempt) % seasonFilePool.Count;
-                TextAsset candidate = seasonFilePool[index];
-                List<OpenFootballMatch> candidateFixtures = OpenFootballTextParser.ParseSeasonFile(candidate.text, candidate.name);
-                List<OpenFootballMatch> candidateManagedFixtures = candidateFixtures.FindAll(m =>
-                    m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
-
-                if (candidateManagedFixtures.Count > 0)
-                {
-                    allSeasonFixtures = candidateFixtures;
-                    managedTeamFixtures = candidateManagedFixtures;
-                    availableTeamNames = BuildAvailableTeamNames();
-                    return;
-                }
-            }
-
+            // Session 16 - Thomas: "the premier league teams stay the same season to
+            // season... no relegation for the MSc version." This used to cycle through
+            // every real historical season file (trainingSeasonFiles), picking a
+            // different one each rollover - since real Premier League rosters genuinely
+            // differ year to year, that silently swapped which 20 clubs the career was
+            // even about (a team relegated in real history, e.g. Huddersfield Town,
+            // could reappear mid-career with zero relegation/promotion actually
+            // simulated). Dishonest for a project whose whole premise is a trained,
+            // real-data-backed league - now always reuses the exact same seasonFile
+            // season 1 started with, so the 20 clubs (and their trained
+            // StatisticalModel strength) never change for the rest of the career.
+            // trainingSeasonFiles is untouched elsewhere (TrainStatisticalModel still
+            // combines all of them for strength training) - this only affects which
+            // file drives THIS career's own fixture list/roster.
             allSeasonFixtures = OpenFootballTextParser.ParseSeasonFile(seasonFile.text, seasonFile.name);
             managedTeamFixtures = allSeasonFixtures.FindAll(m =>
                 m.HomeTeam == managedTeamName || m.AwayTeam == managedTeamName);
@@ -2643,12 +2703,6 @@ namespace Manager
         private const float AssumedPlayingTimeFactorAiFirstTeam = 0.65f;
         private const float AssumedPlayingTimeFactorUncalledReserve = 0.15f;
         private const float AssumedPlayingTimeFactorYouthProspect = 0.1f;
-        // Session 13 - meaningfully higher than an unclaimed youth prospect's factor,
-        // reflecting dedicated academy coaching/development attention rather than a kid
-        // just sitting in a scouting report somewhere. Both are now passed with
-        // exemptFromErosion: true (see ApplySeasonProgression's own comment) - this
-        // value only shapes growth RATE, not whether erosion applies.
-        private const float AssumedPlayingTimeFactorAcademyProspect = 0.8f;
 
         // Higher than the AI-first-team assumption above - the whole point of a loan
         // (session 9) is escaping a bench role for regular minutes elsewhere, which
@@ -2688,6 +2742,11 @@ namespace Manager
                 }
 
                 ApplyRetirementsForTeam(teamName, team);
+
+                // Live team strength (session 16) - after growth/decline and retirement
+                // replacements have both landed for this team, so the recalculation sees
+                // this season's real final squad, not a stale one.
+                RecalculateLiveTeamStrength(teamName, team);
             }
 
             foreach (KeyValuePair<string, List<PlayerAgent>> entry in reservePoolByTeamName)
@@ -2709,20 +2768,13 @@ namespace Manager
                 ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorYouthProspect, exemptFromErosion: true);
             }
 
-            // Youth academy (session 9) - a genuine development pipeline gets a
-            // meaningfully higher assumed factor than an unclaimed prospect still out in
-            // the world (session 13, in response to Thomas asking whether academy growth
-            // should be faster than senior development while sitting untouched - the
-            // honest answer turned out to be "it should also never have been eroding,"
-            // see the bug fix note above). Also exempt from erosion for the same reason.
-            // Focus stats (session 10) ride along on the same call - GetFocusAttributes
-            // returns an empty list for a prospect nobody's picked anything for yet,
-            // which ApplySeasonProgression already treats as "no doubling" the same as a
-            // null set.
-            foreach (PlayerAgent player in academy.GetAcademyPoolForAging())
-            {
-                ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorAcademyProspect, academy.GetFocusAttributes(player), exemptFromErosion: true);
-            }
+            // Youth academy - growth moved to a per-matchday tick in session 16 (see
+            // ApplyMatchdayAcademyProgression, called from SimulateFixture alongside the
+            // managed team's own tick) - academy kids no longer get a season-end lump
+            // sum here at all, matching how the managed squad itself works. Nothing left
+            // to do for them at rollover: erosion was already exempt (they structurally
+            // can't have real senior appearances at this age) and there's no delta badge
+            // or prime-age noise that applies to a 14-16 year old.
         }
 
         // Loan system (session 9) - a loaned player isn't in ANY team's Players list
@@ -3025,6 +3077,22 @@ namespace Manager
 
             AgentTeam managedTeam = data.ManagedSquad.ToTeam();
             squadsByTeamName[managedTeamName] = managedTeam;
+
+            // Live team strength (session 16) - this bypasses GetOrCreateAgentTeam
+            // entirely (the managed squad is restored directly from save data, not
+            // generated), so its average-Overall baseline would otherwise never get
+            // captured and RecalculateLiveTeamStrength would silently no-op for the
+            // player's own team for the rest of this session. Re-baselines the AVERAGE
+            // to the just-loaded squad rather than trying to persist the original
+            // career-start average across saves (would need new save-schema fields) - a
+            // save/load "resets the clock" on live-strength drift for the managed team,
+            // same real limitation AI clubs already have (their squads aren't persisted
+            // at all, see squadsByTeamName.Clear() a few lines up - they regenerate
+            // fresh, and fresh IS their new baseline too). originalAttackStrengthByTeam/
+            // originalDefenceStrengthByTeam need no equivalent fix here - they're the
+            // one-time-ever training snapshot (see Start), never mutated, so they're
+            // already correct for any team including a freshly-loaded managed one.
+            baselineAverageOverallByTeam[managedTeamName] = GetAverageOverall(managedTeam);
 
             Dictionary<string, PlayerAgent> managedPlayersById = new();
             foreach (PlayerAgent p in managedTeam.Players) managedPlayersById[p.PlayerId] = p;
@@ -4184,9 +4252,14 @@ namespace Manager
 
         private float GetScoutingPotentialSortKey(PlayerAgent prospect)
         {
-            string display = scouting.GetDisplayPotential(prospect);
-            string firstPart = display.Split('-')[0];
-            return float.TryParse(firstPart, out float value) ? value : 0f;
+            string[] parts = scouting.GetDisplayPotential(prospect).Split('-');
+            float lowerBand = parts.Length > 0 && float.TryParse(parts[0], out float lower) ? lower : 0f;
+            float upperBand = parts.Length > 1 && float.TryParse(parts[1], out float upper) ? upper : 0f;
+
+            // Two prospects can share a lower band (it's quantized to steps of 5) - the
+            // upper band as a fractional tiebreaker (max 99/1000) makes "70-95" sort above
+            // "70-82" without ever flipping the primary lower-band ordering.
+            return lowerBand + (upperBand / 1000f);
         }
 
         // Session 9 - Thomas: "click a prospect's name to see detailed stats" instead of
@@ -4798,15 +4871,16 @@ namespace Manager
             ShowBidDialog(target, sellingTeam, sourceTeamDisplay);
         }
 
-        // --- Bid-amount dialog (session 13) - reuses BuildSliderRow's discrete-option
-        // picker (same component the Tactics sliders and Match Speed setting already
-        // use) inside a ShowConfirmDialog-style modal card, rather than a bespoke
-        // continuous drag slider - lets the manager pick a bid rather than a single
-        // fixed ask, per Thomas's explicit design call. ---
+        // --- Bid-amount dialog (session 13, free-text field session 16) - a numeric-only
+        // TMP_InputField (ManagerUITheme.BuildInputField) rather than the original five
+        // preset-multiplier picker - Thomas's explicit follow-up ask: "i'd like our bid
+        // option to be a text field so you can enter your own bid... exclusively number
+        // input, remove the five or so set options." Prefilled with the scout's
+        // recommended amount so a manager who doesn't want to think about it can still
+        // just hit Submit. ---
 
         private GameObject bidDialogPanel;
-        private float[] bidDialogAmounts;
-        private int bidDialogSelectedIndex;
+        private TMP_InputField bidAmountInputField;
         private PlayerAgent bidDialogTarget;
         private string bidDialogSourceTeam;
 
@@ -4818,8 +4892,6 @@ namespace Manager
             }
 
             float recommended = ManagerTransferNegotiation.GetRecommendedBid(target, sellingTeam);
-            bidDialogAmounts = new[] { recommended * 0.8f, recommended * 0.9f, recommended, recommended * 1.15f, recommended * 1.35f };
-            bidDialogSelectedIndex = 2;
             bidDialogTarget = target;
             bidDialogSourceTeam = sourceTeamDisplay;
 
@@ -4854,13 +4926,30 @@ namespace Manager
             ManagerUITheme.SetPointAnchor(subtitleObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -64f), new Vector2(680f, 24f));
             ManagerUITheme.BuildLabel(subtitleObj.transform, $"Market value ~£{ManagerClubFinance.GetMarketValue(target):F1}m   ·   scout's recommendation ~£{recommended:F1}m", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
 
-            string[] optionLabels = new string[bidDialogAmounts.Length];
-            for (int i = 0; i < bidDialogAmounts.Length; i++) optionLabels[i] = $"£{bidDialogAmounts[i]:F1}m";
+            GameObject inputLabelObj = new GameObject("InputLabel", typeof(RectTransform));
+            inputLabelObj.transform.SetParent(card.transform, false);
+            ManagerUITheme.SetPointAnchor(inputLabelObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -110f), new Vector2(680f, 22f));
+            ManagerUITheme.BuildLabel(inputLabelObj.transform, "BID AMOUNT (£M)", 13, ManagerUITheme.TextMuted, TextAlignmentOptions.Center);
 
-            GameObject sliderContainer = new GameObject("SliderContainer", typeof(RectTransform));
-            sliderContainer.transform.SetParent(card.transform, false);
-            ManagerUITheme.SetPointAnchor(sliderContainer.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -108f), new Vector2(680f, 80f));
-            BuildSliderRow(sliderContainer.transform, "BID AMOUNT (higher = better odds)", 0f, optionLabels, bidDialogSelectedIndex, OnBidDialogAmountSelected);
+            GameObject inputContainer = new GameObject("InputContainer", typeof(RectTransform));
+            inputContainer.transform.SetParent(card.transform, false);
+            ManagerUITheme.SetPointAnchor(inputContainer.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -140f), new Vector2(300f, 44f));
+
+            bidAmountInputField = ManagerUITheme.BuildInputField(inputContainer.transform, "e.g. 45.5", 20, characterLimit: 9);
+            bidAmountInputField.contentType = TMP_InputField.ContentType.DecimalNumber;
+            bidAmountInputField.text = recommended.ToString("F1");
+
+            // Prefilling .text this early (same frame the field is built, before Unity's
+            // own Awake/OnEnable-driven placeholder-hide logic has run) doesn't hide the
+            // placeholder label the normal typing path would - without this the default
+            // amount renders on top of "e.g. 45.5" instead of replacing it (session 16
+            // playtest screenshot: "94.3" overlapping "45.5"). BuildInputField's other
+            // caller (Save Name) never prefills text, so this is scoped to here rather
+            // than the shared helper.
+            if (bidAmountInputField.placeholder != null)
+            {
+                bidAmountInputField.placeholder.gameObject.SetActive(false);
+            }
 
             Button confirmButton = ManagerUITheme.BuildButton(card.transform, "SUBMIT BID", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 15);
             ManagerUITheme.SetPointAnchor(confirmButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(-100f, 36f), new Vector2(180f, 48f));
@@ -4873,11 +4962,6 @@ namespace Manager
             StartCoroutine(RecoverBlankLabelsNextFrame(bidDialogPanel.transform));
         }
 
-        private void OnBidDialogAmountSelected(int index)
-        {
-            bidDialogSelectedIndex = index;
-        }
-
         private void OnConfirmBidClicked()
         {
             if (bidDialogTarget == null)
@@ -4887,7 +4971,12 @@ namespace Manager
             }
 
             PlayerAgent target = bidDialogTarget;
-            float amount = bidDialogAmounts[bidDialogSelectedIndex];
+
+            if (bidAmountInputField == null || !float.TryParse(bidAmountInputField.text, out float amount) || amount <= 0f)
+            {
+                SetTransferMarketStatus("Enter a bid amount above £0m.");
+                return;
+            }
 
             if (transferNegotiation.TryPlaceBid(target, amount, bidDialogSourceTeam, currentFixtureIndex, finance, managedTeamName))
             {
@@ -4911,6 +5000,7 @@ namespace Manager
             }
 
             bidDialogTarget = null;
+            bidAmountInputField = null;
         }
 
         // Finalizes an accepted bid - moving the player onto the managed squad mirrors
@@ -4931,7 +5021,30 @@ namespace Manager
             // instead, never through here) - remove from their real club's squad.
             if (resolvedBid.SourceTeamName != null && squadsByTeamName.TryGetValue(resolvedBid.SourceTeamName, out AgentTeam sourceSquad))
             {
-                sourceSquad.StartingEleven.Remove(target);
+                // Session 16 - Thomas: "starting players sold automatically get replaced
+                // with suitable bench players." Same SubstitutePlayer swap the managed
+                // team's own injury/loan backfill already uses (see
+                // EnsureNoInjuredStarters/OnLoanOutClicked) - promotes the best-fit bench
+                // cover into the exact formation slot the sold player vacated instead of
+                // leaving a hole in the AI club's XI. ManagerTransferNegotiation.
+                // WouldLeaveSquadTooThin already guarantees a same-position player exists
+                // somewhere in the squad before a sale is ever accepted, so this should
+                // always find real cover in practice - still defensively falls through to
+                // a plain removal if it somehow doesn't.
+                if (sourceSquad.StartingEleven.Contains(target))
+                {
+                    PlayerAgent replacement = FindBestFitBenchPlayer(sourceSquad, target.PrimaryPosition);
+
+                    if (replacement != null)
+                    {
+                        sourceSquad.SubstitutePlayer(target, replacement);
+                    }
+                    else
+                    {
+                        sourceSquad.StartingEleven.Remove(target);
+                    }
+                }
+
                 sourceSquad.Bench.Remove(target);
                 sourceSquad.Players.Remove(target);
             }
@@ -6241,8 +6354,7 @@ namespace Manager
 
             if (tacticsScreenBackButton != null)
             {
-                string label = tacticsScreenOpenedFromMatchdayPrep ? "BACK" : "BACK TO TACTICS BOARD";
-                ManagerUITheme.NormalizeButtonLabel(tacticsScreenBackButton, label, ManagerUITheme.TextBody, 13);
+                ManagerUITheme.NormalizeButtonLabel(tacticsScreenBackButton, "BACK TO TACTICS BOARD", ManagerUITheme.TextBody, 13);
             }
 
             RefreshTacticsScreenUI();
@@ -6251,16 +6363,7 @@ namespace Manager
         public void OnTacticsScreenBackClicked()
         {
             if (tacticsScreenPanel != null) tacticsScreenPanel.SetActive(false);
-
-            if (tacticsScreenOpenedFromMatchdayPrep)
-            {
-                tacticsScreenOpenedFromMatchdayPrep = false;
-                if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(true);
-            }
-            else
-            {
-                if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
-            }
+            if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
         }
 
         private void BuildTacticsScreenChrome()
@@ -7585,6 +7688,32 @@ namespace Manager
             foreach (PlayerAgent player in benchPlayers)
             {
                 squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
+            }
+
+            // Reserves section (session 16 - Thomas: "we need more players per team...
+            // an actual reserve", and the follow-up "Visible Reserves list" scope choice
+            // when offered a choice between a quiet backend depth boost and actually
+            // surfacing it). The reserve pool (see GetOrCreateReservePool) already
+            // existed as an invisible emergency safety net beneath the real 20-man squad
+            // - it only ever showed up once a specific player got promoted onto the
+            // Bench via an injury/loan call-up. Eagerly generating it here (rather than
+            // waiting for the first call-up) so it's visible from the very first time
+            // the manager opens Squad, not just after a crisis. Read-only (onRowClicked:
+            // null, same pattern as the opponent-pitch browse view) - these players
+            // aren't on the real matchday squad, so Sell/role-assignment/etc. don't
+            // apply to them the way they do for Starting XI/Bench rows.
+            List<PlayerAgent> reservePlayers = GetOrCreateReservePool(managedTeamName);
+            squadBrowseListView.AddSectionHeader($"Reserves ({reservePlayers.Count})");
+
+            List<PlayerAgent> sortedReserves = new List<PlayerAgent>(reservePlayers);
+            if (squadSortColumn >= 0)
+            {
+                sortedReserves.Sort((a, b) => CompareSquadColumn(a, b, squadSortColumn, squadSortDescending));
+            }
+
+            foreach (PlayerAgent player in sortedReserves)
+            {
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), null, ageText: player.Age.ToString());
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
@@ -8971,6 +9100,17 @@ namespace Manager
             ManagerUITheme.SetPointAnchor(pauseButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-188f, -14f), new Vector2(90f, 30f));
             pauseButton.onClick.AddListener(OnPauseClicked);
 
+            // Session 16 - moved here from its old spot beneath the Subs Made log
+            // (Thomas's follow-up: even after that relocation, a busy match with 5-6
+            // subs still grew tall enough to reach it). A fixed-position button below a
+            // list that can grow arbitrarily tall was always going to collide again
+            // eventually - the header toolbar is a position nothing else ever grows
+            // into, so it can't recur here. Left of Pause with the same 8px gap Pause
+            // itself keeps from Skip to Results.
+            Button makeChangesButton = ManagerUITheme.BuildButton(matchdayPanel.transform, "MAKE CHANGES", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
+            ManagerUITheme.SetPointAnchor(makeChangesButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-286f, -14f), new Vector2(140f, 30f));
+            makeChangesButton.onClick.AddListener(OnOpenTacticsBoardDuringMatchClicked);
+
             // --- Score row: team names flank a centered score + minute/LIVE tag ---
             // Vertical rhythm redone against the new 170px header: names/score both
             // start around the same top offset so their centers roughly line up (the
@@ -9107,7 +9247,7 @@ namespace Manager
             homeScorersObj.SetActive(false);
             awayScorersObj.SetActive(false);
 
-            matchLiveOnlyElements = new[] { pauseButton.gameObject, skipToResultsButton != null ? skipToResultsButton.gameObject : null, clockText != null ? clockText.gameObject : null };
+            matchLiveOnlyElements = new[] { pauseButton.gameObject, makeChangesButton.gameObject, skipToResultsButton != null ? skipToResultsButton.gameObject : null, clockText != null ? clockText.gameObject : null };
 
             // --- Body: Key Moments (left) / Match Stats (right) ---
             GameObject keyMomentsCaptionObj = new GameObject("MatchLogCaption", typeof(RectTransform));
@@ -9178,19 +9318,25 @@ namespace Manager
             viewMatchEventsButton.gameObject.SetActive(false);
             matchFullTimeOnlyElements.Add(viewMatchEventsButton.gameObject);
 
-            // --- Right column: Substitutions (top) then Match Stats (below) ---
-            // SetPointAnchor always sets pivot == anchor, so anchor.x=0.55 (meant as a
-            // left-edge reference point for this column) was also making these elements'
-            // own pivot sit 55% across THEMSELVES - not left-aligned at that point at
-            // all, but straddling the panel center either side of it (which is exactly
-            // what looked like everything "floating in the middle"/illegible overlap).
-            // Explicit pivot.x=0 after each call fixes it: anchor point stays at the
-            // column's left edge, and the element now actually starts there.
+            // --- Right column: Match Stats (unchanged position, x=0.55) ---
+            // --- Far-right column: Substitutions (top) then Make Changes (below) ---
+            // Session 16 (Thomas, screenshot with two drawn boxes) - Subs Made used to
+            // stack directly above Match Stats in the SAME 0.55-anchored column, with
+            // Make Changes and the Stats caption pinned at fixed y-offsets below it. Its
+            // ContentSizeFitter grows the log taller as more subs get made, but nothing
+            // below it ever moved to make room - by the 2nd-3rd sub the growing list
+            // physically overlapped Make Changes and Match Stats. Moved to its own
+            // right-edge-anchored column instead, clear of both. Right-edge anchor
+            // (anchorMax=anchorMin=pivot=(1,1)) means SetPointAnchor's pivot==anchor
+            // behavior is already correct here (unlike the old x=0.55 "left edge
+            // reference" usage, which needed an explicit pivot.x=0 override to stop the
+            // element straddling its own anchor point) - the column's right edge sits at
+            // the anchor, growing left/down from there, exactly what a right-margin-
+            // flush column needs.
             GameObject subsCaptionObj = new GameObject("SubsMadeCaption", typeof(RectTransform));
             subsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             RectTransform subsCaptionRect = subsCaptionObj.GetComponent<RectTransform>();
-            ManagerUITheme.SetPointAnchor(subsCaptionRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 28f)), new Vector2(360f, 20f));
-            subsCaptionRect.pivot = new Vector2(0f, 1f);
+            ManagerUITheme.SetPointAnchor(subsCaptionRect, new Vector2(1f, 1f), new Vector2(-halfMargin, -(headerHeight + 28f)), new Vector2(300f, 20f));
             ManagerUITheme.BuildLabel(subsCaptionObj.transform, "SUBS MADE  ·  MANAGE VIA TACTICS BOARD", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
             // Read-only log of subs made this match (see matchSubsLog) - populated by
@@ -9199,8 +9345,7 @@ namespace Manager
             GameObject subsLogObj = new GameObject("SubsLog", typeof(RectTransform));
             subsLogObj.transform.SetParent(matchdayPanel.transform, false);
             RectTransform subsLogRect = subsLogObj.GetComponent<RectTransform>();
-            ManagerUITheme.SetPointAnchor(subsLogRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 54f)), new Vector2(360f, 76f));
-            subsLogRect.pivot = new Vector2(0f, 1f);
+            ManagerUITheme.SetPointAnchor(subsLogRect, new Vector2(1f, 1f), new Vector2(-halfMargin, -(headerHeight + 54f)), new Vector2(300f, 76f));
             matchSubsLogContainer = subsLogRect;
 
             VerticalLayoutGroup subsLogLayout = subsLogObj.AddComponent<VerticalLayoutGroup>();
@@ -9213,27 +9358,24 @@ namespace Manager
             ContentSizeFitter subsLogFitter = subsLogObj.AddComponent<ContentSizeFitter>();
             subsLogFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            Button makeChangesButton = ManagerUITheme.BuildButton(matchdayPanel.transform, "MAKE CHANGES", ManagerUITheme.CardNeutral, ManagerUITheme.TextPrimary, 15);
-            RectTransform makeChangesRect = makeChangesButton.GetComponent<RectTransform>();
-            ManagerUITheme.SetPointAnchor(makeChangesRect, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 148f)), new Vector2(300f, 42f));
-            makeChangesRect.pivot = new Vector2(0f, 1f);
-            makeChangesButton.onClick.AddListener(OnOpenTacticsBoardDuringMatchClicked);
-
             // Subs Made is a live-match-only concept - the design's Full-Time Summary has
             // no equivalent section at all, so this whole column needs to disappear at
-            // full-time exactly like the tactic pills do.
+            // full-time exactly like the tactic pills do. Make Changes moved up to the
+            // header toolbar (see pauseButton's own block above) - no longer built here.
             System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
             matchLiveOnlyElements[^1] = subsCaptionObj;
             System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
             matchLiveOnlyElements[^1] = subsLogObj;
-            System.Array.Resize(ref matchLiveOnlyElements, matchLiveOnlyElements.Length + 1);
-            matchLiveOnlyElements[^1] = makeChangesButton.gameObject;
 
+            // Session 16 - top-aligned to the same y-offset as Match Log/Subs Made
+            // (Thomas's explicit ask) rather than starting partway down the panel -
+            // there's nothing above it in this column anymore now that Subs Made has
+            // its own column and Make Changes lives in the header.
             GameObject statsCaptionObj = new GameObject("MatchStatsCaption", typeof(RectTransform));
             statsCaptionObj.transform.SetParent(matchdayPanel.transform, false);
             RectTransform statsCaptionRect2 = statsCaptionObj.GetComponent<RectTransform>();
             matchStatsCaptionRect = statsCaptionRect2;
-            ManagerUITheme.SetPointAnchor(statsCaptionRect2, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 210f)), new Vector2(360f, 20f));
+            ManagerUITheme.SetPointAnchor(statsCaptionRect2, new Vector2(0.55f, 1f), new Vector2(20f, -(headerHeight + 28f)), new Vector2(360f, 20f));
             statsCaptionRect2.pivot = new Vector2(0f, 1f);
             matchStatsCaptionLabel = ManagerUITheme.BuildLabel(statsCaptionObj.transform, "MATCH STATS", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
 
@@ -9243,7 +9385,9 @@ namespace Manager
             matchStatsBarsContainer.anchorMin = new Vector2(0.55f, 1f);
             matchStatsBarsContainer.anchorMax = new Vector2(0.55f, 1f);
             matchStatsBarsContainer.pivot = new Vector2(0f, 1f);
-            matchStatsBarsContainer.anchoredPosition = new Vector2(20f, -(headerHeight + 238f));
+            // 28px below the caption's new top-aligned start (headerHeight + 28), same
+            // internal caption-to-bars gap as before this section moved up.
+            matchStatsBarsContainer.anchoredPosition = new Vector2(20f, -(headerHeight + 56f));
             // Grown from 140 (1 row: Shots) to fit 4 rows (Possession/Chances Created/
             // Shots/Shots on Target) at 36px pitch each.
             matchStatsBarsContainer.sizeDelta = new Vector2(360f, 190f);
@@ -9736,41 +9880,14 @@ namespace Manager
             }
         }
 
-        // Backlog item 13 (session 11) - warns before the very first match of a new
-        // career specifically if no Captain has been assigned yet, the single highest-
-        // signal proxy for "the manager hasn't visited Tactics at all" (Captain feeds a
-        // real match-strength bonus via ManagerCaptaincyModifier, unlike most of the
-        // other roles). Not a hard block - Continue still starts the match as normal.
-        // Only fires once ever, guarded by hasShownFirstMatchWarning, not on every click
-        // if the manager dismisses it and clicks Simulate Match again.
-        private bool hasShownFirstMatchWarning;
-
+        // Session 16 - squad roles (captain/vice/penalty/FK/corner takers) were made
+        // cosmetic-only (Thomas's explicit scope call: real mechanical effects tied to
+        // assigning/not-assigning them were more headache than the feature was worth).
+        // The pre-first-match "you haven't assigned a Captain" warning (backlog item 13,
+        // session 11) no longer has anything real to warn about, so it's gone.
         public void OnSimulateMatchButtonClicked()
         {
-            if (!hasShownFirstMatchWarning && currentFixtureIndex == 0 && GetOrCreateSquadRoles(managedTeamName).Captain == null)
-            {
-                hasShownFirstMatchWarning = true;
-
-                ShowConfirmDialog(
-                    "You haven't assigned a Captain or set-piece roles yet. This affects match performance. Continue anyway?",
-                    "CONTINUE", OnSimulateMatchClicked,
-                    "GO TO TACTICS", OnFirstMatchWarningGoToTacticsClicked);
-                return;
-            }
-
             OnSimulateMatchClicked();
-        }
-
-        private void OnFirstMatchWarningGoToTacticsClicked()
-        {
-            // matchdayPrepPanel isn't touched by OnOpenTacticsScreenClicked itself (it
-            // only knows about tacticsBoardPanel/tacticsScreenPanel) - hide it explicitly
-            // so the two screens can't end up stacked. The manager returns to Matchday
-            // Prep the normal way afterward (Hub -> Next Matchday) - currentFixtureIndex
-            // hasn't moved, so nothing is lost by the detour.
-            if (matchdayPrepPanel != null) matchdayPrepPanel.SetActive(false);
-            tacticsScreenOpenedFromMatchdayPrep = true;
-            OnOpenTacticsScreenClicked();
         }
 
         // Backlog item 15 (session 11) - Thomas: an accidental click currently costs the
@@ -10380,10 +10497,12 @@ namespace Manager
             if (fixture.HomeTeam == managedTeamName)
             {
                 ApplyMatchdayConditionAndInjuries(homeTeam, isAutoResolved);
+                ApplyMatchdayAcademyProgression();
             }
             else if (fixture.AwayTeam == managedTeamName)
             {
                 ApplyMatchdayConditionAndInjuries(awayTeam, isAutoResolved);
+                ApplyMatchdayAcademyProgression();
             }
 
             StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(fixture);
@@ -10407,19 +10526,13 @@ namespace Manager
                 ManagerMentalityModifier.Apply(selectedMentality, ref expectedAwayGoals, ref expectedHomeGoals);
             }
 
-            // Naturally a no-op for AI-controlled teams - only the managed team's squad
-            // roles are ever populated via Player Detail, so an opponent's Captain is
-            // always null here.
-            ManagerCaptaincyModifier.Apply(GetOrCreateSquadRoles(fixture.HomeTeam).Captain, ref expectedHomeGoals);
-            ManagerCaptaincyModifier.Apply(GetOrCreateSquadRoles(fixture.AwayTeam).Captain, ref expectedAwayGoals);
-
+            // Session 16 - squad roles (captain/vice/penalty/FK/corner takers) are
+            // cosmetic-only now (Thomas's explicit scope call), so neither the captaincy
+            // expected-goals modifier nor the corner-taker name wiring runs anymore.
+            // ManagerCaptaincyModifier/CornerTakerNamesByTeamName are left in place
+            // (unused) rather than deleted, in case this gets revisited later.
             lastExpectedHomeGoals = expectedHomeGoals;
             lastExpectedAwayGoals = expectedAwayGoals;
-
-            ManagerSquadRoles homeRoles = GetOrCreateSquadRoles(fixture.HomeTeam);
-            ManagerSquadRoles awayRoles = GetOrCreateSquadRoles(fixture.AwayTeam);
-            matchSimulator.CornerTakerNamesByTeamName[fixture.HomeTeam] = (homeRoles.LeftCornerTaker?.Name, homeRoles.RightCornerTaker?.Name);
-            matchSimulator.CornerTakerNamesByTeamName[fixture.AwayTeam] = (awayRoles.LeftCornerTaker?.Name, awayRoles.RightCornerTaker?.Name);
 
             matchSimulator.ManagedTeamName = managedTeamName;
             matchSimulator.ManagedTeamTacticalSliders = tacticalSliders;
@@ -10473,6 +10586,29 @@ namespace Manager
                     continue;
                 }
 
+                float fit = candidate.GetPositionFit(neededPosition);
+
+                if (fit > bestFit)
+                {
+                    best = candidate;
+                    bestFit = fit;
+                }
+            }
+
+            return best;
+        }
+
+        // Same best-fit search as FindFitBenchReplacement, minus the injury filter - AI
+        // clubs have no ManagerSquadRoles/injury tracking at all (that's a managed-team-
+        // only system), so there's nothing to skip. Used only for backfilling an AI
+        // club's XI after a transfer sale (session 16, see OnSignPlayerClicked).
+        private PlayerAgent FindBestFitBenchPlayer(AgentTeam team, PlayerPosition neededPosition)
+        {
+            PlayerAgent best = null;
+            float bestFit = -1f;
+
+            foreach (PlayerAgent candidate in team.Bench)
+            {
                 float fit = candidate.GetPositionFit(neededPosition);
 
                 if (fit > bestFit)
@@ -10579,6 +10715,27 @@ namespace Manager
                 // Condition was, so left unchanged to keep this fix minimal. Morale
                 // multiplier (session 10) rides along on this same call.
                 ManagerPlayerDevelopment.ApplyMatchdayProgression(player, played, roles.GetMoraleGrowthMultiplier(player));
+            }
+        }
+
+        // Academy growth moved off the once-a-season lump sum (session 16 - Thomas:
+        // "do our youth players stats only move after the year, and not necessarily
+        // real time? My GK hasn't changed at all in my academy at matchday 22" - a real
+        // design gap confirmed by investigation, not a bug: academy had no per-matchday
+        // hook at all before this). Mirrors ApplyMatchdayConditionAndInjuries's call
+        // site exactly - fires once per matchday, alongside the managed team's own
+        // tick, not once per fixture (academy isn't tied to a specific match).
+        // playedThisMatchday: true for every tick, standing in for "always training" -
+        // academy prospects don't play senior matches to have a real played/not-played
+        // signal, and full-intensity coaching every matchday is close enough to the old
+        // AssumedPlayingTimeFactorAcademyProspect (0.8) lump-sum pace without adding a
+        // second continuous-factor overload just for this one caller. Focus stats
+        // (session 10) still ride along exactly as they did in the old season-end call.
+        private void ApplyMatchdayAcademyProgression()
+        {
+            foreach (PlayerAgent player in academy.GetAcademyPoolForAging())
+            {
+                ManagerPlayerDevelopment.ApplyMatchdayProgression(player, playedThisMatchday: true, focusAttributes: academy.GetFocusAttributes(player));
             }
         }
 
@@ -11382,7 +11539,68 @@ namespace Manager
 
             squadsByTeamName[teamName] = newTeam;
 
+            // Live team strength (session 16) baseline - captured once, the very first
+            // time this team's squad exists, before anything ever mutates it. See
+            // RecalculateLiveTeamStrength for how this gets used every season rollover.
+            baselineAverageOverallByTeam[teamName] = GetAverageOverall(newTeam);
+
             return newTeam;
+        }
+
+        // Live team strength (session 16) - Thomas: "team strength to be live... City
+        // will just always win most seasons no matter what, but if they have player
+        // decline... or if they lose the player, their performance should reflect that."
+        // Manager Mode's own statisticalModel instance is completely separate from
+        // Research Mode's (each instantiates its own, see ResearchEvaluationRunner.cs) -
+        // mutating TeamStrength here never touches the trained historical baseline
+        // Research Mode's own evaluation runs depend on.
+        //
+        // Driven by squad average Overall vs. the baseline captured at generation time
+        // (Thomas's explicit choice over a transfers-only signal) - one number that
+        // already reflects transfers in/out, retirements, and the aging/growth/decline
+        // every AI first-team player gets via ApplySeasonProgression every season,
+        // without needing separate bookkeeping for each cause. Recalculated from the
+        // ORIGINAL baseline every time, not compounded onto last season's already-
+        // adjusted value, so this can't drift or double-count across many seasons - it's
+        // always "how different is this squad from where it started," full stop.
+        // Clamped to 0.6x-1.5x - the sale-guard rules (WouldLeaveSquadTooThin) already
+        // keep a squad from being hollowed out entirely, but the clamp is a second,
+        // independent backstop against a pathological swing feeding back into
+        // ApplyRetirementsForTeam's replacement generation (which reads this same
+        // TeamStrength) and compounding.
+        //
+        // DefenceStrength is inverted (see feedback_defencestrength_inverted in memory -
+        // lower DefenceStrength means fewer goals conceded, i.e. a BETTER defence), so a
+        // stronger squad DIVIDES it rather than multiplying, same fix already applied to
+        // the reserve-pool discount and confirmed live there.
+        private const float LiveStrengthMinRatio = 0.6f;
+        private const float LiveStrengthMaxRatio = 1.5f;
+
+        private void RecalculateLiveTeamStrength(string teamName, AgentTeam team)
+        {
+            if (!baselineAverageOverallByTeam.TryGetValue(teamName, out float baselineAverage) || baselineAverage <= 0f)
+            {
+                return;
+            }
+
+            float currentAverage = GetAverageOverall(team);
+            float ratio = Mathf.Clamp(currentAverage / baselineAverage, LiveStrengthMinRatio, LiveStrengthMaxRatio);
+
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+            strength.AttackStrength = originalAttackStrengthByTeam[teamName] * ratio;
+            strength.DefenceStrength = originalDefenceStrengthByTeam[teamName] / ratio;
+        }
+
+        private static float GetAverageOverall(AgentTeam team)
+        {
+            if (team.Players.Count == 0)
+            {
+                return 0f;
+            }
+
+            float total = 0f;
+            foreach (PlayerAgent player in team.Players) total += player.GetOverallRating();
+            return total / team.Players.Count;
         }
 
         // Reserve pool depth (session 7, injuries phase) - a safety net beneath the real
@@ -11396,15 +11614,23 @@ namespace Manager
         // still enough RollAttribute variance for an occasional promising one.
         private readonly Dictionary<string, List<PlayerAgent>> reservePoolByTeamName = new();
 
+        // Expanded from 11 to 21 (session 16 - Thomas: "we need more players per team...
+        // an actual reserve. After an injury, my team's already looking a bit shallow")
+        // - roughly doubled coverage per position plus a DM slot that didn't exist
+        // before at all, so a second injury in the same area (or a position the old
+        // 1-per-slot list had no cover for) doesn't read as an immediate squad crisis.
         private static readonly PlayerPosition[] ReservePoolPositions =
         {
-            PlayerPosition.GK,
-            PlayerPosition.CB, PlayerPosition.CB,
-            PlayerPosition.RB, PlayerPosition.LB,
+            PlayerPosition.GK, PlayerPosition.GK,
+            PlayerPosition.CB, PlayerPosition.CB, PlayerPosition.CB,
+            PlayerPosition.RB, PlayerPosition.RB,
+            PlayerPosition.LB, PlayerPosition.LB,
+            PlayerPosition.DM, PlayerPosition.DM,
             PlayerPosition.CM, PlayerPosition.CM,
-            PlayerPosition.AM,
-            PlayerPosition.RW, PlayerPosition.LW,
-            PlayerPosition.ST
+            PlayerPosition.AM, PlayerPosition.AM,
+            PlayerPosition.RW, PlayerPosition.RW,
+            PlayerPosition.LW, PlayerPosition.LW,
+            PlayerPosition.ST, PlayerPosition.ST
         };
 
         private List<PlayerAgent> GetOrCreateReservePool(string teamName)

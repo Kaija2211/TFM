@@ -38,6 +38,15 @@ namespace Manager
             records.Add(record);
         }
 
+        // Session 16 - a brand new career starting mid-session (OnConfirmTeamClicked)
+        // never reset this, alongside several other systems, so a second career in the
+        // same Play Mode/app session opened with the previous career's trophy history
+        // still attached. See ManagerPrototypeController.ResetSessionStateForNewCareer.
+        public void Clear()
+        {
+            records.Clear();
+        }
+
         // Loosely mirrors the real Premier League's merit-based prize pool shape - a
         // steep top-of-table premium over a long flatter tail, not a smooth linear
         // scale. finalPosition is 1-based (1 = champions).

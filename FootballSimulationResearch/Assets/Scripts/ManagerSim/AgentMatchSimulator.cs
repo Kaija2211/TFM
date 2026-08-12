@@ -380,7 +380,7 @@ namespace Manager
             ChanceType chanceType = PickChanceType(attackingExpectedGoals, chanceTypeBias);
 
             PlayerAgent creator = PickCreatorForChance(attackingTeam, chanceType);
-            PlayerAgent shooter = PickShooterForChance(attackingTeam, chanceType);
+            PlayerAgent shooter = PickShooterForChance(attackingTeam, chanceType, creator);
             PlayerAgent defender = PickDefenderForChance(defendingTeam, chanceType);
             PlayerAgent goalkeeper = PickGoalkeeper(defendingTeam);
 
@@ -1042,9 +1042,10 @@ namespace Manager
             }
         }
 
-        private PlayerAgent PickShooterForChance(AgentTeam team, ChanceType chanceType)
+        private PlayerAgent PickShooterForChance(AgentTeam team, ChanceType chanceType, PlayerAgent excludePlayer)
         {
             List<PlayerAgent> candidates;
+            System.Func<PlayerAgent, float> attributeSelector;
 
             switch (chanceType)
             {
@@ -1057,7 +1058,8 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.RW ||
                         p.PrimaryPosition == PlayerPosition.LW
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Heading + p.Aerial + p.Finishing * 0.5f);
+                    attributeSelector = p => p.Heading + p.Aerial + p.Finishing * 0.5f;
+                    break;
 
                 case ChanceType.LongShot:
                     candidates = team.StartingEleven.FindAll(p =>
@@ -1067,7 +1069,8 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.LW ||
                         p.PrimaryPosition == PlayerPosition.ST
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Finishing + p.LongShots + p.Composure);
+                    attributeSelector = p => p.Finishing + p.LongShots + p.Composure;
+                    break;
 
                 case ChanceType.CounterAttack:
                 case ChanceType.ThroughBall:
@@ -1079,8 +1082,26 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.LW ||
                         p.PrimaryPosition == PlayerPosition.AM
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Finishing + p.Positioning + p.OffTheBall + p.Pace * 0.3f);
+                    attributeSelector = p => p.Finishing + p.Positioning + p.OffTheBall + p.Pace * 0.3f;
+                    break;
             }
+
+            // Creator and shooter pools overlap for several chance types (e.g. Dribble),
+            // so without this a thin squad could have the same player both "create" and
+            // "score" a chance - reading like a self-assist in the event text. Only
+            // exclude when it leaves at least one alternative; a squad with exactly one
+            // eligible player for this chance type is a real (rare) case where they have
+            // to be both.
+            if (excludePlayer != null && candidates.Count > 1)
+            {
+                List<PlayerAgent> withoutCreator = candidates.FindAll(p => p != excludePlayer);
+                if (withoutCreator.Count > 0)
+                {
+                    candidates = withoutCreator;
+                }
+            }
+
+            return PickWeightedByAttribute(candidates, attributeSelector);
         }
 
         private PlayerAgent PickDefenderForChance(AgentTeam team, ChanceType chanceType)

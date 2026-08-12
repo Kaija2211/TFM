@@ -1,82 +1,121 @@
-# Comprehensive Playtest, Real Bug Fixes, Multi-Save System, and the First Windows Build — Session Handoff (2026-08-12, session 15)
+# Playtest Follow-Up Session — Squad Depth, Live Team Strength, a Real State-Leak Bug, and Academic-Honesty Fixes (2026-08-12, session 16)
 
 ## 1. Branch / project state
 
 - Branch: `unity6-ai-prototype` (main branch holds the stable research baseline, untouched).
-- This session's code changes are already committed and pushed - `d4d88b7 feat: multi-save system, Inbox/Academy UI fixes, and first Windows build prep` is on `origin/unity6-ai-prototype` (Thomas committed via GitHub Desktop using the message drafted mid-session, same convention as every prior session).
-- Unity Editor: left in Edit Mode. Every verification pass this session ran through temporary public test-hook methods added to the controller, exercised via `Unity_RunCommand`, then fully removed before handoff - same precedent as every prior session. No leftover `TestHook` references anywhere in the codebase (checked explicitly before handoff).
-- **A real Windows build now exists**: `FootballSimulationResearch/Builds/Windows/TFM.exe` (gitignored, not in the repo). Succeeded clean - 0 errors, 485 warnings (all from the third-party Sentis/AI Inference package's shader compilation, unrelated to any project code), ~145MB, 3.5 minute build time.
+- This session's code changes are about to be committed via Claude Code and pushed by Thomas via GitHub Desktop, same convention as every prior session.
+- **None of this session's work has been live-verified in the Editor or the built `.exe` yet** - Unity wasn't running for most of the session (only connected partway through, for the app icon regeneration). Thomas is building next, right after this handoff.
+- Session ran long and touched a lot of ground - started as "triage Thomas's first real playtest of the Windows build" and kept growing as he found more things while testing live.
 
-## 2. Part 1: Comprehensive multi-season playtest (Thomas: "go through a season or two, or three... tracking numbers, growth, youth, just anything relevant")
+## 2. Part 1: First Windows-build playtest triage (~20 notes)
 
-Ran via temporary test hooks simulating 5 total seasons on a fresh Liverpool career, deliberately bypassing `OnSimulateSeasonClicked`'s `isAutoResolved: true` fast path (which intentionally freezes Condition/injuries during a skip, session 11) and instead replaying the real per-matchday pipeline without the cosmetic coroutine replay - so Condition, injuries, and Inbox messages all fired for real across the whole run.
+Thomas played the session 15 Windows build end-to-end for the first time and left a big pile of notes - bugs, balance complaints, feature asks, and a couple of open questions. Investigated all of them (via a research subagent) before touching any code, then Thomas picked "quick bugs + tuning first" plus a live executive call on squad roles. Full triage in memory (`project_session16_playtest_notes`).
 
-- **Retirement - CONFIRMED working smoothly** (explicit Thomas ask: "make sure player retirement actually happens and goes smoothly"). Zero retirements in the first 3 seasons simply because the generated squad skewed young (oldest was 34) - not a bug. Extended the run and caught the first real one live: a player crossed `VeteranRetirementAge = 35`, retired cleanly at rollover, squad size stayed exactly 20 before and after, fresh replacement generated at the same position, zero nulls/duplicates.
-- **Growth**: all 20 original squad players moved Overall across the run, avg |delta| ~3.8-3.9 by season 3 - reinforces session 14's finding that prime-age players are not static.
-- **Youth pipeline**: ~26-29 discoveries/season with 2 active scout missions, a healthy steady stream. Academy claims were low (only 1 total) - a test-methodology limitation (only checked once a season), not a system problem.
-- **Transfer market**: scout → report → bid flow confirmed working. One bid attempt was correctly *rejected* by `TryPlaceBid` once the budget couldn't cover it - no money taken, clean refusal, guard rail confirmed holding.
-- **Real finding, not a bug**: managed-team league form collapsed hard across the run - 81pts (title form) → 45pts → 29pts (relegation form) despite the squad's Overall genuinely growing throughout. Root cause: the test never rotated the Starting XI once across 5 straight seasons - zero human tactical management. Condition ground down continuously with no rest, dragging match performance (fit-adjusted strength) and spiking injury risk. **This is the Condition/fatigue system working exactly as session 13's rebalance intended** (punish never-rotating), just far more starkly than any real playtest would show since a human reacts to the fatigue warnings. Not a bug - flagged because the severity of the compounding over a long unmanaged stretch is genuinely striking.
-- **Data integrity**: zero nulls, zero duplicate player references, squad size exactly preserved through every retirement/transfer/rollover across all 5 seasons. League-wide goals/match held steady at 1.28-1.39 throughout (matches the trained model's 1.45 reference) even while the managed team itself collapsed - confirms the match simulator itself stayed correct; the story is entirely about one team's own fatigue.
+**Shipped from the triage:**
+- **Duplicate scorer/assist bug** - `PickCreatorForChance`/`PickShooterForChance` (`AgentMatchSimulator.cs`) had overlapping candidate pools with no distinctness check, so the same player could be picked as both creator and shooter on a thin squad, reading like a self-assist. Fixed: shooter pick now excludes the creator whenever another candidate exists.
+- **Sort by Potential bug** - only sorted by the fuzzy range's lower bound, so "70-82" and "70-95" tied. Now uses the upper bound as a fractional tiebreaker.
+- **Tactics Board condition color recalibrated** - anchors moved from 50/100 to 40/80/100 so mid-80s condition visibly shows amber now, not solid green.
+- **Transfer pricing rebalanced** - veteran discount curve steepened (full discount by 35 = retirement age, not 39), and `ComputeDepthReluctance` widened from exact position-tag matching to position-group matching (a lone "DM" tag no longer reads as irreplaceable when the club has covering CMs/CBs).
+- **Squad roles made cosmetic-only** - Thomas's live executive call: "get rid of role assignments and the negative effects... too much of a headache for our scope... WAIT actually keep up, but it will be cosmetic only." Captain/vice/penalty/FK/corner-taker assignment UI is untouched, but the captaincy match-sim bonus and corner-taker weighting are both disabled, and the pre-kickoff "assign a Captain" warning dialog is gone entirely. Also fully resolves the "benched role-holder hurts the team" complaint - roles carry zero mechanical weight either way now.
+- **Confirmed, not fixed**: match result/events mismatch Thomas saw (0-1 scoreline after seeing 2 goals live, then a wrong-opponent scoreline on View Match Events) - static code review couldn't reproduce it. Needs a live repro next time it happens.
 
-Full write-up in memory (`project_session15_multiseason_playtest`).
+## 3. Part 2: Bid dialog rewritten to free-text input
 
-## 3. Part 2: Youth development convergence age (Thomas: "don't want them to reach potential at the age of 50" → "its not crazy for some to hit it by like 25 right?")
+Thomas: "can we have the bid thing on a text input actually? well exclusively number input. remove the five or so set options."
 
-Two follow-up isolated simulations (no career/save state touched), calling `ManagerPlayerDevelopment.ApplySeasonProgression` directly on synthetic prospects.
+- `ShowBidDialog` (`ManagerPrototypeController.cs`) no longer shows five preset-multiplier buttons - a single `TMP_InputField` (`ContentType.DecimalNumber`) prefilled with the scout's recommended amount, so a manager can hit Submit as-is or overwrite it.
+- Validated on submit (blank/zero/negative rejected with a status message, dialog stays open).
+- **Real bug caught from a screenshot in the same thread**: prefilling `.text` immediately after building the field (before Unity's own placeholder-hide logic runs) left the default amount rendering on top of the placeholder text instead of replacing it. Fixed by explicitly hiding the placeholder GameObject right after setting the default value.
 
-- **First pass** (worst-case, biggest possible headroom, +25 points - a genuine 90+ OVR generational talent): converges to within 1pt of Potential by **age 30-32** across every playing-time scenario tested (nailed-on starter, academy prospect, typical rotation player, even a rarely-used reserve). Nobody anywhere close to still developing at 50.
-- **Second pass** (Thomas's direct follow-up, a real graduated range of headroom sizes): confirmed the age scales with how good the prospect actually is, not a flat number - modest prospect (~75 POT) peaks at **age 25**, decent (~79 POT) at **26**, right at the elite line (~81 POT) at **26**, strong (~85 POT) at **27**, genuine wonderkid (~92 POT) at **30**. The reason elite prospects take longer is `GetAgingCurveOffset` - once a player's current Overall crosses 80, their own peak-development age auto-extends (up to +5 years), mirroring how real elite players keep sharpening into their late 20s. A modest prospect never crosses that threshold and converges earlier, exactly matching Thomas's own instinct.
+## 4. Part 3: Academy progression made real-time
 
-## 4. Part 3: Inbox readability + a real read-status bug
+Thomas: "do our youth players stats only move after the year, and not necessarily real time? My GK hasn't changed at all in my academy at matchday 22."
 
-- **Readability pass** (Thomas: "text that isn't UI or button related isn't bold... make the entire thing bigger, you might have 20/20 vision, good sir, but I don't"). `BuildInboxMessageRow` - title no longer switches to Bold when unread (unread signal now carried entirely by the "NEW" tag + row background tint), banner height 56→80, title 17→24pt, matchday 13→18pt, body 14→20pt, expanded-body height scaled to match.
-- **Real bug found and fixed** (Thomas: "as soon as you click the first one, they all turn grey, despite the other ones still technically being unread"). Root cause was bigger than a re-render glitch: the original session-13 design marked **every** message read the instant the Inbox screen opened (`RefreshInboxUI`'s own mark-all-read loop), which only ever looked correct because nobody had reopened the screen mid-visit before - the first expand click re-ran that same screen-wide refresh and repainted every row from state that had already silently flipped to all-read. Fixed by switching to genuine per-message read tracking: expanding a specific message marks *that one* read (collapsing doesn't un-read it); an unopened message now stays green no matter what else gets clicked in the same visit.
+Confirmed as a real design gap, not a bug report misunderstanding - the academy pool had zero per-matchday hook at all, only the once-a-season `ApplySeasonProgression` lump. Fixed:
+- New `ApplyMatchdayAcademyProgression()`, called from `SimulateFixture` at the same guard `ApplyMatchdayConditionAndInjuries` already uses (fires once per matchday, not once per fixture).
+- Removed the old season-rollover lump call for the academy pool entirely.
+- `ManagerPlayerDevelopment.ApplyMatchdayProgression` gained an optional `focusAttributes` param so academy's focus-stat doubling still applies under the new tick.
+- Academy prospects tick with `playedThisMatchday: true` every matchday (standing in for "always training," since they have no real senior-match played/not-played signal).
 
-## 5. Part 4: Small UI fixes (screenshot-driven)
+## 5. Part 4: Squad depth - expanded reserve pool + visible Reserves list
 
-- **Mission box CANCEL/SEND overlap** (Youth screen, Thomas sent a screenshot) - `SetPointAnchor` uses the bottom-left corner as its anchor point; SEND's x-offset (`16 + 75 = 91`) landed well inside CANCEL's own span (16 to 156, since it's 140px wide). Fixed by starting SEND right after CANCEL's edge with a clean 16px gap (`16 + 140 + 16 = 172`).
-- **Academy sortable headers** (Thomas: "like with our other lists, id like to be able to sort our academy players") - same click-to-sort pattern as Scouting/Transfers/Squad, new `academySortColumn`/`academySortDescending` state (separate from Scouting's, different column layout). Empty slots have no player to sort by, so when a sort is active they group at the bottom below every real prospect rather than staying interleaved by original slot index; unsorted view is unchanged plain slot order.
+Thomas: "we need more players per team... an actual reserve. After an injury, my team's already looking a bit shallow." Given a scope choice between a quiet backend depth boost and actually surfacing it, picked "Visible Reserves list."
 
-## 6. Part 5: Multi-save system (Thomas: "I think we should do multiple saves and you can choose which one to load... a Continue button... and a Load button")
+- Could **not** touch the shared `AgentSquadGenerator`/`GenerateSquad` squad-size logic - that's used by Research Mode too and off-limits per the Manager Mode constraints.
+- Instead expanded the existing Manager-Mode-only `ReservePoolPositions` array from 11 to 21 entries (added a DM slot that didn't exist at all before, roughly doubled coverage elsewhere) - this system was already sanctioned for exactly this kind of extension (session 7, injuries phase).
+- Added a real "Reserves (N)" section to the Squad screen (`RefreshSquadUI`) - the pool now generates eagerly so it's visible from the manager's very first visit, not just after an emergency call-up. Read-only rows (no click handler), same pattern the opponent-pitch browse view already used.
 
-Replaces the old single fixed `career_save.json` slot entirely.
+## 6. Part 5: AI clubs can refuse to sell + auto-backfill on sale
 
-- **`ManagerSaveService.cs` rewritten** - one file per career now, named by a stable GUID (`career_{SaveId}.json`) rather than the player-facing name, so a save's display name can never break its file link. New `ListAllSaves()`, `GetMostRecentSave()` (ordinal string-compare on `LastSavedUtc`, stored as `DateTime.ToString("o")` specifically because that format sorts correctly as plain text), `Delete(saveId)`. `Save()` assigns a `SaveId` automatically if still blank and always stamps `LastSavedUtc`.
-- **`ManagerSaveData` gained** `SaveId`, `SaveName`, `LastSavedUtc`.
-- **New Save Name field** on Team Select step 1, right below Manager Name - the first ever *code-built* `TMP_InputField` in this project (new `ManagerUITheme.BuildInputField` helper; every input field before this was Editor-placed, since there was no spare one to reuse for a second field). Optional - defaults to `"{ManagerName}'s Save"` if left blank, so it doesn't add friction to starting a career. A fresh `Guid.NewGuid()` is generated at the same moment (`OnConfirmTeamClicked`, step 1→2), so every save this session (and any future one) for that career lands on the same file.
-- **Title screen**: LOAD CAREER split into two buttons. **CONTINUE** loads `GetMostRecentSave()` directly, no picker. **LOAD CAREER** opens a new Save Browser screen. Both are **fully hidden**, not shown-disabled, until at least one save exists (Thomas's explicit follow-up ask) - `RefreshTitleScreenButtons` re-evaluates and re-flows SETTINGS/EXIT upward to close the gap every time Title is shown, since `HasAnySaves()` can flip true mid-session (a brand new career's first Exit to Hub is also its first save).
-- **New Save Browser screen** - same code-built-panel/scroll-view pattern as the Inbox, one card per save (name, manager, club, season, last-saved date), click to load that specific career.
-- **Live-verified end-to-end** (temp test hook, writes real files to the real `Application.persistentDataPath`, cleans up everything it creates in a `finally` block): two separately-named careers produced two separate files; both showed up correctly in `ListAllSaves()` with correct metadata; `GetMostRecentSave()` correctly picked whichever was saved later; loading a specific save restored its own state, not the other career's; re-saving after a load overwrote the same file rather than minting a third one. A separate pass confirmed CONTINUE/LOAD CAREER's hidden-until-a-save-exists behavior, both in a genuine zero-save state (confirmed no save folder existed at all on this machine before this session) and once a save exists.
+Thomas asked what actually happens if you buy up half an AI club's squad. Investigation confirmed: no replacement generation exists for a transfer-out at all (unlike retirement, which does regenerate), and match difficulty doesn't change either way since the xG baseline is trained per-team-name, decoupled from roster. **Also found a real latent crash risk** while answering: `PickGoalkeeper` falls back to `team.StartingEleven[0]` with no empty-list guard - buying an AI club's entire XI over a long career would throw.
 
-## 7. Part 6: First Windows build
+Thomas's own follow-up rules, implemented in the same session:
+- **Won't sell if it would leave zero players at that exact position** (`WouldLeaveSquadTooThin`, checked in `ManagerTransferNegotiation.ResolveDueBids` before the price/reluctance roll even runs) - this also forecloses the `PickGoalkeeper` crash risk outright, since a position can never be sold down to zero anymore.
+- **Won't sell anything once the selling club's bench is down to 5 players**, a blanket depth floor on top of the position check.
+- Declined-for-depth bids get refunded like any other decline, with a distinct "won't even discuss selling" Inbox message.
+- **Selling a starter now auto-backfills from the bench** (`OnSignPlayerClicked`, new `FindBestFitBenchPlayer` + the existing `AgentTeam.SubstitutePlayer` swap) - the AI club's XI never has a hole in it after a sale.
+- **Confirmed, not changed**: retirement already regenerates a same-position replacement unconditionally for every club (`ApplyRetirementsForTeam`) - answers Thomas's "what if their one GK retires" worry, that path was always safe.
 
-Thomas: "once done i think im going to build it... can you add the icon for the application and whatnot... anything else needed before a build. Never done it before."
+## 7. Part 6: Live team strength
 
-- **App icon** - `tfm-logo.png` (the in-game wordmark) is 700×220, not square, so composited it onto a proper 1024×1024 square canvas (dark navy `#0b1120` background matching the game's own theme, wordmark centered with padding) via a PowerShell + `System.Drawing` script, imported into `Assets/Icons/tfm-app-icon.png`, and assigned to all 8 required Windows icon sizes (1024 down to 16) via `PlayerSettings.SetIconsForTargetGroup`.
-- **Unity's own splash screen** - was still on its default config (`show=true`, `showUnityLogo=true`, no custom logo). This is a completely separate system from the project's own hand-built Eucna splash (`ManagerPrototypeController.Start()` → `ShowSplashScreen()`) - Unity's runs *before* the game even boots, at the engine level. Trimmed to its minimum footprint (`showUnityLogo=false`, `overlayOpacity=0`) - can't be fully removed on Unity Personal license (a build requirement, not a settings toggle), so a brief unavoidable Unity flash will still precede the real Eucna splash in the built game.
-- **Build Settings scenes list was completely empty** - a real blocker, found only by checking; would have either failed the build outright or produced a non-functional one. Added `ManagerMode.unity` as the sole scene.
-- **Version tag** - "v0.1 · PRE-ALPHA" now shown bottom-left on the title screen, reading `Application.version` live (mirrors `PlayerSettings.bundleVersion`) rather than a hardcoded string, so it can't silently drift from the real build version.
-- **Confirmed already correct**: Company/Product name (Eucna/TFM, matching the splash/title branding already in place), build target (Windows x64 Standalone, Mono2x scripting backend), default resolution (1920×1080 fullscreen, matching the UI's own design canvas).
-- **Build itself**: ran via `BuildPipeline.BuildPlayer` from the Editor, `BuildTarget.StandaloneWindows64`, output to `Builds/Windows/TFM.exe` (already covered by the existing `.gitignore`'s `[Bb]uilds/` pattern - confirmed before building, nothing needed adding). Succeeded clean.
+Thomas: "team strength to be live... City will just always win most seasons no matter what... their performance should reflect [decline/losing a player]." Given a scope choice (via AskUserQuestion), picked squad-average-Overall-vs-baseline as the driver and once-per-season-rollover as the cadence.
 
-## 8. Technique notes worth reusing
+- New `RecalculateLiveTeamStrength`, called for every team (managed AND every AI club) right after that team's retirements are applied each rollover: `ratio = clamp(currentAvgOverall / baselineAvgOverall, 0.6, 1.5)`, `AttackStrength = originalAttackStrength * ratio`, `DefenceStrength = originalDefenceStrength / ratio` (inverted per the DefenceStrength gotcha in memory - divide for a genuine strengthening, not multiply).
+- **Confirmed safe for Research Mode**: Manager Mode and Research Mode each instantiate their own separate `StatisticalModel` (verified via grep) - this can never touch the trained historical baseline the dissertation's SM evaluation depends on.
+- Two correctness edge cases found and fixed while building this:
+  1. The managed team's squad is restored directly from save data on load, bypassing the normal path where the average-Overall baseline gets captured - fixed by re-baselining on load too.
+  2. Reading "original" strength lazily from the live `statisticalModel` at whatever moment a team's squad first generates would contaminate a newly-loaded/newly-started career if the same club had already drifted earlier in the same app session - fixed by snapshotting every team's pure trained strength ONCE, immediately after training in `Start()`, into separate immutable `originalAttackStrengthByTeam`/`originalDefenceStrengthByTeam` dictionaries never touched again.
 
-- **`Unity_RunCommand` scripts can't use `System.Reflection`** - confirmed again this session (a first attempt at driving controller state via reflection failed immediately at script-validation time). The established "temporary public test-hook method, removed before handoff" pattern remains the only path for exercising private controller state from outside Play Mode.
-- **`SetPointAnchor`'s anchor point is the object's bottom-left corner when anchor=(0,0)**, not top-left or center - the exact source of the mission-box CANCEL/SEND overlap bug. Worth double-checking button-row math against this convention specifically, not just eyeballing offset numbers.
-- **A screen-wide "mark everything read on open" pattern silently breaks the moment a screen can be re-rendered mid-visit** (e.g. an expand/collapse toggle calling the same refresh method) - the fix (per-message read tracking, marked on the specific interaction that constitutes "reading" that item) generalizes to any future read/seen-state UI in this project.
-- **Player Settings' Splash Screen section and a project's own code-built splash are two unrelated systems** - the former runs before the engine even loads the first scene and is partially license-gated (Personal tier can't fully disable it); the latter is just normal in-game UI that happens to run first. Worth clarifying this distinction again if it comes up.
-- **A build's Build Settings scenes list isn't automatically populated from what's open in the Editor** - it's separate, persistent project state (`EditorBuildSettings.scenes`) that has to be explicitly set at least once. Always worth checking before a first build on any project, not just this one.
+## 8. Part 7: A real new-career state-leak bug, found live by Thomas
 
-## 9. Open backlog
+Thomas started a second career in the same running session and got the first career's entire Inbox and squad carried over ("everything is the same except i have a new name"). Confirmed reproducible on the second new career within any single running process (Editor or the built `.exe`) - not an Editor-only artifact, since a fresh process launch's first-ever career has nothing stale to inherit.
 
-See `project_manager_mode_future_scope_ideas` in memory for full detail. Unchanged from session 14 except where noted above (Academy sorting, Inbox read-status, mission-box overlap all now resolved):
+Root cause: `OnConfirmTeamClicked` (the actual "start new career" action) never reset any session state at all - only the Load Save path (`ApplySaveData`) did. Fixed with a new `ResetSessionStateForNewCareer()` mirroring that same clear block:
+- `currentSeason`/`currentFixtureIndex`/`seasonEndRewardsAppliedForCurrentSeason` reset, league table reset+reseeded, every Inbox-tick cooldown/streak flag cleared.
+- `squadsByTeamName`/`reservePoolByTeamName`/`squadRolesByTeamName`/`simulatedMatchdays` cleared, plus `.Clear()` on `loanTracker`/`academy`/`transferNegotiation`.
+- **Added missing `Clear()` methods** to three classes that never had one at all: `ManagerInbox`, `ManagerScouting` (also resets `regionalQualityBiasByRegion` to null so it re-randomizes fresh per career), `ManagerCareerHistory`. Plus a `Clear()` on `ManagerClubFinance` - its "seed once, keep forever" budget idiom meant a club that already had a budget entry would never reseed.
+- **A second, subtler bug caught while fixing this one**: this same session's live-team-strength feature (Part 7 above) mutates each club's strength at rollover - without a fix here, a second career would have generated its AI clubs off whatever drift the first career had already caused. Fixed by restoring every club's strength back to the immutable original snapshot as part of the same reset.
 
-- **Tier 2 potentialemails.txt batch** (7 templates) - needs light new plumbing (per-player recent form surfaced, sub-timing correlated with a later goal/assist).
-- **Tier 3 potentialemails.txt batch** (9 templates) - needs genuinely new concepts (appearance/drop tracking, per-team attribute aggregates, a fabricated rivalry list, a "supporter sentiment" concept).
-- **Language/localization support** - still explicitly deprioritized, big scope, not attempted.
-- Full Time "player performance" tab - not scoped.
-- 3 more easter-egg players - blocked on real details from Thomas.
-- Item 14 (tactical shape/formation matchup effects) - still explicitly deprioritized (session 12).
-- AI clubs never proactively bid on the manager's own players; Academy's own homegrown prospects still show full stats, no fog-of-war - both still deliberately out of scope.
-- **New from this session**: the post-match reaction/low-stamina Inbox frequency-gating constants (2-matchday gap, 5-matchday cooldown, picked as reasonable defaults in session 14) still haven't been validated against a real human-played season - worth revisiting once Thomas plays the actual build.
-- **New from this session**: no delete/rename affordance for a save in the Save Browser yet (`ManagerSaveService.Delete` exists and is tested, just not wired to any UI button) - a natural small follow-up if the save list gets cluttered with test/throwaway careers.
+This is the kind of bug that's easy to reintroduce - any NEW piece of Manager Mode session state needs a line added to both `ResetSessionStateForNewCareer` AND `ApplySaveData`'s clear block going forward.
+
+## 9. Part 8: Live match screen layout fixes
+
+Two rounds, both screenshot-driven from Thomas actually playing a match live:
+
+- **Round 1**: the "Subs Made" list (uncapped - see below) was physically overlapping "MAKE CHANGES" and "MATCH STATS" once 2-3+ subs were made. Moved Subs Made + Make Changes from the shared `x=0.55` column (stacked above Match Stats) to a new right-edge-anchored column, per a hand-drawn mockup Thomas sent.
+- **Round 2**: that wasn't enough - a 6-sub match screenshot showed the same collision again, just in the new spot. Thomas asked for the real fix: Make Changes moved into the header toolbar next to PAUSE/SKIP TO RESULTS (a position nothing else ever grows into, so it structurally can't recur), and Match Stats top-aligned to start at the same y-offset as Match Log/Subs Made instead of sitting lower down.
+- **Real finding along the way**: "do we have max subs in a game?" - no, and it's not an oversight. A comment on `tacticsBoardOpenedMidMatch` documents that a real per-match sub limit was **deliberately removed** at some past point when the mid-match sub flow got reworked. Didn't reintroduce a cap unilaterally since that reverses a past deliberate decision - flagged as an open question instead.
+
+## 10. Part 9: App icon redesign
+
+Thomas: "can we change the icon for our .exe? Can it just be the TFM, transparent background? Or at least make the TFM part bigger?"
+
+- Checked the source `tfm-logo.png` before committing to transparency - the "TFM" text is white (only the "M" accent is green), designed for the dark navy branding. On a truly transparent background it goes nearly invisible on light Windows themes/wallpapers. Flagged this rather than shipping it blind - Thomas picked keeping the `#0b1120` navy background over transparency.
+- Iterated the logo size up through the same live thread (85% -> 96% -> a final **98% canvas width**, ~10px left/right margin) until edges were as tight as possible without cropping. Flagged that the top/bottom gap can't close the same way without stretching (warped) or cropping (loses content) - Thomas confirmed he's fine leaving that as-is.
+- Also caught and fixed `alphaIsTransparency` being off on the texture importer (would have caused dark fringing at compressed edges).
+- Reimported and all 8 `PlayerSettings` icon slots reassigned live via `Unity_RunCommand` each iteration. **Needs a real rebuild to show up on the actual `.exe`/shortcut** - not visible until then.
+
+## 11. Part 10: Premier League roster locked to season 1 - no simulated relegation
+
+Thomas: "The premier league teams stay the same season to season... We dont have team strengths for championship teams, it's dishonest, so no huddersfield town in season two... Whatever teams are in the prem in season one, remain. No relegation for the MSc version." Framed explicitly around academic honesty for the dissertation artefact, not just preference.
+
+Root cause: `AgeAndReloadFixturesForNewSeason` cycled through every real historical season file (`trainingSeasonFiles`) at each rollover, picking a different one in sequence. Since real Premier League rosters genuinely differ year to year, this silently swapped which 20 clubs the whole career was even about, with zero relegation/promotion actually simulated. Fixed by removing the cycling entirely - every season now always re-parses the same `seasonFile` season 1 started with, so `BuildAvailableTeamNames()` never changes for the rest of the career. `trainingSeasonFiles` is untouched for its other purpose (`TrainStatisticalModel` still combines all of them for the actual strength numbers).
+
+**Side effect Thomas didn't ask to fix**: every season's fixture schedule is now structurally identical to season 1's (same opponent order/dates), since there's no more file variety. If that becomes a real complaint, the fix would be shuffling fixture order within the same fixed 20-team round-robin, not pulling in a different real file.
+
+## 12. Technique notes worth reusing
+
+- **A "New Career" flow and a "Load Save" flow both need the exact same session-state reset** - it's tempting to assume a fresh MonoBehaviour/scene load handles this, but Manager Mode's controller persists across Title -> New Career within one running session, so nothing resets unless explicitly coded to. Check both paths whenever new per-career state is added.
+- **Never anchor a fixed-position UI element below something with a `ContentSizeFitter`/unbounded growth** - it's a matter of when, not if, it collides. Either cap/scroll the growing element, or put anything that must stay put somewhere structurally safe (a header toolbar, not a spot below a list).
+- **`Unity_RunCommand` can reassign live `PlayerSettings`/reimport assets directly** (`AssetDatabase.ImportAsset` + `PlayerSettings.SetIcons`) - useful for iterating on build-level config without a manual rebuild each time, confirmed working this session for the app icon.
+- **A feature that mutates shared per-team state at runtime (live team strength) needs its own reset story symmetric with new-career/load-career**, not just a "make it live" implementation - caught this by tracing through what a second career in one session would actually generate squads off.
+
+## 13. Open backlog
+
+See `project_manager_mode_future_scope_ideas` in memory for full detail, and `project_session16_playtest_notes` for this session's complete write-up. Still open after this session:
+
+- **BIG BUG, unresolved**: the match result/events mismatch Thomas saw once (0-1 after 2 live goals, wrong-opponent scoreline on View Match Events) - couldn't reproduce via static code review, needs a live repro.
+- **`PickGoalkeeper` empty-`StartingEleven` crash** - now unreachable in practice since sale guards prevent a position going to zero, but the underlying missing guard is still there if some other path ever empties a squad.
+- **Real 5-sub cap** - deliberately not reintroduced without being asked; flagged as open.
+- **SM/ABM decoupling** - signings don't change the underlying xG baseline (trained per-team-name from real historical data). Not a bug, but a real scope/framing note for the dissertation write-up if "transfers make you stronger" is ever advertised as a feature.
+- Untouched feature requests from the original playtest triage: team-name UI sizing in-match, secondary positions visible pre-scout, half-time pause + resume, scout discovery rate, league record shown in Hub table, music volume slider, Player Detail matches/goals/assists/average rating panel.

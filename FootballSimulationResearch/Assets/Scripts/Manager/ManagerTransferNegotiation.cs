@@ -165,7 +165,7 @@ namespace Manager
 
             foreach (PlayerAgent p in sourceTeam.Players)
             {
-                if (p == target || p.PrimaryPosition != target.PrimaryPosition) continue;
+                if (p == target || !IsSamePositionGroup(p.PrimaryPosition, target.PrimaryPosition)) continue;
 
                 float ovr = p.GetOverallRating();
                 if (ovr > bestReplacementOverall) bestReplacementOverall = ovr;
@@ -183,6 +183,31 @@ namespace Manager
             // 0-99 Overall scale (see the session 12 attribute-overhaul calibration).
             float gap = targetOverall - bestReplacementOverall;
             return Mathf.Clamp01(gap / 15f);
+        }
+
+        // Widened from a strict PrimaryPosition tag match (session 16 playtest finding -
+        // a club with exactly one player tagged "DM" showed maximum reluctance even with
+        // several covering CMs/CBs on the books, badly inflating price for anyone in a
+        // thinly-tagged exact slot). Grouped by the same back/midfield/attack banding a
+        // manager would actually think in, not exact-position realism.
+        private static bool IsSamePositionGroup(PlayerPosition a, PlayerPosition b)
+        {
+            if (a == b) return true;
+
+            bool IsDefense(PlayerPosition p) =>
+                p == PlayerPosition.RB || p == PlayerPosition.CB || p == PlayerPosition.LB ||
+                p == PlayerPosition.RWB || p == PlayerPosition.LWB;
+
+            bool IsMidfield(PlayerPosition p) =>
+                p == PlayerPosition.DM || p == PlayerPosition.CM || p == PlayerPosition.AM ||
+                p == PlayerPosition.RM || p == PlayerPosition.LM;
+
+            bool IsAttack(PlayerPosition p) =>
+                p == PlayerPosition.RW || p == PlayerPosition.LW || p == PlayerPosition.ST;
+
+            return (IsDefense(a) && IsDefense(b)) ||
+                   (IsMidfield(a) && IsMidfield(b)) ||
+                   (IsAttack(a) && IsAttack(b));
         }
 
         // Unscouted AI-squad players show a fuzzy Overall band on the Buy list rather
@@ -269,6 +294,15 @@ namespace Manager
         // ResolveMatchdayTick. getSellingTeam returns null if the AI club can no longer
         // be resolved, which ComputeDepthReluctance already treats as "no depth
         // information available" (reluctance 0).
+        // Once a selling club's bench drops to this many players (from a starting 9),
+        // they refuse every further sale outright regardless of position or price -
+        // session 16, Thomas: "if they are at the point where they only have 5 bench
+        // players, they also won't sell." A blanket depth floor on top of
+        // WouldLeaveSquadTooThin's per-position check, since repeated sales that each
+        // individually still leave "one player" at a position can still hollow out a
+        // squad's overall depth long before any single position hits zero.
+        private const int MinBenchDepthBeforeRefusingAllSales = 5;
+
         public void ResolveDueBids(int currentMatchdayIndex, ManagerClubFinance finance, string managedTeamName, ManagerInbox inbox, Func<PlayerAgent, AgentTeam> getSellingTeam)
         {
             List<PlayerAgent> due = new List<PlayerAgent>();
@@ -285,8 +319,16 @@ namespace Manager
             {
                 PendingBid bid = bidsByPlayer[player];
                 AgentTeam sourceTeam = getSellingTeam?.Invoke(player);
-                float reluctance = ComputeDepthReluctance(player, sourceTeam);
-                bool accepted = RollAcceptance(player, bid.BidAmount, reluctance);
+
+                // Session 16 - a hard "not for sale" refusal, checked before the normal
+                // price/reluctance roll even runs. No replacement generation exists for
+                // a transfer-out (unlike retirement, see ApplyRetirementsForTeam), so
+                // without this a club could genuinely be bid down to zero players at a
+                // position (a real crash risk - see PickGoalkeeper's unguarded
+                // team.StartingEleven[0] fallback) or hollowed out entirely over a long
+                // career of repeated poaching.
+                bool tooThinToSell = WouldLeaveSquadTooThin(player, sourceTeam);
+                bool accepted = !tooThinToSell && RollAcceptance(player, bid.BidAmount, ComputeDepthReluctance(player, sourceTeam));
 
                 if (accepted)
                 {
@@ -303,12 +345,28 @@ namespace Manager
                     finance.AdjustBudget(managedTeamName, bid.BidAmount);
                     bidsByPlayer.Remove(player);
 
-                    string body = $"{bid.SourceTeamName} have turned down your £{bid.BidAmount:F1}m bid for {player.Name}. " +
-                        $"Your £{bid.BidAmount:F1}m has been refunded - you're free to try again.";
+                    string body = tooThinToSell
+                        ? $"{bid.SourceTeamName} won't even discuss selling {player.Name} - they don't have the squad depth to let them go. Your £{bid.BidAmount:F1}m has been refunded."
+                        : $"{bid.SourceTeamName} have turned down your £{bid.BidAmount:F1}m bid for {player.Name}. " +
+                          $"Your £{bid.BidAmount:F1}m has been refunded - you're free to try again.";
 
                     inbox.Add(InboxMessageType.BidDeclined, $"Bid Declined: {player.Name}", body, currentMatchdayIndex);
                 }
             }
+        }
+
+        // sourceTeam null (unresolvable club) reads as "not too thin" - same
+        // can't-check-so-don't-block posture ComputeDepthReluctance already takes,
+        // and per its own comment this is effectively unreachable in practice anyway
+        // (every bid target today is a regular AI-squad player).
+        private static bool WouldLeaveSquadTooThin(PlayerAgent target, AgentTeam sourceTeam)
+        {
+            if (sourceTeam == null) return false;
+
+            bool hasAnotherAtExactPosition = sourceTeam.Players.Exists(p => p != target && p.PrimaryPosition == target.PrimaryPosition);
+            if (!hasAnotherAtExactPosition) return true;
+
+            return sourceTeam.Bench.Count <= MinBenchDepthBeforeRefusingAllSales;
         }
 
         // Finalizes an accepted bid - the escrowed amount was already deducted at

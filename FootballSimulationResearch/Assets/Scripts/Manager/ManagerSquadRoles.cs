@@ -19,20 +19,15 @@ namespace Manager
     // session (see GetOrCreateAgentTeam), so direct PlayerAgent references here stay
     // valid across screens and substitutions exactly like squadsByTeamName itself.
     //
-    // Organizational only for now, except LeftCornerTaker/RightCornerTaker - see the
-    // ManagerSim fork of AgentMatchSimulator (PickCreatorForChance) for the one place
-    // this actually feeds into match resolution. Captain/ViceCaptain/PenaltyTaker/
-    // FreeKickTaker/attack-defend role are stored and displayed but don't change sim
-    // math yet - there's no distinct free-kick/penalty event in the sim to hook into
-    // today.
-    //
-    // Split into Left/Right corner taker (session 7, Tactics screen pass) rather than a
-    // single CornerTaker - the sim has no actual concept of which side a corner comes
-    // from, so this isn't true left/right modeling, but the match sim alternates 50/50
-    // between whichever of the two is on the pitch (see AgentMatchSimulator.
-    // CornerTakerNamesByTeamName), which is a genuinely better approximation than a
-    // single designated taker and matches the real-football pattern of two corner
-    // specialists rather than one.
+    // Organizational/cosmetic only (session 16 - Thomas's explicit scope call: the
+    // mechanical hooks these used to have, and the pre-kickoff warning nagging about
+    // unassigned roles, were more headache for the manager than the feature was worth
+    // for this project's scope). Captain no longer feeds ManagerCaptaincyModifier
+    // (still exists, just unwired) and LeftCornerTaker/RightCornerTaker no longer feed
+    // AgentMatchSimulator.CornerTakerNamesByTeamName (which is now never populated, so
+    // corners always fall through to the normal weighted-random pick). All six fields
+    // are still stored and shown on the Tactics screen exactly as before - assigning
+    // them is flavor/roleplay now, not a performance decision.
     public class ManagerSquadRoles
     {
         public PlayerAgent Captain;

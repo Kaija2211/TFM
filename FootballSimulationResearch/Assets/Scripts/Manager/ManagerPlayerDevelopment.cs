@@ -161,7 +161,13 @@ namespace Manager
         // real value, from ManagerSquadRoles.GetMoraleGrowthMultiplier. Only applied to
         // the GROWTH branch below, never decline - see GetMoraleGrowthMultiplier's own
         // comment for why.
-        public static void ApplyMatchdayProgression(PlayerAgent player, bool playedThisMatchday, float moraleGrowthMultiplier = 1f)
+        // focusAttributes (session 16 - academy prospects moved from a once-a-season
+        // lump (ApplySeasonProgression) to this same per-matchday tick, so their
+        // focus-stat doubling needed to carry over too, exactly like ApplySeasonProgression
+        // already threads it through to Grow*Attributes). Optional and defaulted to null
+        // so the managed team's own matchday tick (which never had a focus set) is
+        // unaffected.
+        public static void ApplyMatchdayProgression(PlayerAgent player, bool playedThisMatchday, float moraleGrowthMultiplier = 1f, IReadOnlyCollection<string> focusAttributes = null)
         {
             float headroom = player.Potential - player.GetOverallRating();
             bool isGoalkeeper = player.PrimaryPosition == PlayerPosition.GK;
@@ -173,8 +179,8 @@ namespace Manager
                 float seasonGrowth = (headroom / seasonsRemainingToPeak) * (0.7f + matchdayPlayingTimeFactor * 0.3f);
                 float growth = (seasonGrowth / AssumedMatchdaysPerSeason) * moraleGrowthMultiplier;
 
-                if (isGoalkeeper) GrowGoalkeeperAttributes(player, growth);
-                else GrowOutfieldAttributes(player, growth);
+                if (isGoalkeeper) GrowGoalkeeperAttributes(player, growth, focusAttributes);
+                else GrowOutfieldAttributes(player, growth, focusAttributes);
             }
             else
             {

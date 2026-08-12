@@ -71,6 +71,21 @@ namespace Manager
             missionPositions[slotIndex].Clear();
         }
 
+        // Session 16 - a brand new career starting mid-session (OnConfirmTeamClicked)
+        // never reset this, so a second career in the same Play Mode/app session opened
+        // with the previous career's scout missions and discovered prospects still
+        // attached. regionalQualityBiasByRegion is set back to null rather than cleared
+        // in place - see its own comment ("deliberately randomized per career") - so it
+        // re-randomizes fresh the next time it's lazily needed, instead of carrying the
+        // old career's regional bias into the new one.
+        public void Clear()
+        {
+            for (int i = 0; i < ScoutSlots; i++) missionPositions[i].Clear();
+            discoveredProspects.Clear();
+            discoveredMatchday.Clear();
+            regionalQualityBiasByRegion = null;
+        }
+
         public IReadOnlyList<PlayerAgent> DiscoveredProspects => discoveredProspects;
 
         public int GetDiscoveredMatchday(PlayerAgent prospect)

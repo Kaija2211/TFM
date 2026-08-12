@@ -53,6 +53,16 @@ namespace Manager
 
         public IReadOnlyList<InboxMessage> Messages => messages;
 
+        // Session 16 - a brand new career starting mid-session (OnConfirmTeamClicked)
+        // never reset this, so a second career in the same Play Mode/app session opened
+        // with the previous career's entire Inbox still attached (real bug Thomas hit
+        // live). RestoreFromSave already does this same messages.Clear() for the load
+        // path; this is the equivalent for starting fresh instead of restoring.
+        public void Clear()
+        {
+            messages.Clear();
+        }
+
         public int UnreadCount
         {
             get

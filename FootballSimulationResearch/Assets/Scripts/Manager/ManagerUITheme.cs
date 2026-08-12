@@ -44,18 +44,24 @@ namespace Manager
         // Continuous green->yellow->red gradient for a 0-100 value, rather than
         // RatingColor's hard 3-step bands - playtest backlog (session 14), Thomas's own
         // idea for the Tactics Board pin border: "smoothly shifts warmer as Condition
-        // drops, not a separate number." 100 = pure Accent, 50 = pure Warning, 0 = pure
-        // Danger, lerped between the two nearest anchors either side of the value.
+        // drops, not a separate number." Anchors recalibrated in session 16 - the
+        // original 50/100 anchors meant 84 condition still read as solid green in a
+        // live playtest; a manager expects concern to show earlier than the midpoint.
+        // 100 = pure Accent, 80 = pure Warning, 40 = pure Danger (and below).
         public static Color ConditionGradientColor(float value01to100)
         {
-            float t = Mathf.Clamp01(value01to100 / 100f);
+            const float GreenAnchor = 100f;
+            const float AmberAnchor = 80f;
+            const float RedAnchor = 40f;
 
-            if (t >= 0.5f)
+            if (value01to100 >= AmberAnchor)
             {
-                return Color.Lerp(Warning, Accent, (t - 0.5f) / 0.5f);
+                float t = Mathf.Clamp01((value01to100 - AmberAnchor) / (GreenAnchor - AmberAnchor));
+                return Color.Lerp(Warning, Accent, t);
             }
 
-            return Color.Lerp(Danger, Warning, t / 0.5f);
+            float tLow = Mathf.Clamp01((value01to100 - RedAnchor) / (AmberAnchor - RedAnchor));
+            return Color.Lerp(Danger, Warning, tLow);
         }
 
         private static Color HexColor(string hex)

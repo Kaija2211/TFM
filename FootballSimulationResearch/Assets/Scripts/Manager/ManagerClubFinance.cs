@@ -89,6 +89,19 @@ namespace Manager
             budgetByTeamName[teamName] = GetBudget(teamName) + delta;
         }
 
+        // Session 16 - a brand new career starting mid-session (OnConfirmTeamClicked)
+        // never reset this, so a second career in the same Play Mode/app session opened
+        // with every club still holding whatever budget/spend/income it had at the end
+        // of the previous career - GetOrSeedBudget's "seed once, keep forever" idiom
+        // means a club that already had a budgetByTeamName entry would never reseed,
+        // silently carrying the old figure into the new career.
+        public void Clear()
+        {
+            budgetByTeamName.Clear();
+            totalTransferSpendByTeamName.Clear();
+            totalTransferIncomeByTeamName.Clear();
+        }
+
         // All figures in £m (Wage is £m/YEAR, not weekly) - deducted from the same
         // budget pool as transfer spend at each season rollover, so a club's wage bill
         // and its transfer activity draw from one number, same as real football
@@ -117,7 +130,13 @@ namespace Manager
             float overall = player.GetOverallRating();
             float potential = player.Potential;
             float youthFactor = Mathf.Clamp01((26f - player.Age) / 10f);
-            float veteranDiscount = Mathf.Clamp01((player.Age - 31f) / 8f);
+
+            // Ramps from 28 to a full discount at 35 (VeteranRetirementAge) rather than
+            // 31-39 - playtest finding (session 16): the old curve only discounted a
+            // 33-year-old by ~14%, letting an aging player price like they were still
+            // mid-career. Most players don't play meaningfully past retirement age, so
+            // the discount should be most of the way there well before it.
+            float veteranDiscount = Mathf.Clamp01((player.Age - 28f) / 7f);
 
             float overAllowance = Mathf.Max(overall - 45f, 0f);
             float baseValue = overAllowance * overAllowance * 0.045f;
