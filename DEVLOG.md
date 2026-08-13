@@ -7,6 +7,143 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-09 — Captaincy/set-piece roles, an attribute overhaul, the manager-influence arc (Leadership+captaincy, fitness/injuries), and a new Tactics screen
+
+**Commits:**
+`2b280ef` (2026-08-09 20:38:11 +0100) — "feat: Manager Mode captaincy, set-piece
+taker, and attack/defend role designations"
+`c9a2bed` (2026-08-09 20:52:48 +0100) — "fix: restrict attack/defend role
+options by position"
+`28f2808` (2026-08-09 21:19:19 +0100) — "feat: attribute overhaul - Long
+Shots, Through Balls, Off The Ball, Marking, Free Kicks"
+`316e129` (2026-08-09 21:36:20 +0100) — "feat: Leadership stat + real
+captaincy consequence"
+`66b863c` (2026-08-09 21:56:32 +0100) — "feat: phase 2 - fitness/condition,
+injuries, and reserve pool"
+`bc422b8` (2026-08-09 22:08:40 +0100) — "fix: Matchday Prep opponent pitch
+elongating past the footer on window resize"
+`6aac85e` (2026-08-09 22:30:50 +0100) — "feat: tactical sliders + Tactics
+screen (sliders + centralized role assignment)"
+`884aedb` (2026-08-09 22:54:19 +0100) — "fix: Tactics screen column spacing,
+dropdown z-order/population, GK Leadership + role stat context"
+`dfb0d14` (2026-08-09 23:04:28 +0100) — "fix: align dropdown option stat
+columns into a real grid"
+`a6a541c` (2026-08-09 23:10:44 +0100) — "fix: match Tactics screen layout to
+the actual design mockup exactly"
+`c490cb5` (2026-08-09 23:14:53 +0100) — "docs: add session 7 handoff"
+
+### Goal
+An unusually large session that kept growing thread by thread: captaincy and
+set-piece taker designations, a full attribute overhaul (the first time the
+protected `PlayerAgent.cs`/`AgentSquadGenerator.cs` were touched directly,
+under explicit authorization), a two-phase "manager influence" push aimed at
+making the mode feel less like a spectator sport, a real pre-existing UI bug
+found live mid-playtest, and finally tactical sliders plus a brand-new
+centralized Tactics screen built from a live design mockup.
+
+### Captaincy, set-piece taker, and attack/defend role designations
+New Manager Mode-only `ManagerSquadRoles` side structure (Captain,
+Vice-Captain, Penalty/Free-Kick/Corner taker, per-player attack/defend
+leaning) — deliberately kept off `PlayerAgent.cs` itself. Only the corner
+taker got a real mechanical effect this session: the ManagerSim fork's
+`PickCreatorForChance` prefers a team's designated corner taker (85% of the
+time, if on the pitch) for `SetPiece` chances, so their real Crossing/
+Creativity drives the outcome through the existing formula. Everything else
+started organizational-only (no free-kick/penalty event exists in the sim to
+hook into). Follow-up fix: attack/defend role options are now restricted by
+position — no "Defensive" wingers, no "Attacking" centre-backs, no control
+at all for goalkeepers.
+
+### Attribute overhaul
+Five new stats — Long Shots, Through Balls, Off The Ball, Marking, Free
+Kicks — each chosen because it fills a real half-generic term already
+sitting in an existing ManagerSim formula, not just added for its own sake.
+First time this session's protected files were touched directly, under
+explicit branch-scoped authorization ("we have a branch dedicated to all the
+untouchable files... I give you full editor access"). `PlayerAgent.cs`
+gained only new fields; `AgentSquadGenerator.cs` generates the new stats in
+a single pass wrapped in a `Random.State` save/restore so the addition
+consumes zero budget from the shared RNG stream — confirmed via same-seed
+regeneration producing byte-identical existing stats across independent
+generator instances. A 200-match calibration check confirmed no regression.
+
+### Manager influence arc, phase 1 — Leadership + captaincy consequence
+Agreed framing going in: existing manager levers didn't have real teeth
+because nothing cost anything. New `Leadership` stat (flat across
+positions, with a veteran/youth age nudge) feeds a new downside-only
+captaincy-suitability penalty on expected goals — a sensible pick costs
+nothing, a reckless one (young, low Leadership) genuinely hurts, up to -12%
+at the extreme.
+
+### Manager influence arc, phase 2 — fitness/condition, injuries, reserve pool
+Built in the agreed order: the reserve-pool safety net first, then
+persistent Condition, then injuries — so the risk (a squad thinned out by
+injuries) never existed without the safety net already in place. Condition
+decays with minutes played and Stamina, recovers with Age, and feeds match
+performance as a second multiplier stacked on the existing position-fit
+clone. Extending that clone for Condition surfaced a real bonus bug: it had
+never been updated with this session's earlier new stats, so a managed-team
+player playing out of position was silently using 0 for all of them —
+fixed as part of the same edit. Injury risk scales sharply with low
+pre-match Condition and modestly with Age, verified via 5000-trial
+statistical reproduction of the formula. The squad can never actually be
+left unable to field a position — a still-injured starter is auto-swapped
+for the best fit bench cover, or a reserve is called up, before every
+managed-team fixture.
+
+### A real, unrelated UI bug found live mid-playtest
+The user hit this playing his own career (Matchday 2 vs Newcastle), not
+something introduced this session. The opponent-formation pitch on Matchday
+Prep used a point anchor with its height snapshotted once, at chrome-build
+time, from the container's measured height — correct for whatever window
+size was active the very first time the screen was ever shown, silently
+wrong after any resize for the rest of that session. The exact same drift
+bug class as one already partially fixed (on a different axis) in an
+earlier session. Fixed with proper stretch anchors.
+
+### Tactical sliders + a new Tactics screen
+Width/Defensive Depth/Tempo sliders — deliberately not another flat xG
+multiplier (redundant with the existing Mentality system). `PickChanceType`,
+the single entry point deciding which of six chance types happens for every
+attack in the match, was refactored from six fixed if/else threshold chains
+into an explicit weighted table with an optional bias multiplier; unbiased,
+it reproduces the exact original odds. Mid-build, the user shared a design
+mockup for a dedicated "TACTICS" screen and decided to move role assignment
+off Player Detail onto it entirely — which also resolved a backlogged
+"two corner takers" idea as a side effect. Several real bugs surfaced from
+live feedback on the actual built screen and were fixed the same session:
+columns reading as "far apart," dropdown lists rendering garbled or with no
+names at all (two separate causes — sibling render order, and TMP labels
+built while inactive failing mesh generation permanently), goalkeeper
+Leadership never being displayed, dropdown stat columns not actually
+aligning, and a final pass pulling the exact layout spec from the user's
+Claude Design project via DesignSync instead of guessing proportions again.
+
+### Problems encountered
+- **A genuine compile bug blocked Play Mode for a while.** A bare
+  `Random.value`/`Random.Range` call in the new injury code was ambiguous
+  between `System.Random` and `UnityEngine.Random` (the file imports both
+  namespaces) — a real `CS0104` error, not a tooling quirk. Confusing
+  because trivial compile-check scripts kept succeeding (they never
+  referenced the broken code path), and `EditorApplication.isPlaying = true`
+  reports success even when Unity can't actually enter Play Mode. Traced
+  down by checking the actual Editor console output directly rather than
+  trusting isolated script compiles. Fixed by fully-qualifying
+  `UnityEngine.Random` everywhere in that file.
+- **Two more real UI bugs on the new Tactics screen's dropdowns**, found
+  from a live screenshot: dropdowns nested inside their own trigger button
+  always rendered behind later rows regardless of being "open" (Unity draws
+  UI children in sibling order); and option buttons built while their
+  panel was still inactive sometimes failed to render any text at all (a
+  known class of TMP mesh-generation failure, not previously seen in this
+  exact form). Both fixed the same session.
+- Several rounds of the live verification tooling reporting stale or
+  misleading compile errors after large edits — resolved each time by
+  waiting for a genuine recompile and rechecking actual console output
+  rather than trusting the first response.
+
+---
+
 ## 2026-08-09 — Player Detail fixes, a match-viewing UX overhaul, a real calibration bug, and two real UI bugs
 
 **Commits:**
