@@ -7,6 +7,112 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-10 — Career arc (progression/scouting/transfers/finance/incentives/save-load), a real faux-bold font bug, and a UI text-size pass
+
+**Commits:**
+`e3d4da8` (2026-08-10 13:46:44 +0100) — "feat: career arc - progression,
+scouting, transfers, finance, incentives, save/load"
+`3610f37` (2026-08-10 13:47:04 +0100) — "fix: bold UI text was faux-bold -
+add a real Oswald Bold font asset"
+`01c991b` (2026-08-10 14:34:09 +0100) — "fix: bump small/hard-to-read text
+sizes across several screens"
+
+### Goal
+Thomas described what excites him most about management games — earning
+money to buy players who fit his system, discovering wonderkids, watching
+them develop over many seasons, and a real incentive to win the league —
+and asked for all of it in one sitting, explicitly not worrying about
+scope. Delivered as a six-phase plan, each phase verified live in Play
+Mode before the next started. What followed was a long live-debugging arc
+chasing a text-crispness report that turned out to be a genuine,
+comprehensive font bug, plus a smaller UI text-size pass.
+
+### The career arc, six phases
+- **Season loop** (previously nonexistent — fixtures just ran out and
+  buttons disabled forever): a season counter, an End of Season panel,
+  and a real rollover (ages every player, reloads a new real fixture
+  calendar by cycling through the 9 historical Premier League season
+  files already in the project). Added `PlayerId` and `Potential` as new
+  inert fields on the protected `PlayerAgent.cs`, generated inside the
+  existing RNG-safe wrapped block, verified with a same-seed
+  regeneration check.
+- **Player progression** toward the new hidden Potential — youth grow
+  (decelerating as they approach it), veterans decline, retirement
+  replaces via the existing reserve-generation wrapper.
+- **Youth prospect scouting** — a hidden per-club pool of 16-19-year-olds,
+  invisible until scouted (fuzzy Potential range until a scout
+  assignment resolves).
+- **Transfer market and club finance** — live Wage/MarketValue formulas,
+  a real per-club budget, single-shot bidding, sell-from-bench-only
+  selling.
+- **Season incentives** — prize money and a separate board confidence
+  budget boost, plus a Trophy Room history screen.
+- **Full save/load** — wired the existing (previously non-functional)
+  SAVE & EXIT TO TITLE and LOAD CAREER buttons to real persistence,
+  verified across an actual Play Mode exit and fresh re-entry.
+
+### Problems found and fixed along the way
+A genuine formula bug in player progression: the first version spread
+growth across roughly a dozen attributes at once, which barely moved the
+position-weighted Overall rating since it's a weighted average, not a
+sum — a tracked player only gained +0.8 Overall over 7 simulated seasons.
+Fixed to apply the growth amount directly to the attributes that
+actually carry weight; verified afterward with a realistic multi-season
+deceleration curve. Also fixed: two brand-new buttons (Scouting, Trophy
+Room) rendered with no label text at all, since the styling helper used
+only updates an existing label rather than creating one; three status
+labels (scouting assignment count, transfer budget, transfer status
+message) silently froze after their first refresh, the same TMP
+cached-label-reference gotcha hit twice in earlier sessions; a
+pre-existing missing-glyph warning on the Tactics screen's role
+dropdown; and a genuinely dead unused-variable warning, unrelated to
+this session's own work.
+
+### The font investigation
+Thomas reported the Title screen's text looking blurry. Ruling this out
+took a long back-and-forth: Canvas Scaler fractional scaling from a
+non-16:9 Game View, Windows display scaling (checked, was already
+100%), and a "baked texture upscaled" theory raised by a design
+collaborator were all investigated and ruled out with direct evidence
+(Camera target texture, Canvas render mode, RawImage usage, render
+pipeline) before finding the real cause — `Oswald SDF.asset` had been
+baked from a single weight of a variable font with no true bold face,
+so every bold-styled label in the game was rendering through TMP's
+synthetic weight simulation instead of real glyphs. Fixed by sourcing
+the genuine static Oswald Bold font file, baking a matching font asset,
+and linking it into the existing font's weight table so the fix applies
+automatically everywhere bold text appears — verified across 246
+live-checked labels covering every major screen. A mistake in the first
+attempt at creating the new font asset (its atlas texture wasn't
+persisted as a proper sub-asset, so it worked in-session but crashed on
+the next Play Mode transition) was caught by testing through an actual
+transition rather than trusting the first success.
+
+### Text size pass
+After the font fix, several elements turned out to be just genuinely too
+small rather than blurry — the Team Select screen's header/subtitle/
+caption, club grid names, match stat captions and values, and the
+Matchday Prep opponent pitch's player labels. Caught a real regression
+while verifying this: growing the pitch pin's circle size alongside its
+font tipped two closely-spaced pins into visual overlap in some
+formations, confirmed via direct bounding-box checks rather than
+eyeballing — fixed by keeping the pin's footprint the same size and only
+growing the text inside it.
+
+### Discussed, not yet implemented
+A live design discussion afterward identified a real bug in the
+Potential-roll formula (a flat random roll instead of the project's
+established bell-curve convention, making very high potential far too
+common) and floated a proper youth academy system (separate from
+scouting, including under-16 players who can't yet be promoted),
+reworking scouted prospects to be unaffiliated with any specific club,
+and moving player development from a once-a-season lump sum to visible
+per-matchday increments tied to match form. None of this was
+implemented this session — captured in the handoff and project memory
+for whenever it's picked up.
+
+---
+
 ## 2026-08-09 — Captaincy/set-piece roles, an attribute overhaul, the manager-influence arc (Leadership+captaincy, fitness/injuries), and a new Tactics screen
 
 **Commits:**
