@@ -7,6 +7,103 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-08 — 1920x1080 redesign live-verification pass, screen by screen
+
+**Commits:** `b3fccdb` (2026-08-08 22:58:02 +0100) — "fix: Manager Mode UI
+polish pass - scaling, alignment, and a real position bug"
+
+### Goal
+Live-verify the 1920x1080 Manager Mode redesign screen by screen in Play
+Mode, fixing whatever the user found on each pass. Ran as a long back-and-
+forth loop: enter Play Mode, click through, user reports something off
+(often with a screenshot), fix, restart Play Mode, re-verify.
+
+### Fixed this session
+- **Hub league table sizing.** First attempt only changed the C# field
+  defaults on `LeagueTableView` (`rowHeight`/`headerRowHeight`/`fontSize`)
+  and had zero effect — the scene file had its own baked serialized values
+  overriding them. Fixed by editing the `.unity` scene data directly
+  (28→48, 22→32, 13→20). Also center-aligned the PL/GD/PTS columns (were
+  right-aligned with a dead gap) and wrapped the FORM column string in
+  `<mspace=1.4em>` so W/D/L letters space evenly despite being different
+  glyph widths.
+- **GK/CB pin overlap on the three back-three formations** (3-5-2, 3-4-3,
+  3-4-2-1). Reverted the GK pin back to the source mockup's own 0.90 (was
+  compensated to 0.95 for the old, smaller canvas) and nudged the center
+  CB from 0.80 to 0.74 depth to keep clear of it.
+- **Player Detail banner** — three rounds. Centering the stat columns just
+  moved the empty-space gap rather than closing it; grew the banner itself
+  (130→240px, bigger photo/name/meta) to actually fill it; then removed a
+  leftover centered-margin on the banner that the user caught was still
+  narrower than the rest of the screen, making it full-bleed.
+- **Weak-foot star alignment** — three failed attempts eyeballing
+  `<voffset>` from screenshots (-0.15em, -0.06em, -0.02em, all reported
+  still off). Solved for real by querying `TMP_TextInfo.characterInfo`
+  directly for a reference letter vs. the star sprite's actual bounding
+  box and computing the exact required offset (0.29em) — the star artwork
+  itself sits well below its own reported baseline, so baseline-matching
+  was never going to work no matter how carefully eyeballed.
+- **Match Events / Squad List scroll direction** — flip-flopped across
+  three rounds (default → `-1` → back to `+1`) because early reports were
+  against stale Play Mode sessions that predated whichever fix had just
+  landed (screens are built once per session and never rebuilt). Settled
+  for good by simulating a real wheel event via `ExecuteEvents.Execute`
+  and reading `verticalNormalizedPosition` before/after — proved `+1`
+  (Unity's default) is correct.
+- **Matchday Prep "pitch behind the list"** — reported as recurring a
+  third time after two earlier (wrong) fixes aimed at z-order and a ghost
+  object. Measured with `RectTransform.GetWorldCorners()` and found a real
+  ~149-unit overlap at the user's actual (non-maximized, non-16:9) window
+  size. Root cause: `CanvasScaler`'s effective canvas width only equals
+  the 1920 reference at an exact 16:9 aspect ratio — the pitch was
+  positioned using a literal `1920f` while the list was already positioned
+  as an offset from the right anchor (aspect-independent by construction).
+  Re-anchored the pitch the same way and derived its height from the
+  container's measured `.rect.height` instead of a literal `1080f`.
+  Verified a clean +27.75 gap at the same window size that previously
+  showed the overlap.
+- **Pitch markings near-invisible in a non-maximized window** — 1px-wide
+  line images scale to sub-pixel width below the reference resolution and
+  anti-alias away, worse at their already-low opacity. Bumped to 2px.
+- Formation dropdown misalignment, Matchday Prep opponent-list background
+  color, Match Day header overflow (plus a second, separately-stale copy
+  of the same header-height constant in the post-match stats reset path),
+  team names going blank at Full-Time (a new trigger case for the known
+  TMP mesh-generation-failure bug — this time from a `fontSize` change on
+  an already-rendered label, not creation), and Full-Time goal-scorer list
+  overflowing the header on 3+ goal matches.
+
+### Backlog captured, not implemented
+Five items explicitly deferred by the user and saved to memory rather than
+built this session: a larger name pool for generated players (900 possible
+combinations for ~380 generated players), surfacing stamina in Manager
+Mode's UI (the sim already uses it, nothing shows it), requiring a manager
+name before Team Select can continue, a red position-mismatch label on the
+Tactics Board when a dragged player is out of position, and a larger,
+explicitly-uncommitted set of roadmap ideas (player progression over time,
+a transfer market and the finance system it implies, and giving the
+manager more real tactical influence over the squad rather than just XI
+selection).
+
+### Problems encountered
+- **Chrome-build-once meant several "still broken" reports weren't actual
+  fix failures.** Every screen's UI is built exactly once per Play Mode
+  session (guarded by a bool), so neither code fixes nor scene-file edits
+  take effect in an already-running session — only a fresh Play Mode entry
+  picks them up. At least the scroll-direction flip-flopping (see above)
+  burned real time on this before the pattern was recognized.
+- **No save/load system exists yet**, so a Play Mode restart discards all
+  season progress. Mid-session the user was 39 matchdays into a season
+  when this was discovered — held off restarting Play Mode until they'd
+  stopped it themselves.
+- The "score stuck at 0-0 at Full-Time despite correct stats/scorers"
+  issue investigated earlier in the session was never conclusively root-
+  caused; concluded it was most likely a rapid-automated-testing artifact
+  rather than a real bug, flagged as such rather than claimed fixed, and
+  the user didn't hit it again for the rest of the session.
+
+---
+
 ## 2026-08-07 — Design-fidelity pass on the Tactics Board + a full live-testing bug-fixing round
 
 **Commits:** `18dad22`
