@@ -7,6 +7,129 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-10 — Elite aging curve, an autopilot backlog sweep (loans/academy/scouting rework/nationalities), and two real live-caught bugs
+
+**Commits:**
+`0d81295` (2026-08-10 21:01:33 +0100) — "feat: elite aging curve, autopilot
+batch (loans/academy/scouting rework/nationalities), and live bug fixes"
+`46518d9` (2026-08-10 21:01:51 +0100) — "docs: add session 9 handoff"
+
+### Goal
+Continuation of the same day's career-arc session — Thomas asked to work
+through the open Manager Mode backlog "one by one," then later handed off
+autopilot authorization for a batch of features while away, and the
+session closed with a live pairing stretch where he caught two genuine
+bugs in real time by watching the numbers closely rather than trusting
+the UI.
+
+### Elite aging curve
+Pushback on the original decline model: "I feel like players, or at
+least superstars should at least remain stagnant for a few years... I'd
+say harry kane has only gotten better since turning 30." Added an
+aging-curve extension keyed off a player's current Overall (his own
+reasoning — Potential can now go down too, so Overall is the more
+honest signal) — high-rated players get up to five extra years before
+decline starts, replacing the flat age-30 cutoff everywhere it was used.
+Verified afterward with a full goals-per-match realism sanity check
+against real Premier League rates.
+
+### Transfer/Scouting name-click detail view
+"We need to be able to click on their name to see detailed stats"
+instead of buying/scouting blind. Added a name-click target to the
+shared grid-row component, independent of the row's own click, and
+generalized Player Detail to browse an arbitrary read-only list. A real
+bug reported live the same day — clicking a youth prospect's name did
+nothing until Back was pressed — turned out to be `OpenPlayerInspect`
+never hiding the Scouting/Transfer Market panels underneath it, so the
+detail view opened invisibly beneath them.
+
+### Form column bug, and a genuine misunderstanding cleared up
+A screenshot showed a stale Form strip at Season 2. Real cause:
+`recentFormByTeamId` was never cleared alongside the league table on
+season rollover or load — fixed at both sites. Also clarified that the
+"promotion and relegation" Thomas thought he'd spotted (a newly-promoted
+club with no training data) is just the season-file-cycling mechanic
+from the career arc, not an actual football pyramid.
+
+### Autopilot batch: loans, world-scattered scouting + nationalities, youth academy
+Given explicit go-ahead to proceed without further check-ins on
+everything except live in-match ratings, morale, and the inbox. Shipped:
+a loan system (any squad player, automatic destination, free, fixed to
+season-end); a rework of scouted prospects from being cosmetically tied
+to a real club (which buying them never actually affected) to a
+region-pooled system with a real generated nationality per prospect,
+plus a per-career randomized regional quality bias — deliberately
+randomized rather than fixed, to avoid a permanent claim about which
+real nations produce better talent, a design choice not yet discussed
+with Thomas directly; and a youth academy (5 slots, ages 14-15,
+promotion age 16, manual promote-to-reserves), built as a second tab
+inside the existing Scouting screen. Two real save/load data-loss bugs
+were caught proactively before considering either feature done: a
+loaned-out player is removed from the squad entirely, so the save DTO
+would have silently lost them forever without a dedicated list; and
+restoring an empty, never-generated academy pool would have permanently
+frozen it at zero without a count guard. Also bell-curved the
+Potential-roll headroom (a flat roll was making very high Potential far
+too common) and fixed a real `DefenceStrength` inversion bug in both the
+reserve pool and youth pool discount math, where "weakening" a player
+was actually making their defense better.
+
+### Design import: injury cross icon
+Thomas linked a Claude Design mockup project and asked for its red
+medical-cross sprite to be added to injured players on the Tactics Board
+and Squad list. Read the mockup read-only via the project's design-sync
+tool, then hand-translated the SVG spec into the game's existing
+flat-rectangle UI convention (two crossed rectangles over a solid
+square) rather than importing an image asset. Verified live end-to-end
+with a real in-game injury: looped matchdays until three starters
+actually got hurt, confirmed the icon on both screens, then pushed
+matchdays past their return dates and confirmed it correctly cleared —
+which also proves those players are genuinely selectable again, since
+the icon and the actual match-day substitution logic read the exact
+same underlying check.
+
+### Two real bugs caught live
+**Substitute fatigue.** "I switched them out and the borders remained
+yellow, meaning the subbed on players have low stamina." Not cosmetic —
+the fatigue formula judged every player by the absolute match clock
+with no concept of when a substitute actually entered, so a player
+brought on at minute 88 was penalized as if they'd played the whole
+match, in both the display and the underlying chance-creation math.
+Fixed by tracking each substitute's real entry minute and computing
+fatigue off time actually on the pitch; verified with a direct
+before/after comparison (a fresh sub reads fully rested at the same
+match minute an unmodified starter reads as tired).
+
+**Hub matchday label frozen at "Matchday 1."** Thomas noticed the
+league table showing every team 21 games played while the header still
+read Matchday 1. Genuinely useful bug to catch, and the first fix
+attempt was wrong — a suspected coroutine race was removed and replaced
+with a simpler synchronous fix, which compiled clean but made no
+difference on a full clean re-test. A temporary diagnostic log found the
+real cause: the label was cached as a controller field, and a separate,
+general-purpose TMP recovery routine (used all over this screen to fix
+an unrelated rare rendering glitch) had silently destroyed and recreated
+that exact label at some point without knowing to update the cached
+reference — leaving it permanently `null` and silently skipping every
+future update. Fixed by not caching the label at all, looking it up
+fresh by path on every refresh instead. Verified with 15 matchdays
+played back-to-back, checking the label after every single one against
+the league table.
+
+### Discussed, not yet implemented
+Confirmed there's currently no expiry or rival-club poaching for
+unbought scouted prospects — leaning toward an age-out-and-replace
+mechanic over a fake AI transfer economy, not decided. Confirmed
+injured players can still be freely selected into the Tactics Board
+lineup with no warning (they just get silently swapped out at kickoff);
+a real block or warning is still open. Confirmed Condition genuinely
+persists matchday-to-matchday but has no visible number anywhere until
+it crosses a low-fitness warning threshold — floated always showing the
+raw number instead. All three logged to the backlog, not built this
+session.
+
+---
+
 ## 2026-08-10 — Career arc (progression/scouting/transfers/finance/incentives/save-load), a real faux-bold font bug, and a UI text-size pass
 
 **Commits:**
