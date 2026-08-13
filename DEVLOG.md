@@ -7,6 +7,160 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-07 — Design-fidelity pass on the Tactics Board + a full live-testing bug-fixing round
+
+**Commits:** `18dad22`
+
+### Goal
+Pick up from the same-day Tactics Board session's handoff and bring the new
+screens in line with the actual Claude Design mockups (pulled live from the
+`Unity UX design possibilities` project), then clear whatever live play-
+testing turned up on top of that — this ended up running through two full
+rounds of "fix it, then go play it again."
+
+### Design fidelity (matched against the Claude Design mockups)
+- **Tactics Board pitch** was stretched full-width, smearing every formation
+  into an unreadable wide strip. Constrained to a fixed 1130:700 aspect
+  ratio — the exact ratio used in the design's own "TACTICS BOARD — DETAIL"
+  board — centered with letterboxed margins either side.
+- Raised the pin `verticalCompression` factor (0.66 → 0.85): GK and CB pins
+  were visually overlapping in every back-three formation (3-5-2, 3-4-2-1).
+  Verified clean across every formation afterward.
+- Bench caption and Match Events list both got a scrollbar. Neither list
+  was actually broken — both already scrolled fine via mouse wheel/drag —
+  but with zero visual affordance either one read as "missing content"
+  rather than "scroll for more."
+- Full-Time Summary header spacing reworked: score/team names were
+  crowding the top of the panel, goal-scorer names were crowding the
+  header/body divider from below. Stats block was pinned near the top of
+  its available space leaving a large dead gap before the footer; now
+  vertically centered to match the mockup.
+- League table's GF/GA columns replaced with a single GD (goal difference)
+  column — the two-column version was getting clipped by the table's own
+  scrollbar. Manager-Mode display-only change; `LeagueTable.Entry`'s
+  `GoalsFor`/`GoalsAgainst` fields (which Research Mode's evaluation output
+  reads) are untouched, GD is computed locally in `LeagueTableView.cs`.
+- Player Inspect attribute bars now show their numeric value alongside the
+  bar (right-aligned, colour-matched) — reverses an earlier documented
+  decision to keep raw numbers off attribute rows.
+- The match screen's tactic-pill buttons (Attacking/Balanced/Defensive)
+  turned out to be hand-placed Editor buttons surviving from before the
+  code-driven reskin, never routed through the styling helpers — rendered
+  top-left-aligned and non-bold, visibly different from every other button
+  (Pause vs. Skip to Results had the same mismatch). Fixed at the root by
+  extending the shared `NormalizeButtonLabel`/`StyleHubActionButton`
+  helpers to also force alignment and font weight, not just colour/size.
+- Imported the designer's three PNGs (football icon, filled/empty star) as
+  TMP Sprite Assets, wired into goal-scorer lines and Player Inspect's
+  weak-foot rating.
+
+### Live-testing round 1
+- **Match screen laid out correctly on matchday 1, corrupted from matchday
+  2 onward.** The full-time-only stats-panel repositioning code mutated
+  shared RectTransforms in place rather than rebuilding them, and nothing
+  ever reset them back to the live layout (or re-hid the full-time-only
+  scorer lists, or re-showed the Match Log) before the next live match
+  started. Fixed with an explicit reset routine called at the top of the
+  "simulate match" handler.
+- **Pausing, then requesting a substitution, did nothing until Resume was
+  pressed** — the picker only ever popped open the instant the game
+  unpaused. `Time.timeScale = 0` freezes any `WaitForSeconds`-based
+  coroutine solid, and the replay coroutine only checked the "sub
+  requested" flag once per simulated minute. Replaced the per-minute wait
+  with a per-frame poll that can notice a paused request immediately.
+- Hub byline text ("Manager X · Matchday N") started rendering visibly
+  garbled/overlapping after the first matchday. First attempt (destroy and
+  recreate the label a frame later, cancelling any previous in-flight
+  attempt first) cut it down a lot but didn't eliminate it — see Problems
+  below, this turned out not to be what it looked like.
+
+### Live-testing round 2 (after round 1's fixes landed)
+- Match Events scroll wheel felt backwards (had to scroll down to reach
+  the *first* events) — negated the ScrollRect's `scrollSensitivity`.
+- Skip to Results had the exact same paused-coroutine bug as the
+  substitution picker, just never got the same fix — added the matching
+  early-exit condition.
+- Weak-foot star icons in Player Inspect were sitting flush against the
+  "Weak Foot:" label with no gap and slightly off the text baseline —
+  added spacing and a small `<voffset>` correction.
+- Hub byline overlap, actually fixed this time — see Problems below.
+
+### Problems encountered
+- **A compile error silently blocked every Play Mode entry attempt for a
+  long stretch, and looked nothing like a compile error while it was
+  happening.** `TextAlignmentOptions.MidlineCenter` doesn't exist (the
+  correct value is `.Center`) — Unity refuses to enter Play Mode with a
+  broken build, but gives no obvious "stuck" signal for it, so repeated
+  `EditorApplication.isPlaying = true` calls just silently never took
+  effect. Diagnosed by finally checking the Console for compile errors
+  instead of continuing to assume it was a tooling/environment problem.
+- **That stuck window had a lasting side effect**: some navigation calls
+  made while Play Mode silently wasn't running executed against the *Edit
+  Mode* scene instead (confirmed by a `"Destroy may not be called from
+  edit mode!"` console error at the time). Object creation in Edit Mode is
+  permanent — it survives every later Play Mode stop/restart, unlike
+  normal play-created objects. This produced two separate pieces of
+  invisible debris: duplicate League Table header rows (found and cleaned
+  up immediately), and — unnoticed at the time, because only the League
+  Table was checked — a second, permanently stray "Byline" GameObject
+  under the Hub panel, frozen forever at "Matchday 1". Every fresh Play
+  session then legitimately built a *second*, correctly-updating Byline
+  alongside the abandoned first one, which is what the "garbled overlap"
+  text actually was — two real, simultaneously-existing GameObjects, not
+  a rendering artifact. Traced conclusively by adding a temporary
+  `Debug.LogError` with a full stack trace to the suspect builder method:
+  it only ever fired once per session, which meant the duplicate had to
+  already exist *before* Play Mode even started — checked the Edit Mode
+  scene directly and found it sitting there with stale runtime text
+  baked in. Removed it, verified clean across several fresh matchdays
+  afterward.
+  - **Lesson for next time**: `"Destroy may not be called from edit
+    mode"` or a stale-looking warning like `"no fixtures found for X"`
+    regardless of what was actually clicked is the signature of code
+    running in Edit Mode when Play Mode was meant to be active — check
+    for a compile error first. Any object creation from that window needs
+    a full, deliberate scene-wide sweep to clean up, not just the one
+    symptom that happened to surface first.
+- TMP `<sprite>` tags have no `size=` attribute — `<sprite name="x"
+  size=60%>` doesn't error, it silently fails to parse and prints the tag
+  text literally. `<size=60%><sprite name="x"></size>` is the real syntax.
+- Manually constructing a `TMP_SpriteAsset` via `ScriptableObject
+  .CreateInstance` + hand-built glyph/character tables threw a
+  `NullReferenceException` inside TMP's own migration path the moment any
+  table property was touched on the fresh instance. Unity's own "Create >
+  TextMeshPro > Sprite Asset" menu item, invoked via
+  `EditorApplication.ExecuteMenuItem` with `Selection.activeObject` set to
+  the source texture, worked cleanly first try.
+- A fresh `RectTransform`'s default `sizeDelta` is `(100,100)` — under
+  stretched anchors this *adds* 100px to the computed size rather than
+  being ignored. Hit this building the bench scrollbar's handle (rendered
+  as a huge block covering the whole row), then proactively avoided it on
+  the Match Events scrollbar.
+
+### Deferred
+- A more sophisticated squad/stat generator was discussed at length but
+  explicitly parked for a future session: team strength barely
+  differentiates generated squads today (`AgentSquadGenerator` only blends
+  35% of the way toward a club's real attack/defence rating), individual
+  attributes are rolled fully independently with nothing tying a player's
+  stats together, the name pool collides across the whole league (only
+  deduplicated within a team), and there's no age/potential/development
+  arc at all.
+- Condensed, minimalistic (FM-style) match-event text — the same
+  deferred item from the previous session's entry, raised again and
+  parked again. Still not started.
+- A portrait-orientation (1080×1920) mockup redo was announced mid-session
+  but not yet delivered — next session's first priority once it lands.
+
+### State at session end
+Commit `18dad22` pushed (the user pushed directly this time rather than
+via GitHub Desktop, an explicit one-off ahead of a phase transition).
+Everything in this entry was live-verified in the Editor before commit —
+unlike the previous two sessions, nothing was left in a "compiles clean
+but not yet re-checked" state.
+
+---
+
 ## 2026-08-07 — Tactics Board (drag-to-sub, formation switching) + live-evaluation bug hunt
 
 **Commits:** `cd99991`, `d666b66`
