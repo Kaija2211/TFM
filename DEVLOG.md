@@ -7,6 +7,139 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-09 — Player Detail fixes, a match-viewing UX overhaul, a real calibration bug, and two real UI bugs
+
+**Commits:**
+`1ce92d1` (2026-08-09 19:11:43 +0100) — "feat: Manager Mode overhaul - Player
+Detail/GK fixes, Full Time redesign, match-viewing UX, calibration fix,
+matchday banner bug fix"
+`7839796` (2026-08-09 19:13:24 +0100) — "docs: add session 6 handoff"
+
+### Goal
+Started with a small carried-over fix (GK stats on Player Detail), then spent
+most of the session on a match-viewing UX thread that kept growing as the
+user reacted to live screenshots and actual playtesting — Match Log text,
+replay pacing, and three successive redesigns of the Full Time screen. Along
+the way, caught and fixed a real goal-scoring calibration regression, shipped
+a small developer easter egg, and finished by fixing two real bugs the user
+found in live play.
+
+### Player Detail / GK stats
+- Player Detail's four attribute columns showed the same outfield-only
+  layout for every player, including goalkeepers, whose real generated
+  stats (`Goalkeeping`, `Reflexes`) never appeared anywhere. Made the column
+  set conditional on `PrimaryPosition == PlayerPosition.GK`.
+- The attribute columns were vertically *centered*, so columns with
+  different row counts had their titles land at different heights —
+  imported the original "PLAYER DETAIL" mockup from the user's Claude
+  Design project and switched to top-aligned columns to match it.
+- Photo box grown from 140px to 220px square (two rounds of "make it
+  bigger" feedback), with the surrounding header layout adjusted to fit.
+
+### Match Log, pacing, and the Full Time screen (the big thread)
+- **Match Log phrasing**: diagnosed the repetition as structural — every
+  event resolves to one of 6 chance types × 4 outcomes, 24 fixed templates
+  total. Added 3 phrasing variants per slot (with short, punchy lines mixed
+  into the frequent stopped/off-target events), then later added
+  fatigue-aware and score-state-aware ("late drama") variants driven by
+  real simulated values already being computed, not decorative randomness.
+- **Replay pacing**: bumped `matchReplayDurationSeconds` 45→60 after the
+  user found the faster pace hard to follow; confirmed as the right amount
+  later in the session after watching several matches.
+- **Full Time screen, three redesign passes** driven by live screenshots:
+  goal scorer lists moved off tiny centered labels into their own big
+  block with Match Stats moved to the right; then split into two side-by-
+  side columns instead of stacked; then, on the user's own idea, the goal
+  timeline moved out of its cramped strip into a large full-width band
+  below everything, with minute labels on each marker.
+- **Managed-team-relative red/green coloring** applied throughout (scorer
+  names, timeline markers, match-stat bars) — based on which side the
+  user's own club is on, not simply home/away, verified specifically on an
+  away fixture to make sure that distinction actually held.
+- **Real per-line dividers** added to the live event feed to match the
+  original mockup, converting a single multi-line text block into a proper
+  row-based list.
+- **Match stat bars made into real comparisons** — both the live and
+  full-time versions were previously not actually comparing the two teams
+  (one was hardcoded to always show full, the other was proportional but
+  single-color). Added a genuine two-color split bar to both.
+
+### A real goal-scoring calibration bug, caught and fixed
+While chasing a match where both teams scored (to test the new coloring),
+repeatedly hit suspiciously low-scoring matches. A proper batch comparison
+(200 matches, identical teams, Manager Mode's simulator vs. the protected
+research one) confirmed a real regression: an earlier on/off-target split
+had stacked a second probability filter in front of the existing goal roll,
+roughly halving the effective scoring rate (1.21 goals/match vs. the
+protected original's 2.82). Fixed by rescaling the goal-chance formula to
+represent "given the shot is already on target" instead of leaving it
+unconditional under the new gate — restored to 2.66 goals/match, closely
+matching the original's 2.68 on the same teams. Added as a standing rule
+for future changes to that part of the code: any change to the match
+simulator's scoring probabilities needs a real before/after goals-per-match
+check, not just a clean compile.
+
+### Developer easter egg
+Added one fixed player — name, age, height, and position set, stats
+generated normally like everyone else — on the user's own club, with a
+real portrait. Implemented so it only affects the game-facing squad
+generation, not the shared generator research evaluation also uses.
+
+### Two real bugs found and fixed
+- **Goal event text was duplicating and over-coloring**: the event feed
+  already labels every goal with a fixed prefix, but the goal-text variants
+  added earlier in the session also said "goal" inside the description
+  itself, producing a visible duplicate — and the whole line was being
+  colored green instead of just the prefix. Rewrote the variants to drop
+  the word entirely and fixed the coloring to only apply to the prefix.
+- **Matchday Prep screen banner stuck on the very first fixture**: the
+  header text never updated after the first match, while the squad list
+  and opponent info right below it (fed by the same refresh call) updated
+  correctly every time — a strong sign the underlying data was fine and
+  this was a rendering bug. Root cause was a text-label component silently
+  getting swapped out from under a cached reference the first time a
+  recovery routine ran on it (the same class of bug already hit once
+  before, in an earlier session, on a different screen). Fixed the same
+  way as before, and verified end-to-end across two real matchdays that
+  the banner now updates correctly.
+
+### Smaller fixes
+- Expanded the surname pool (81 → 183) after the user noticed two
+  same-surname players on one squad — checked the actual math first and
+  confirmed the small pool made a shared surname the *expected* outcome
+  within a squad, not a rare coincidence.
+
+### Problems encountered
+- **A destructive mistake, caught and recovered.** The first attempt at
+  cropping the easter-egg player's portrait overwrote the original source
+  image in place with no backup, and came out too tight (no shoulders
+  visible). Found an untouched copy in the user's own Downloads folder and
+  re-cropped from that instead, this time leaving the backup alone.
+- **Mid-session hot-reload proved unreliable.** A script change that
+  compiled cleanly didn't always take effect in an already-running session,
+  even after an earlier change in the very same session had worked live
+  without a restart — cost real time before landing on "just restart to be
+  sure" as the reliable verification method.
+- **Wall-clock timing across separate tool calls was not trustworthy** for
+  precision checks (verifying the new 60s replay pacing) — inherent
+  round-trip latency between calls meant elapsed-time math came out wrong;
+  had to fall back on the user's own real-time feel-check instead.
+- The live-verification sandbox used this session has no access to
+  reflection, so private game state had to be exercised through real
+  public entry points (clicking actual buttons, simulating a real user)
+  rather than reached into directly.
+
+### Backlog captured, not implemented
+Tactical shape (formation-vs-formation interaction) remains queued as its
+own future discussion; player progression and a transfer market/finance
+system remain larger, uncommitted roadmap ideas, alongside a newly-floated
+scoped-down "free agent market only" version of the latter; a set-piece
+taker designation and a per-player attack/defend role toggle remain
+floated, smaller ideas; more developer easter-egg players are welcome any
+time now that the pattern is established.
+
+---
+
 ## 2026-08-09 — Player realism, New Career redesign, and a manager-influence push
 
 **Commits:**
