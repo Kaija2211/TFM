@@ -7,6 +7,148 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-09 — Player realism, New Career redesign, and a manager-influence push
+
+**Commits:**
+`1159def` (2026-08-09 10:39:54 +0100) — "docs: add session 4 handoff (live
+verification pass on 1920x1080 redesign)"
+`a277fc1` (2026-08-09 15:27:05 +0100) — "feat: player realism, New Career
+redesign, manager influence pass"
+
+### Goal
+Picked up from the previous session's handoff (a long live-verification pass
+on the 1920x1080 redesign), committed that session's own pending handoff doc,
+then moved through four broadly different chunks of work across the rest of
+the session: player-generation realism, a New Career screen redesign, a
+"manager influence" design conversation that grew into several shipped
+features, and a live playtesting bug-fix round at the end.
+
+### Player generation realism
+- Added `Age`/`Height` to `PlayerAgent` — height generated per-position via a
+  bell curve with a hard 150–200cm wall (not a uniform clamp), age via a
+  bell-curve roll, both coupled into existing attributes (height nudges
+  Aerial/Strength/Pace, age nudges Composure/Positioning/Pace/Stamina).
+- Expanded the name pool (30/30 → ~84/81) and fixed a real bug alongside it:
+  `usedNames` was a HashSet local to `GenerateSquad`, so duplicate names
+  were already possible *across* teams even before the pool was small —
+  promoted to an instance field so dedup is genuinely league-wide.
+- Converted every attribute roll (`ApplyBaseAttributes` and the ten
+  `Generate<Position>` methods) from a flat `Random.Range` to a bell curve
+  centered on the old range, and raised ~18 unrealistically low "dump stat"
+  floors (a striker's Defending could roll as low as 5) — together these
+  make rare outliers possible while eliminating the single-digit stats that
+  prompted the complaint in the first place. Verified across ~6000 sampled
+  attributes: only 0.05% fell below 10.
+
+### New Career screen redesign
+- Split into a real 2-step wizard (manager name, then club selection) —
+  manager name is now actually required (Continue disabled until non-empty),
+  the club grid stretches to the full content width once it isn't sharing
+  the row with a name column, and the subtitle correctly reads "Step 1 of 2"
+  /"Step 2 of 2" instead of a hardcoded "Step 1 of 1".
+- Fixed a TMP mesh-regen bug found along the way: the step subtitle wasn't
+  updating on step 2 because the existing blank-label recovery sweep can
+  silently swap out a label's `TextMeshProUGUI` component, orphaning a
+  cached reference to it — fixed by caching the parent GameObject and doing
+  a fresh `GetComponentInChildren` lookup each time instead.
+
+### Manager influence
+A genuine back-and-forth discussion (per the user's own request, established
+in an earlier session, to discuss before building) that produced several
+shipped features:
+- **Formation fit-penalty** (`ManagerFormationFit.cs`, new) — formation was
+  confirmed genuinely cosmetic before this (`Formation` never appeared in
+  `AgentMatchSimulator.SimulateMatch` at all). Now builds a throwaway
+  fit-penalized clone of each team's XI before every simulated match, so
+  playing someone out of position has a real mechanical cost, without
+  touching the protected simulator or the real squad data.
+- **Tactics Board mismatch flagging**, refined twice: first a binary
+  red/normal flag on the slot's position label, then — after the user
+  played with it — changed to show the player's *true* position in the
+  warning color instead of the slot's (so a misplaced ST at DM shows red
+  "ST", not red "DM"), plus a new lenient orange tier (half penalty, fit
+  0.80) for positions "adjacent" to a player's primary even without an
+  actually-rolled secondary (e.g. an LW at LM). The adjacency map mirrors
+  the same position-family relationships the squad generator's own
+  secondary-position rolls already use. Because the fit-penalty system reads
+  the same underlying value, extending the tiers automatically flowed
+  through to the real gameplay penalty too.
+- **A new `ManagerSim` fork of the match simulator** (`Assets/Scripts/
+  ManagerSim/AgentMatchSimulator.cs`) — created at the user's own suggestion
+  ("make research duplicates... then you have free reign") after a "more
+  match stats, without fabricating" discussion concluded an honest Shots on
+  Target stat needed a real on/off-target split the protected simulator
+  can't take. The fork shadows the protected original via same-namespace C#
+  resolution, so no call sites needed to change; verified live with a
+  temporary marker string that it's genuinely what Manager Mode runs, then
+  removed.
+- **New match stats** (Possession%, Chances Created, Shots on Target), all
+  derived from real sim data — shipped in both the full-time report and the
+  live in-match ticker.
+- **A live stamina condition indicator** on Tactics Board pins (green/amber/
+  red border tint, reading the sim's real fatigue formula).
+- **"Tactic" renamed to "Mentality"** throughout (the user's own framing),
+  and made genuinely live mid-match — the three mentality buttons were
+  already visible/clickable during a match but a code comment admitted they
+  were inert ("scaffolded... only affect the next match"); a mid-match
+  change now actually reruns the rest of that match via the same
+  resimulation path substitutions use.
+
+### Live playtesting bug-fix round
+The user played the app and reported four issues in one message, all
+investigated and fixed the same session:
+- **Scroll direction** (Match Events, Squad List) — root-caused via
+  simulated scroll events to `Scrollbar.direction = TopToBottom` being
+  mismatched with `ScrollRect`'s own convention (a different bug from the
+  wheel-sensitivity issue a previous session already fixed and verified).
+  Fixed in three places, including the Tactics Board bench rail, which had
+  the same mistake even though it wasn't reported.
+- **Pin-to-pin dragging** — pins could be dropped on but not dragged
+  themselves, so a formation change that scattered two players' slots
+  couldn't be undone by dragging one back. Added a new `AgentTeam.
+  SwapStartingPositions` and made pins draggable.
+- **Match Log readability** — font 15→19, added line spacing.
+- **Stamina border staying stale after full-time** — confirmed a real bug:
+  the match-minute counter only resets at the *next* match's kickoff, so
+  the Tactics Board kept reading late-match fatigue from the previous match
+  until a new one started.
+
+### Problems encountered
+- **A real ordering bug caught before it shipped.** The first attempt at
+  gating the live-mentality-change logic inferred "is a match currently
+  live" from panel visibility — which turned out to already read as "live"
+  during a *new* match's own setup (before per-match state had actually
+  reset), which would have misfired. Replaced with an explicit boolean flag
+  set only for the true duration of the match replay coroutine — the same
+  flag then turned out to also fix the separate stamina-staleness bug found
+  later in the session.
+- **Reading a freshly-built scrollbar's handle position via script is
+  unreliable within a single synchronous call.** Directly setting
+  `ScrollRect.verticalNormalizedPosition` doesn't synchronously recompute
+  the linked `Scrollbar` handle's rendered size on a screen that hasn't run
+  its own Update cycle yet; had to split verification into separate calls
+  across a real frame boundary to get a trustworthy before/after reading.
+- `OpenFootballMatch` turned out to be a struct, not a class — an
+  `== null` guard written against it was a compile error, not a runtime
+  bug; caught immediately by the compiler.
+- Chrome-build-once (screens built once per Play Mode session) meant a
+  scrollbar-direction fix needed a Play Mode restart to actually become
+  visible, even though the underlying code change had already compiled
+  clean — confirmed with the user before restarting, since there was
+  visible in-progress career state on screen at the time.
+
+### Backlog captured, not implemented
+GK stats not shown on Player Detail (the screen shows only irrelevant
+outfield attributes for a goalkeeper, never `Goalkeeping`/`Reflexes`,
+explicitly deferred to after this session's handoff); tactical shape
+(formation-vs-formation interaction) remains queued as its own future
+discussion; player progression and a transfer market/finance system remain
+larger, uncommitted roadmap ideas; a set-piece taker designation and a
+per-player attack/defend role toggle were floated as smaller manager-
+influence ideas but not committed to.
+
+---
+
 ## 2026-08-08 — 1920x1080 redesign live-verification pass, screen by screen
 
 **Commits:** `b3fccdb` (2026-08-08 22:58:02 +0100) — "fix: Manager Mode UI
