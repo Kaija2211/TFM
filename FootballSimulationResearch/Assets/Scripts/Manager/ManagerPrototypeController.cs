@@ -6616,9 +6616,21 @@ namespace Manager
                 new[] { "DEEP", "BALANCED", "HIGH LINE" }, (int)tacticalSliders.DefensiveDepth,
                 index => { tacticalSliders.DefensiveDepth = (DefensiveDepthSetting)index; RefreshTacticsScreenUI(); });
 
-            BuildSliderRow(leftColumn.transform, "TEMPO", sliderTop,
+            sliderTop = BuildSliderRow(leftColumn.transform, "TEMPO", sliderTop,
                 new[] { "SLOW", "BALANCED", "FAST" }, (int)tacticalSliders.Tempo,
                 index => { tacticalSliders.Tempo = (TempoSetting)index; RefreshTacticsScreenUI(); });
+
+            GameObject fitSummary = new GameObject("TacticalFitSummary", typeof(RectTransform), typeof(Image));
+            fitSummary.transform.SetParent(leftColumn.transform, false);
+            RectTransform fitRect = fitSummary.GetComponent<RectTransform>();
+            fitRect.anchorMin = new Vector2(0f, 1f);
+            fitRect.anchorMax = new Vector2(1f, 1f);
+            fitRect.pivot = new Vector2(0.5f, 1f);
+            fitRect.offsetMin = new Vector2(0f, -(sliderTop + 92f));
+            fitRect.offsetMax = new Vector2(0f, -sliderTop);
+            fitSummary.GetComponent<Image>().color = ManagerUITheme.CardNeutral;
+            ManagerUITheme.BuildLabel(fitSummary.transform, BuildTacticalFitSummary(team), 14,
+                ManagerUITheme.TextBody, TextAlignmentOptions.Center, FontStyles.Bold);
 
             GameObject rightColumn = new GameObject("RoleAssignmentColumn", typeof(RectTransform));
             rightColumn.transform.SetParent(tacticsScreenPanel.transform, false);
@@ -6670,6 +6682,42 @@ namespace Manager
                 player => AssignRole(SquadRoleSlot.RightCornerTaker, player), CornerSummary);
 
             StartCoroutine(RecoverBlankLabelsNextFrame(tacticsScreenPanel.transform));
+        }
+
+        // Moneyball-style tactical value: the same attributes used by the match engine's
+        // chance pathways are summarized here, so a specialist can be valuable to this
+        // system even when his headline Overall is unremarkable.
+        private string BuildTacticalFitSummary(AgentTeam team)
+        {
+            if (team == null || team.StartingEleven.Count == 0) return "TACTICAL FIT —";
+
+            float approach = tacticalSliders.Width == WidthSetting.Wide
+                ? Average(team.StartingEleven, p => p.Crossing * 0.30f + p.Pace * 0.18f + p.Stamina * 0.14f + p.OffTheBall * 0.12f + p.Heading * 0.12f + p.JumpingReach * 0.14f)
+                : tacticalSliders.Width == WidthSetting.Narrow
+                    ? Average(team.StartingEleven, p => p.FirstTouch * 0.20f + p.Passing * 0.20f + p.Technique * 0.18f + p.Vision * 0.16f + p.Decisions * 0.16f + p.Agility * 0.10f)
+                    : Average(team.StartingEleven, p => p.Passing * 0.18f + p.FirstTouch * 0.14f + p.Decisions * 0.14f + p.WorkRate * 0.12f + p.Pace * 0.12f + p.Technique * 0.12f + p.DefensivePositioning * 0.18f);
+
+            float tempo = tacticalSliders.Tempo == TempoSetting.Fast
+                ? Average(team.StartingEleven, p => p.Acceleration * 0.24f + p.Pace * 0.18f + p.Stamina * 0.18f + p.WorkRate * 0.16f + p.Decisions * 0.14f + p.OffTheBall * 0.10f)
+                : tacticalSliders.Tempo == TempoSetting.Slow
+                    ? Average(team.StartingEleven, p => p.FirstTouch * 0.22f + p.Passing * 0.20f + p.Technique * 0.18f + p.Decisions * 0.18f + p.Composure * 0.14f + p.Vision * 0.08f)
+                    : Average(team.StartingEleven, p => p.Decisions * 0.20f + p.Composure * 0.18f + p.Passing * 0.16f + p.Stamina * 0.16f + p.FirstTouch * 0.15f + p.WorkRate * 0.15f);
+
+            float defence = tacticalSliders.DefensiveDepth == DefensiveDepthSetting.High
+                ? Average(team.StartingEleven, p => p.Acceleration * 0.20f + p.Pace * 0.18f + p.Anticipation * 0.20f + p.WorkRate * 0.16f + p.Stamina * 0.14f + p.DefensivePositioning * 0.12f)
+                : tacticalSliders.DefensiveDepth == DefensiveDepthSetting.Deep
+                    ? Average(team.StartingEleven, p => p.DefensivePositioning * 0.24f + p.Marking * 0.18f + p.JumpingReach * 0.16f + p.Strength * 0.14f + p.Anticipation * 0.16f + p.Heading * 0.12f)
+                    : Average(team.StartingEleven, p => p.DefensivePositioning * 0.22f + p.Anticipation * 0.18f + p.Tackling * 0.16f + p.Decisions * 0.14f + p.Pace * 0.12f + p.Strength * 0.10f + p.WorkRate * 0.08f);
+
+            float fit = approach * 0.40f + tempo * 0.30f + defence * 0.30f;
+            return $"TACTICAL FIT  {fit:F0}/99\nAPPROACH {approach:F0}   ·   TEMPO {tempo:F0}   ·   DEFENCE {defence:F0}";
+        }
+
+        private static float Average(List<PlayerAgent> players, Func<PlayerAgent, float> selector)
+        {
+            float total = 0f;
+            foreach (PlayerAgent player in players) total += selector(player);
+            return players.Count > 0 ? total / players.Count : 0f;
         }
 
         // One row: a left-aligned label plus a 3-way toggle-button group, same
@@ -8143,8 +8191,8 @@ namespace Manager
 
         // Rebuilt in full each time (unlike Title/Team Select, which build once) since the
         // content changes per player. Only uses PlayerAgent fields that actually exist -
-        // no invented descriptive role titles like "Ball-Playing Defender", since this
-        // data doesn't track that (Age/Height do exist, see the meta line below).
+        // Archetypes are generated data now, so the descriptive footballing profile in
+        // the header is genuine rather than inferred UI flavour text.
         private void RefreshPlayerInspectUI()
         {
             if (playerInspectContentContainer == null || inspectSquadPlayers.Count == 0)
@@ -8264,7 +8312,8 @@ namespace Manager
             metaRect.sizeDelta = new Vector2(-420f, 34f);
             metaRect.anchoredPosition = new Vector2(300f, -116f);
             string nationalityName = ManagerPlayerNationality.GetNationality(player).Name;
-            string metaText = $"{player.Role}  ·  {nationalityName}  ·  {player.Age} yrs  ·  {player.Height:F0}cm  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
+            string archetypeText = string.IsNullOrWhiteSpace(player.Archetype) ? player.Role.ToString() : player.Archetype;
+            string metaText = $"{archetypeText}  ·  {nationalityName}  ·  {player.Age} yrs  ·  {player.Height:F0}cm  ·  Weak Foot: {BuildFootRating(player.WeakFoot)}  ·  Player {inspectPlayerIndex + 1} of {inspectSquadPlayers.Count} ({squadStatus})";
             TextMeshProUGUI metaTMP = ManagerUITheme.BuildLabel(metaLabel.transform, metaText, 21, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
             if (weakFootStarSpriteAsset != null) metaTMP.spriteAsset = weakFootStarSpriteAsset;
 
@@ -8462,48 +8511,58 @@ namespace Manager
                 // surfaced anywhere in the UI until now.
                 BuildAttributeColumn(attributeGridRect, 0, 4, "Goalkeeping", new (string, float)[]
                 {
-                    ("Goalkeeping", player.Goalkeeping), ("Reflexes", player.Reflexes)
+                    ("Handling", player.Handling), ("Reflexes", player.Reflexes),
+                    ("One On Ones", player.OneOnOnes), ("GK Positioning", player.GoalkeeperPositioning),
+                    ("Aerial Command", player.AerialCommand)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
                 {
-                    ("Positioning", player.Positioning), ("Composure", player.Composure), ("Leadership", player.Leadership)
+                    ("Anticipation", player.Anticipation), ("Decisions", player.Decisions),
+                    ("Composure", player.Composure), ("Leadership", player.Leadership)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 2, 4, "Distribution", new (string, float)[]
                 {
-                    ("Passing", player.Passing)
+                    ("Distribution", player.Distribution), ("Passing", player.Passing),
+                    ("First Touch", player.FirstTouch), ("Weak Foot", player.WeakFoot)
                 });
 
                 BuildAttributeColumn(attributeGridRect, 3, 4, "Physical", new (string, float)[]
                 {
-                    ("Pace", player.Pace), ("Strength", player.Strength), ("Stamina", player.Stamina), ("Aerial", player.Aerial)
+                    ("Acceleration", player.Acceleration), ("Pace", player.Pace),
+                    ("Strength", player.Strength), ("Jumping Reach", player.JumpingReach)
                 });
             }
             else
             {
-                BuildAttributeColumn(attributeGridRect, 0, 4, "Technical", new (string, float)[]
+                BuildAttributeColumn(attributeGridRect, 0, 3, "Technical", new (string, float)[]
                 {
-                    ("Finishing", player.Finishing), ("Passing", player.Passing), ("Dribbling", player.Dribbling),
-                    ("Crossing", player.Crossing), ("Heading", player.Heading), ("Long Shots", player.LongShots),
-                    ("Through Balls", player.ThroughBalls), ("Free Kicks", player.FreeKicks)
+                    ("Finishing", player.Finishing), ("First Touch", player.FirstTouch),
+                    ("Passing", player.Passing), ("Technique", player.Technique),
+                    ("Dribbling", player.Dribbling), ("Crossing", player.Crossing),
+                    ("Heading", player.Heading), ("Long Shots", player.LongShots),
+                    ("Tackling", player.Tackling), ("Marking", player.Marking),
+                    ("Free Kicks", player.FreeKicks), ("Corners", player.Corners), ("Penalties", player.Penalties)
                 });
 
-                BuildAttributeColumn(attributeGridRect, 1, 4, "Mental", new (string, float)[]
+                BuildAttributeColumn(attributeGridRect, 1, 3, "Mental", new (string, float)[]
                 {
-                    ("Creativity", player.Creativity), ("Positioning", player.Positioning), ("Composure", player.Composure),
-                    ("Off The Ball", player.OffTheBall), ("Leadership", player.Leadership)
+                    ("Anticipation", player.Anticipation), ("Decisions", player.Decisions),
+                    ("Composure", player.Composure), ("Vision", player.Vision),
+                    ("Off The Ball", player.OffTheBall), ("Def. Positioning", player.DefensivePositioning),
+                    ("Work Rate", player.WorkRate), ("Aggression", player.Aggression),
+                    ("Leadership", player.Leadership)
                 });
 
-                BuildAttributeColumn(attributeGridRect, 2, 4, "Defensive", new (string, float)[]
+                BuildAttributeColumn(attributeGridRect, 2, 3, "Physical", new (string, float)[]
                 {
-                    ("Defending", player.Defending), ("Tackling", player.Tackling), ("Marking", player.Marking)
+                    ("Acceleration", player.Acceleration), ("Pace", player.Pace),
+                    ("Agility", player.Agility), ("Balance", player.Balance),
+                    ("Strength", player.Strength), ("Stamina", player.Stamina),
+                    ("Jumping Reach", player.JumpingReach)
                 });
 
-                BuildAttributeColumn(attributeGridRect, 3, 4, "Physical", new (string, float)[]
-                {
-                    ("Pace", player.Pace), ("Strength", player.Strength), ("Stamina", player.Stamina), ("Aerial", player.Aerial)
-                });
             }
 
             // Player Inspect fully destroys and rebuilds every label on every refresh
@@ -8737,12 +8796,19 @@ namespace Manager
             {
                 case "Finishing": return "FIN";
                 case "Passing": return "PAS";
+                case "FirstTouch": return "1ST";
+                case "Technique": return "TECH";
                 case "Dribbling": return "DRI";
                 case "Crossing": return "CRO";
                 case "Heading": return "HEA";
                 case "LongShots": return "L.SHOT";
                 case "ThroughBalls": return "T.BALL";
                 case "Creativity": return "CREA";
+                case "Anticipation": return "ANT";
+                case "Decisions": return "DEC";
+                case "Vision": return "VIS";
+                case "DefensivePositioning": return "D.POS";
+                case "WorkRate": return "WORK";
                 case "Positioning": return "POS";
                 case "Composure": return "COMP";
                 case "OffTheBall": return "OTB";
@@ -8750,11 +8816,20 @@ namespace Manager
                 case "Tackling": return "TACK";
                 case "Marking": return "MARK";
                 case "Pace": return "PACE";
+                case "Acceleration": return "ACC";
+                case "Agility": return "AGI";
+                case "Balance": return "BAL";
                 case "Strength": return "STR";
                 case "Stamina": return "STAM";
                 case "Aerial": return "AER";
+                case "JumpingReach": return "JUMP";
                 case "Goalkeeping": return "GK";
                 case "Reflexes": return "REFL";
+                case "Handling": return "HAND";
+                case "OneOnOnes": return "1V1";
+                case "AerialCommand": return "A.CMD";
+                case "Distribution": return "DIST";
+                case "GoalkeeperPositioning": return "GK.POS";
                 default: return attributeName.ToUpperInvariant();
             }
         }
@@ -12060,6 +12135,11 @@ namespace Manager
             player.Strength = Mathf.Max(player.Strength, 78f);
             player.Aerial = Mathf.Max(player.Aerial, 82f);
 
+            // These bespoke clamps were authored against the original attribute set;
+            // rebuild the detailed profile so they remain real strengths under v2.
+            player.AttributeSchemaVersion = 0;
+            PlayerAttributeModel.EnsureCurrent(player);
+
 
             // Make sure the boost does not leave him with no development room.
             player.Potential = Mathf.Max(player.Potential, player.GetOverallRating() + 3f);
@@ -12092,6 +12172,9 @@ namespace Manager
             player.Dribbling = Mathf.Max(player.Dribbling, 85f);
             player.Pace = Mathf.Max(player.Pace, 77f);
             player.FreeKicks = Mathf.Max(player.FreeKicks, 89f);
+
+            player.AttributeSchemaVersion = 0;
+            PlayerAttributeModel.EnsureCurrent(player);
 
             // Make sure the boost does not leave him with no development room.
             player.Potential = Mathf.Max(player.Potential, player.GetOverallRating() + 3f);

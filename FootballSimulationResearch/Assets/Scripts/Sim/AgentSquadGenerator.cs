@@ -474,6 +474,13 @@ namespace Sim
             ApplyAgeAndHeight(player);
             GenerateNewerAttributes(player, position, attackMultiplier, defenceMultiplier);
 
+            // Populate the richer v2 profile from this generator's established shape.
+            // A later pass replaces this compatibility bridge with archetype-first
+            // generation; keeping it here makes every newly-created player complete in
+            // the meantime and gives old/new saves identical migration semantics.
+            PlayerAttributeModel.UpgradeLegacyProfile(player);
+            PlayerArchetypeGenerator.AssignAndApply(player);
+
             ClampAttributes(player);
             AddSecondaryPositions(player);
 
@@ -483,14 +490,28 @@ namespace Sim
         private static void ShiftGroupToAverage(List<PlayerAgent> players, float targetAverage)
         {
             if (players == null || players.Count == 0) return;
-            for (int pass = 0; pass < 3; pass++)
+
+            // A club target is a squad budget, not an instruction to make eleven near-
+            // clones. Preserve the natural ranking from generation and deliberately
+            // distribute quality into stars, core starters and weaker final options.
+            List<PlayerAgent> ranked = new List<PlayerAgent>(players);
+            ranked.Sort((a, b) => b.GetOverallRating().CompareTo(a.GetOverallRating()));
+            float half = (ranked.Count - 1) * 0.5f;
+            float spread = ranked.Count >= 10 ? 3.2f : 2.2f;
+
+            for (int index = 0; index < ranked.Count; index++)
             {
-                float current = 0f;
-                foreach (PlayerAgent player in players) current += player.GetOverallRating();
-                float shift = targetAverage - current / players.Count;
-                if (Mathf.Abs(shift) < 0.02f) break;
-                foreach (PlayerAgent player in players) ShiftPlayerAttributes(player, shift);
+                float tierOffset = half > 0f ? ((half - index) / half) * spread : 0f;
+                ShiftPlayerToOverall(ranked[index], targetAverage + tierOffset);
             }
+
+            // Clamping can introduce a tiny mean error at the extremes. Correct it as a
+            // group without flattening the rank-based distribution above.
+            float current = 0f;
+            foreach (PlayerAgent player in players) current += player.GetOverallRating();
+            float correction = targetAverage - current / players.Count;
+            if (Mathf.Abs(correction) >= 0.02f)
+                foreach (PlayerAgent player in players) ShiftPlayerAttributes(player, correction);
         }
 
         private static void ShiftPlayerToOverall(PlayerAgent player, float targetOverall)
@@ -526,10 +547,29 @@ namespace Sim
             player.Stamina = Shift(player.Stamina, shift);
             player.Aerial = Shift(player.Aerial, shift);
             player.WeakFoot = Shift(player.WeakFoot, shift * 0.5f);
+            player.FirstTouch = Shift(player.FirstTouch, shift);
+            player.Technique = Shift(player.Technique, shift);
+            player.Corners = Shift(player.Corners, shift);
+            player.Penalties = Shift(player.Penalties, shift);
+            player.Anticipation = Shift(player.Anticipation, shift);
+            player.Decisions = Shift(player.Decisions, shift);
+            player.Vision = Shift(player.Vision, shift);
+            player.DefensivePositioning = Shift(player.DefensivePositioning, shift);
+            player.WorkRate = Shift(player.WorkRate, shift);
+            player.Aggression = Shift(player.Aggression, shift);
+            player.Acceleration = Shift(player.Acceleration, shift);
+            player.Agility = Shift(player.Agility, shift);
+            player.Balance = Shift(player.Balance, shift);
+            player.JumpingReach = Shift(player.JumpingReach, shift);
             if (player.PrimaryPosition == PlayerPosition.GK)
             {
                 player.Goalkeeping = Shift(player.Goalkeeping, shift);
                 player.Reflexes = Shift(player.Reflexes, shift);
+                player.Handling = Shift(player.Handling, shift);
+                player.OneOnOnes = Shift(player.OneOnOnes, shift);
+                player.AerialCommand = Shift(player.AerialCommand, shift);
+                player.Distribution = Shift(player.Distribution, shift);
+                player.GoalkeeperPositioning = Shift(player.GoalkeeperPositioning, shift);
             }
             float newOverall = player.GetOverallRating();
             player.Potential = Mathf.Clamp(Mathf.Max(newOverall, player.Potential + shift), newOverall, 99f);

@@ -76,14 +76,16 @@ namespace Manager
         // do nothing.
         public static readonly string[] OutfieldFocusableAttributes =
         {
-            "Finishing", "Passing", "Dribbling", "Crossing", "Heading", "LongShots",
-            "ThroughBalls", "Creativity", "Positioning", "Composure", "OffTheBall",
-            "Defending", "Tackling", "Marking", "Pace", "Strength", "Stamina", "Aerial"
+            "Finishing", "FirstTouch", "Passing", "Technique", "Dribbling", "Crossing",
+            "Heading", "LongShots", "Tackling", "Marking", "Anticipation", "Decisions",
+            "Composure", "Vision", "OffTheBall", "DefensivePositioning", "WorkRate",
+            "Acceleration", "Pace", "Agility", "Balance", "Strength", "Stamina", "JumpingReach"
         };
 
         public static readonly string[] GoalkeeperFocusableAttributes =
         {
-            "Goalkeeping", "Reflexes", "Positioning", "Composure", "Passing"
+            "Handling", "Reflexes", "OneOnOnes", "AerialCommand", "Distribution",
+            "GoalkeeperPositioning", "Decisions", "Composure", "Passing"
         };
 
         public static string[] GetFocusableAttributes(PlayerPosition position)

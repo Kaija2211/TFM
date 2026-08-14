@@ -426,6 +426,16 @@ namespace Manager
             player.Defending += Focused(amount, "Defending", focusAttributes);
             player.Tackling += Focused(amount, "Tackling", focusAttributes);
             player.Marking += Focused(amount, "Marking", focusAttributes);
+            player.FirstTouch += Focused(amount, "FirstTouch", focusAttributes);
+            player.Technique += Focused(amount, "Technique", focusAttributes);
+            player.Corners += Focused(amount, "Corners", focusAttributes);
+            player.Penalties += Focused(amount, "Penalties", focusAttributes);
+            player.Anticipation += Focused(amount, "Anticipation", focusAttributes);
+            player.Decisions += Focused(amount, "Decisions", focusAttributes);
+            player.Vision += Focused(amount, "Vision", focusAttributes);
+            player.DefensivePositioning += Focused(amount, "DefensivePositioning", focusAttributes);
+            player.WorkRate += Focused(amount, "WorkRate", focusAttributes);
+            player.Aggression += Focused(amount * 0.5f, "Aggression", focusAttributes);
 
             // Physical attributes develop more slowly than technical/mental as a young
             // player matures - the body was already closer to its ceiling than the
@@ -435,6 +445,10 @@ namespace Manager
             player.Strength += Focused(amount * 0.6f, "Strength", focusAttributes);
             player.Stamina += Focused(amount * 0.5f, "Stamina", focusAttributes);
             player.Aerial += Focused(amount * 0.5f, "Aerial", focusAttributes);
+            player.Acceleration += Focused(amount * 0.45f, "Acceleration", focusAttributes);
+            player.Agility += Focused(amount * 0.45f, "Agility", focusAttributes);
+            player.Balance += Focused(amount * 0.55f, "Balance", focusAttributes);
+            player.JumpingReach += Focused(amount * 0.35f, "JumpingReach", focusAttributes);
         }
 
         private static float Focused(float baseAmount, string attributeName, IReadOnlyCollection<string> focusAttributes)
@@ -450,6 +464,10 @@ namespace Manager
             player.Stamina -= amount * 1.2f;
             player.Strength -= amount * 0.8f;
             player.Aerial -= amount * 0.6f;
+            player.Acceleration -= amount * 1.5f;
+            player.Agility -= amount * 1.15f;
+            player.Balance -= amount * 0.75f;
+            player.JumpingReach -= amount * 0.55f;
 
             float technicalDecline = amount * 0.4f * veteranFactor;
             player.Finishing -= technicalDecline;
@@ -458,11 +476,16 @@ namespace Manager
             player.Crossing -= technicalDecline;
             player.Defending -= technicalDecline * 0.5f;
             player.Tackling -= technicalDecline * 0.5f;
+            player.FirstTouch -= technicalDecline;
+            player.Technique -= technicalDecline * 0.8f;
+            player.WorkRate -= technicalDecline * 0.5f;
 
             // "Reading the game" is the one thing that doesn't decline with age in real
             // football - experience keeps this roughly flat or even nudging up.
             player.Composure += amount * 0.15f;
             player.Positioning += amount * 0.1f;
+            player.Anticipation += amount * 0.1f;
+            player.Decisions += amount * 0.12f;
         }
 
         private static void GrowGoalkeeperAttributes(PlayerAgent player, float amount, IReadOnlyCollection<string> focusAttributes = null)
@@ -472,6 +495,12 @@ namespace Manager
             player.Positioning += Focused(amount, "Positioning", focusAttributes);
             player.Composure += Focused(amount, "Composure", focusAttributes);
             player.Passing += Focused(amount * 0.6f, "Passing", focusAttributes);
+            player.Handling += Focused(amount * 1.35f, "Handling", focusAttributes);
+            player.OneOnOnes += Focused(amount * 1.3f, "OneOnOnes", focusAttributes);
+            player.AerialCommand += Focused(amount, "AerialCommand", focusAttributes);
+            player.Distribution += Focused(amount * 0.65f, "Distribution", focusAttributes);
+            player.GoalkeeperPositioning += Focused(amount * 1.1f, "GoalkeeperPositioning", focusAttributes);
+            player.Decisions += Focused(amount * 0.8f, "Decisions", focusAttributes);
         }
 
         private static void DeclineGoalkeeperAttributes(PlayerAgent player, float amount, float veteranFactor)
@@ -479,9 +508,13 @@ namespace Manager
             // Reflexes are goalkeeping's "pace" - the first and sharpest thing to go.
             player.Reflexes -= amount * 1.3f;
             player.Goalkeeping -= amount * 0.5f * veteranFactor;
+            player.Handling -= amount * 0.45f * veteranFactor;
+            player.OneOnOnes -= amount * 0.75f;
+            player.AerialCommand -= amount * 0.3f * veteranFactor;
 
             // Shot-stopping composure/positioning from experience holds up well.
             player.Composure += amount * 0.1f;
+            player.GoalkeeperPositioning += amount * 0.08f;
         }
 
         // Prime-age (roughly 24-30) players aren't static, just not trending strongly
@@ -494,11 +527,15 @@ namespace Manager
             {
                 player.Goalkeeping += noise;
                 player.Reflexes += noise;
+                player.Handling += noise * 0.5f;
+                player.OneOnOnes += noise * 0.5f;
             }
             else
             {
                 player.Composure += noise;
                 player.Positioning += noise;
+                player.Decisions += noise * 0.5f;
+                player.Anticipation += noise * 0.5f;
             }
         }
 
@@ -535,6 +572,7 @@ namespace Manager
             player.Reflexes = Clamp(player.Reflexes);
 
             player.WeakFoot = Clamp(player.WeakFoot);
+            PlayerAttributeModel.ClampAll(player);
         }
 
         private static float Clamp(float value)

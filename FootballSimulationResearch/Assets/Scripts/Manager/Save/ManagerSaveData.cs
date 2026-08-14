@@ -21,8 +21,10 @@ namespace Manager.Save
     [Serializable]
     public class PlayerAgentSaveData
     {
+        public int AttributeSchemaVersion;
         public string PlayerId;
         public string Name;
+        public string Archetype;
         public int Age;
         public float Height;
         public PlayerRole Role;
@@ -35,14 +37,20 @@ namespace Manager.Save
         public float Pace, Strength, Stamina, Aerial;
         public float Goalkeeping, Reflexes;
         public float WeakFoot;
+        public float FirstTouch, Technique, Corners, Penalties;
+        public float Anticipation, Decisions, Vision, DefensivePositioning, WorkRate, Aggression;
+        public float Acceleration, Agility, Balance, JumpingReach;
+        public float Handling, OneOnOnes, AerialCommand, Distribution, GoalkeeperPositioning;
         public float Potential;
 
         public static PlayerAgentSaveData FromPlayer(PlayerAgent p)
         {
             return new PlayerAgentSaveData
             {
+                AttributeSchemaVersion = PlayerAttributeModel.CurrentSchemaVersion,
                 PlayerId = p.PlayerId,
                 Name = p.Name,
+                Archetype = p.Archetype,
                 Age = p.Age,
                 Height = p.Height,
                 Role = p.Role,
@@ -71,6 +79,25 @@ namespace Manager.Save
                 Goalkeeping = p.Goalkeeping,
                 Reflexes = p.Reflexes,
                 WeakFoot = p.WeakFoot,
+                FirstTouch = p.FirstTouch,
+                Technique = p.Technique,
+                Corners = p.Corners,
+                Penalties = p.Penalties,
+                Anticipation = p.Anticipation,
+                Decisions = p.Decisions,
+                Vision = p.Vision,
+                DefensivePositioning = p.DefensivePositioning,
+                WorkRate = p.WorkRate,
+                Aggression = p.Aggression,
+                Acceleration = p.Acceleration,
+                Agility = p.Agility,
+                Balance = p.Balance,
+                JumpingReach = p.JumpingReach,
+                Handling = p.Handling,
+                OneOnOnes = p.OneOnOnes,
+                AerialCommand = p.AerialCommand,
+                Distribution = p.Distribution,
+                GoalkeeperPositioning = p.GoalkeeperPositioning,
                 Potential = p.Potential
             };
         }
@@ -80,6 +107,8 @@ namespace Manager.Save
             PlayerAgent p = new PlayerAgent(Name, Role, PrimaryPosition)
             {
                 PlayerId = PlayerId,
+                Archetype = Archetype,
+                AttributeSchemaVersion = AttributeSchemaVersion,
                 Age = Age,
                 Height = Height,
                 SecondaryPositions = new List<PlayerPosition>(SecondaryPositions),
@@ -106,8 +135,29 @@ namespace Manager.Save
                 Goalkeeping = Goalkeeping,
                 Reflexes = Reflexes,
                 WeakFoot = WeakFoot,
+                FirstTouch = FirstTouch,
+                Technique = Technique,
+                Corners = Corners,
+                Penalties = Penalties,
+                Anticipation = Anticipation,
+                Decisions = Decisions,
+                Vision = Vision,
+                DefensivePositioning = DefensivePositioning,
+                WorkRate = WorkRate,
+                Aggression = Aggression,
+                Acceleration = Acceleration,
+                Agility = Agility,
+                Balance = Balance,
+                JumpingReach = JumpingReach,
+                Handling = Handling,
+                OneOnOnes = OneOnOnes,
+                AerialCommand = AerialCommand,
+                Distribution = Distribution,
+                GoalkeeperPositioning = GoalkeeperPositioning,
                 Potential = Potential
             };
+
+            PlayerAttributeModel.EnsureCurrent(p);
 
             return p;
         }

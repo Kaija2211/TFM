@@ -406,7 +406,11 @@ namespace Manager
             float chanceScore = chanceCreation - defensiveResistance;
 
             float shotChance = Mathf.Clamp(
-                0.42f + chanceScore / 240f,
+                // Attribute specialists now create a wider gap between a well-built
+                // tactical matchup and a poor one. A lower baseline plus stronger
+                // player-v-player differential preserves total shot volume while making
+                // recruitment and tactical fit matter to who earns those shots.
+                0.283f + chanceScore / 68f,
                 0.08f,
                 0.78f
             );
@@ -481,7 +485,10 @@ namespace Manager
             // baseline, not a second place to accidentally drift from Research Mode's
             // calibration.
             float unconditionalGoalChance = Mathf.Clamp(
-                0.302f + (goalQuality - saveQuality) / 320f,
+                // Richer v2 attributes create more pronounced specialists than the flat
+                // legacy profiles. Recalibrated intercept keeps the same player-v-player
+                // differential while restoring league scoring to its historical band.
+                0.111f + (goalQuality - saveQuality) / 220f,
                 0.08f,
                 0.63f
             );
@@ -778,52 +785,45 @@ namespace Manager
                     // dedicated vision/incisive-passing stat, more specific than generic
                     // Passing for exactly this chance type. Still sums to 1.0.
                     return
-                        creator.Passing * 0.175f +
-                        creator.ThroughBalls * 0.175f +
-                        creator.Creativity * 0.35f +
-                        shooter.Positioning * 0.20f +
-                        shooter.Pace * 0.10f;
+                        creator.Passing * 0.20f + creator.Vision * 0.25f +
+                        creator.Decisions * 0.15f + creator.Technique * 0.10f +
+                        shooter.OffTheBall * 0.15f + shooter.Anticipation * 0.10f +
+                        shooter.Acceleration * 0.05f;
 
                 case ChanceType.Cross:
                     return
-                        creator.Crossing * 0.40f +
-                        creator.Pace * 0.15f +
-                        shooter.Heading * 0.25f +
-                        shooter.Aerial * 0.20f;
+                        creator.Crossing * 0.32f + creator.Technique * 0.10f +
+                        creator.Decisions * 0.08f + creator.Pace * 0.10f +
+                        shooter.Heading * 0.22f + shooter.JumpingReach * 0.18f;
 
                 case ChanceType.Dribble:
                     return
-                        creator.Dribbling * 0.40f +
-                        creator.Pace * 0.25f +
-                        creator.Creativity * 0.15f +
-                        shooter.Finishing * 0.20f;
+                        creator.Dribbling * 0.30f + creator.Agility * 0.18f +
+                        creator.Acceleration * 0.17f + creator.Technique * 0.12f +
+                        creator.Decisions * 0.08f + shooter.Finishing * 0.15f;
 
                 case ChanceType.LongShot:
                     // Finishing's original 0.30 split with LongShots (session 7) - the
                     // dedicated shooting-from-distance stat. Still sums to 1.0.
                     return
-                        shooter.Finishing * 0.15f +
-                        shooter.LongShots * 0.15f +
-                        shooter.Composure * 0.30f +
-                        creator.Passing * 0.20f +
-                        creator.Creativity * 0.20f;
+                        shooter.LongShots * 0.28f + shooter.Technique * 0.16f +
+                        shooter.Composure * 0.20f + shooter.Decisions * 0.10f +
+                        creator.Passing * 0.10f + creator.Vision * 0.16f;
 
                 case ChanceType.SetPiece:
                     return
-                        creator.Crossing * 0.35f +
-                        creator.Creativity * 0.15f +
-                        shooter.Heading * 0.25f +
-                        shooter.Aerial * 0.25f;
+                        creator.FreeKicks * 0.18f + creator.Corners * 0.17f +
+                        creator.Crossing * 0.15f + creator.Technique * 0.10f +
+                        shooter.Heading * 0.20f + shooter.JumpingReach * 0.20f;
 
                 case ChanceType.CounterAttack:
                     return
-                        creator.Passing * 0.25f +
-                        creator.Pace * 0.25f +
-                        shooter.Pace * 0.25f +
-                        shooter.Finishing * 0.25f;
+                        creator.Passing * 0.16f + creator.Decisions * 0.12f +
+                        creator.Acceleration * 0.17f + shooter.Acceleration * 0.20f +
+                        shooter.OffTheBall * 0.15f + shooter.Finishing * 0.20f;
 
                 default:
-                    return creator.Creativity * 0.6f + shooter.Finishing * 0.4f;
+                    return creator.Vision * 0.35f + creator.Decisions * 0.25f + shooter.Finishing * 0.40f;
             }
         }
 
@@ -838,47 +838,43 @@ namespace Manager
                     // Defending's original 0.35 split with Marking (session 7) - the
                     // dedicated positional-discipline stat. Still sums to 1.0.
                     return
-                        defender.Positioning * 0.35f +
-                        defender.Defending * 0.175f +
-                        defender.Marking * 0.175f +
-                        goalkeeper.Goalkeeping * 0.30f;
+                        defender.DefensivePositioning * 0.22f + defender.Anticipation * 0.16f +
+                        defender.Marking * 0.17f + defender.Pace * 0.08f +
+                        defender.Decisions * 0.07f + goalkeeper.OneOnOnes * 0.30f;
 
                 case ChanceType.Cross:
                     return
-                        defender.Aerial * 0.35f +
-                        defender.Heading * 0.25f +
-                        defender.Defending * 0.20f +
-                        goalkeeper.Reflexes * 0.20f;
+                        defender.JumpingReach * 0.24f + defender.Heading * 0.18f +
+                        defender.Marking * 0.14f + defender.DefensivePositioning * 0.12f +
+                        goalkeeper.AerialCommand * 0.20f + goalkeeper.Handling * 0.12f;
 
                 case ChanceType.Dribble:
                     return
-                        defender.Tackling * 0.40f +
-                        defender.Pace * 0.25f +
-                        defender.Defending * 0.20f +
-                        goalkeeper.Goalkeeping * 0.15f;
+                        defender.Tackling * 0.28f + defender.Agility * 0.14f +
+                        defender.Acceleration * 0.15f + defender.Balance * 0.10f +
+                        defender.DefensivePositioning * 0.13f + goalkeeper.OneOnOnes * 0.20f;
 
                 case ChanceType.LongShot:
                     return
-                        defender.Defending * 0.20f +
-                        goalkeeper.Positioning * 0.35f +
-                        goalkeeper.Reflexes * 0.45f;
+                        defender.DefensivePositioning * 0.14f + defender.Anticipation * 0.08f +
+                        goalkeeper.GoalkeeperPositioning * 0.30f + goalkeeper.Reflexes * 0.32f +
+                        goalkeeper.Handling * 0.16f;
 
                 case ChanceType.SetPiece:
                     return
-                        defender.Aerial * 0.35f +
-                        defender.Heading * 0.25f +
-                        goalkeeper.Reflexes * 0.25f +
-                        goalkeeper.Goalkeeping * 0.15f;
+                        defender.JumpingReach * 0.22f + defender.Heading * 0.18f +
+                        defender.Marking * 0.12f + goalkeeper.AerialCommand * 0.22f +
+                        goalkeeper.Handling * 0.16f + goalkeeper.Reflexes * 0.10f;
 
                 case ChanceType.CounterAttack:
                     return
-                        defender.Pace * 0.30f +
-                        defender.Tackling * 0.25f +
-                        defender.Positioning * 0.25f +
-                        goalkeeper.Reflexes * 0.20f;
+                        defender.Pace * 0.17f + defender.Acceleration * 0.18f +
+                        defender.Tackling * 0.18f + defender.Anticipation * 0.14f +
+                        defender.Decisions * 0.08f + goalkeeper.OneOnOnes * 0.25f;
 
                 default:
-                    return defender.Defending * 0.6f + goalkeeper.Goalkeeping * 0.4f;
+                    return defender.DefensivePositioning * 0.30f + defender.Tackling * 0.20f +
+                        defender.Marking * 0.10f + goalkeeper.Handling * 0.20f + goalkeeper.Reflexes * 0.20f;
             }
         }
 
@@ -892,30 +888,26 @@ namespace Manager
                 case ChanceType.Cross:
                 case ChanceType.SetPiece:
                     return
-                        shooter.Heading * 0.35f +
-                        shooter.Aerial * 0.25f +
-                        shooter.Composure * 0.20f +
-                        creator.Crossing * 0.20f;
+                        shooter.Heading * 0.25f + shooter.JumpingReach * 0.18f +
+                        shooter.Anticipation * 0.12f + shooter.Composure * 0.15f +
+                        creator.Crossing * 0.15f + creator.Technique * 0.15f;
 
                 case ChanceType.LongShot:
                     return
-                        shooter.Finishing * 0.40f +
-                        shooter.Composure * 0.35f +
-                        creator.Creativity * 0.25f;
+                        shooter.LongShots * 0.32f + shooter.Technique * 0.20f +
+                        shooter.Composure * 0.23f + shooter.Decisions * 0.10f + creator.Vision * 0.15f;
 
                 case ChanceType.Dribble:
                     return
-                        shooter.Finishing * 0.35f +
-                        shooter.Dribbling * 0.25f +
-                        shooter.Composure * 0.25f +
-                        shooter.Pace * 0.15f;
+                        shooter.Finishing * 0.28f + shooter.Dribbling * 0.18f +
+                        shooter.FirstTouch * 0.13f + shooter.Composure * 0.20f +
+                        shooter.Agility * 0.09f + shooter.Acceleration * 0.12f;
 
                 case ChanceType.CounterAttack:
                     return
-                        shooter.Finishing * 0.40f +
-                        shooter.Pace * 0.20f +
-                        shooter.Composure * 0.25f +
-                        creator.Passing * 0.15f;
+                        shooter.Finishing * 0.32f + shooter.Acceleration * 0.16f +
+                        shooter.OffTheBall * 0.15f + shooter.Composure * 0.20f +
+                        creator.Passing * 0.09f + creator.Decisions * 0.08f;
 
                 case ChanceType.ThroughBall:
                 default:
@@ -923,11 +915,10 @@ namespace Manager
                     // dedicated movement-into-space stat, most relevant for exactly this
                     // "gets in behind and finishes" scenario. Still sums to 1.0.
                     return
-                        shooter.Finishing * 0.45f +
-                        shooter.Positioning * 0.10f +
-                        shooter.OffTheBall * 0.10f +
-                        shooter.Composure * 0.20f +
-                        creator.Creativity * 0.15f;
+                        shooter.Finishing * 0.32f + shooter.FirstTouch * 0.10f +
+                        shooter.OffTheBall * 0.14f + shooter.Anticipation * 0.10f +
+                        shooter.Composure * 0.17f + shooter.Decisions * 0.07f +
+                        creator.Vision * 0.10f;
             }
         }
 
@@ -941,22 +932,20 @@ namespace Manager
                 case ChanceType.Cross:
                 case ChanceType.SetPiece:
                     return
-                        goalkeeper.Reflexes * 0.35f +
-                        goalkeeper.Goalkeeping * 0.30f +
-                        defender.Aerial * 0.20f +
-                        defender.Positioning * 0.15f;
+                        goalkeeper.AerialCommand * 0.28f + goalkeeper.Handling * 0.22f +
+                        goalkeeper.Reflexes * 0.15f + goalkeeper.GoalkeeperPositioning * 0.13f +
+                        defender.JumpingReach * 0.12f + defender.DefensivePositioning * 0.10f;
 
                 case ChanceType.LongShot:
                     return
-                        goalkeeper.Reflexes * 0.45f +
-                        goalkeeper.Positioning * 0.35f +
-                        goalkeeper.Goalkeeping * 0.20f;
+                        goalkeeper.Reflexes * 0.38f + goalkeeper.GoalkeeperPositioning * 0.28f +
+                        goalkeeper.Handling * 0.20f + goalkeeper.Decisions * 0.14f;
 
                 default:
                     return
-                        goalkeeper.Goalkeeping * 0.45f +
-                        goalkeeper.Reflexes * 0.35f +
-                        defender.Defending * 0.20f;
+                        goalkeeper.OneOnOnes * 0.27f + goalkeeper.Reflexes * 0.24f +
+                        goalkeeper.Handling * 0.22f + goalkeeper.GoalkeeperPositioning * 0.12f +
+                        defender.DefensivePositioning * 0.15f;
             }
         }
 
@@ -988,7 +977,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.RW ||
                         p.PrimaryPosition == PlayerPosition.LW
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Passing + p.Creativity);
+                    return PickWeightedByAttribute(candidates, p => p.Passing + p.Vision + p.Decisions * 0.5f);
 
                 case ChanceType.Dribble:
                 case ChanceType.CounterAttack:
@@ -998,7 +987,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.AM ||
                         p.PrimaryPosition == PlayerPosition.ST
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Dribbling + p.Pace);
+                    return PickWeightedByAttribute(candidates, p => p.Dribbling + p.Acceleration + p.Agility * 0.5f);
 
                 case ChanceType.SetPiece:
                     candidates = team.StartingEleven.FindAll(p =>
@@ -1035,7 +1024,7 @@ namespace Manager
                         }
                     }
 
-                    return PickWeightedByAttribute(candidates, p => p.Crossing + p.Creativity);
+                    return PickWeightedByAttribute(candidates, p => p.Corners + p.Crossing + p.Technique * 0.5f);
 
                 default:
                     return PickCreativePlayerFallback(team);
@@ -1058,7 +1047,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.RW ||
                         p.PrimaryPosition == PlayerPosition.LW
                     );
-                    attributeSelector = p => p.Heading + p.Aerial + p.Finishing * 0.5f;
+                    attributeSelector = p => p.Heading + p.JumpingReach + p.Anticipation * 0.5f + p.Finishing * 0.5f;
                     break;
 
                 case ChanceType.LongShot:
@@ -1069,7 +1058,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.LW ||
                         p.PrimaryPosition == PlayerPosition.ST
                     );
-                    attributeSelector = p => p.Finishing + p.LongShots + p.Composure;
+                    attributeSelector = p => p.LongShots + p.Technique + p.Composure + p.Decisions * 0.5f;
                     break;
 
                 case ChanceType.CounterAttack:
@@ -1082,7 +1071,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.LW ||
                         p.PrimaryPosition == PlayerPosition.AM
                     );
-                    attributeSelector = p => p.Finishing + p.Positioning + p.OffTheBall + p.Pace * 0.3f;
+                    attributeSelector = p => p.Finishing + p.Anticipation + p.OffTheBall + p.Acceleration * 0.4f;
                     break;
             }
 
@@ -1118,7 +1107,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.RB ||
                         p.PrimaryPosition == PlayerPosition.LB
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Aerial + p.Heading + p.Defending);
+                    return PickWeightedByAttribute(candidates, p => p.JumpingReach + p.Heading + p.Marking + p.AerialCommand * 0.25f);
 
                 case ChanceType.Dribble:
                 case ChanceType.CounterAttack:
@@ -1130,7 +1119,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.LWB ||
                         p.PrimaryPosition == PlayerPosition.DM
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Tackling + p.Pace + p.Defending);
+                    return PickWeightedByAttribute(candidates, p => p.Tackling + p.Acceleration + p.Agility * 0.5f + p.DefensivePositioning);
 
                 case ChanceType.ThroughBall:
                 case ChanceType.LongShot:
@@ -1140,7 +1129,7 @@ namespace Manager
                         p.PrimaryPosition == PlayerPosition.DM ||
                         p.PrimaryPosition == PlayerPosition.CM
                     );
-                    return PickWeightedByAttribute(candidates, p => p.Positioning + p.Defending + p.Marking + p.Tackling);
+                    return PickWeightedByAttribute(candidates, p => p.DefensivePositioning + p.Anticipation + p.Marking + p.Tackling);
             }
         }
 
@@ -1166,7 +1155,7 @@ namespace Manager
                 p.Role == PlayerRole.Forward
             );
 
-            return PickWeightedByAttribute(candidates, p => p.Creativity);
+            return PickWeightedByAttribute(candidates, p => p.Vision + p.Decisions + p.Technique * 0.5f);
         }
 
         private PlayerAgent PickWeightedByAttribute(

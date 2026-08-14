@@ -85,28 +85,31 @@ namespace Manager
         }
 
         private static float GetControlScore(PlayerAgent player) => WeightedAverage(
-            (player.Passing, 0.28f), (player.Composure, 0.20f), (player.Positioning, 0.16f),
-            (player.Stamina, 0.13f), (player.Dribbling, 0.10f), (player.Creativity, 0.08f),
-            (player.WeakFoot, 0.05f));
+            (player.Passing, 0.20f), (player.FirstTouch, 0.16f), (player.Decisions, 0.15f),
+            (player.Composure, 0.14f), (player.Technique, 0.11f), (player.Stamina, 0.09f),
+            (player.WorkRate, 0.07f), (player.Dribbling, 0.05f), (player.WeakFoot, 0.03f));
 
         private static float GetCreationScore(PlayerAgent player) => WeightedAverage(
-            (player.Creativity, 0.23f), (player.Passing, 0.20f), (player.ThroughBalls, 0.16f),
-            (player.Dribbling, 0.14f), (player.Crossing, 0.11f), (player.OffTheBall, 0.09f),
-            (player.Composure, 0.07f));
+            (player.Vision, 0.22f), (player.Passing, 0.18f), (player.Decisions, 0.14f),
+            (player.Technique, 0.12f), (player.Dribbling, 0.11f), (player.Crossing, 0.09f),
+            (player.OffTheBall, 0.08f), (player.FirstTouch, 0.06f));
 
         private static float GetThreatScore(PlayerAgent player) => WeightedAverage(
-            (player.Finishing, 0.25f), (player.OffTheBall, 0.17f), (player.Positioning, 0.15f),
-            (player.Composure, 0.13f), (player.Heading, 0.10f), (player.LongShots, 0.08f),
-            (player.Pace, 0.07f), (player.Aerial, 0.05f));
+            (player.Finishing, 0.22f), (player.OffTheBall, 0.16f), (player.Anticipation, 0.13f),
+            (player.Composure, 0.12f), (player.FirstTouch, 0.09f), (player.Heading, 0.08f),
+            (player.LongShots, 0.07f), (player.Acceleration, 0.06f), (player.Pace, 0.04f),
+            (player.JumpingReach, 0.03f));
 
         private static float GetDefenceScore(PlayerAgent player) => WeightedAverage(
-            (player.Defending, 0.24f), (player.Marking, 0.20f), (player.Tackling, 0.19f),
-            (player.Positioning, 0.14f), (player.Aerial, 0.08f), (player.Strength, 0.07f),
-            (player.Pace, 0.05f), (player.Composure, 0.03f));
+            (player.DefensivePositioning, 0.22f), (player.Marking, 0.18f), (player.Tackling, 0.17f),
+            (player.Anticipation, 0.13f), (player.Decisions, 0.09f), (player.JumpingReach, 0.06f),
+            (player.Strength, 0.06f), (player.Pace, 0.04f), (player.WorkRate, 0.03f),
+            (player.Composure, 0.02f));
 
         private static float GetGoalkeepingScore(PlayerAgent player) => WeightedAverage(
-            (player.Goalkeeping, 0.40f), (player.Reflexes, 0.34f), (player.Positioning, 0.12f),
-            (player.Composure, 0.08f), (player.Passing, 0.04f), (player.Strength, 0.02f));
+            (player.Handling, 0.22f), (player.Reflexes, 0.21f), (player.OneOnOnes, 0.17f),
+            (player.GoalkeeperPositioning, 0.15f), (player.AerialCommand, 0.10f),
+            (player.Distribution, 0.06f), (player.Decisions, 0.05f), (player.Composure, 0.04f));
 
         private static PhaseWeights GetPhaseWeights(PlayerPosition slot)
         {

@@ -104,6 +104,7 @@ Planning must cover at least:
 - realistic willingness based on squad depth, importance, contract length, age, form, club stature, rivalry, finances, replacement options, and the player’s own interest;
 - enquiry/scouting before bidding, negotiated offers rather than one-shot decisions, counteroffers, deadlines, competing bids, add-ons/clauses if the finance model grows to support them, and clear failure reasons;
 - transfer windows, registration deadlines, free agents, loans, contracts, renewals, release/expiry, and pre-contract handling;
+- development-only Easter eggs should enter each new career as four unique free agents, never replace generated club players, and be omitted behind a public-release content switch; preserve their fixed identities, portraits, nationalities, heights, and intentional attribute clamps;
 - AI clubs actively buying, selling, loaning, replacing, shortlisting, and competing for targets through the Intelligent AI club management system;
 - keeping generated player populations discoverable without dumping every player onto one screen;
 - save migration and deterministic multi-season market tests covering prices, squad health, transfer volume, positional demand, player movement, and financial inflation.
