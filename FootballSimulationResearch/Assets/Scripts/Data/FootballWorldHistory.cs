@@ -12,6 +12,7 @@ namespace Data
     {
         [JsonProperty("schemaVersion")] public int SchemaVersion;
         [JsonProperty("sourceCommit")] public string SourceCommit;
+        [JsonProperty("sourceCommits")] public List<HistorySourceCommitRecord> SourceCommits = new();
         [JsonProperty("generatedFromCompleteFiles")] public int GeneratedFromCompleteFiles;
         [JsonProperty("excludedFiles")] public List<string> ExcludedFiles = new();
         [JsonProperty("clubs")] public List<HistoricalClubRecord> Clubs = new();
@@ -22,8 +23,16 @@ namespace Data
     }
 
     [Serializable]
+    public sealed class HistorySourceCommitRecord
+    {
+        [JsonProperty("countryCode")] public string CountryCode;
+        [JsonProperty("commit")] public string Commit;
+    }
+
+    [Serializable]
     public sealed class DivisionTransitionRecord
     {
+        [JsonProperty("countryCode")] public string CountryCode;
         [JsonProperty("fromLevel")] public int FromLevel;
         [JsonProperty("toLevel")] public int ToLevel;
         [JsonProperty("samples")] public int Samples;
@@ -38,8 +47,10 @@ namespace Data
     [Serializable]
     public sealed class ClubGenerationPriorRecord
     {
+        [JsonProperty("countryCode")] public string CountryCode;
         [JsonProperty("targetSeason")] public string TargetSeason;
         [JsonProperty("targetLevel")] public int TargetLevel;
+        [JsonProperty("competitionId")] public string CompetitionId;
         [JsonProperty("clubId")] public string ClubId;
         [JsonProperty("clubName")] public string ClubName;
         [JsonProperty("attackIndex")] public double AttackIndex;
@@ -59,8 +70,10 @@ namespace Data
     [Serializable]
     public sealed class CompetitionSeasonRecord
     {
+        [JsonProperty("countryCode")] public string CountryCode;
         [JsonProperty("season")] public string Season;
         [JsonProperty("level")] public int Level;
+        [JsonProperty("competitionId")] public string CompetitionId;
         [JsonProperty("competition")] public string Competition;
         [JsonProperty("parsedMatches")] public int ParsedMatches;
         [JsonProperty("clubs")] public List<string> ClubIds = new();
@@ -69,8 +82,10 @@ namespace Data
     [Serializable]
     public sealed class ClubSeasonRecord
     {
+        [JsonProperty("countryCode")] public string CountryCode;
         [JsonProperty("season")] public string Season;
         [JsonProperty("level")] public int Level;
+        [JsonProperty("competitionId")] public string CompetitionId;
         [JsonProperty("competition")] public string Competition;
         [JsonProperty("clubId")] public string ClubId;
         [JsonProperty("clubName")] public string ClubName;
@@ -109,7 +124,7 @@ namespace Data
 
             foreach (CompetitionSeasonRecord competition in source.CompetitionSeasons)
             {
-                string key = CompetitionKey(competition.Season, competition.Level);
+                string key = CompetitionKey(competition.CountryCode, competition.Season, competition.CompetitionId);
                 if (!competitionsByKey.TryAdd(key, competition))
                     throw new InvalidOperationException($"Duplicate competition season: {key}");
             }
@@ -118,14 +133,14 @@ namespace Data
             {
                 if (!clubsById.ContainsKey(clubSeason.ClubId))
                     throw new InvalidOperationException($"Club-season references unknown club ID: {clubSeason.ClubId}");
-                string key = ClubSeasonKey(clubSeason.ClubId, clubSeason.Season, clubSeason.Level);
+                string key = ClubSeasonKey(clubSeason.ClubId, clubSeason.Season, clubSeason.CompetitionId);
                 if (!clubSeasonsByKey.TryAdd(key, clubSeason))
                     throw new InvalidOperationException($"Duplicate club-season record: {key}");
             }
 
             foreach (ClubGenerationPriorRecord prior in source.GenerationPriors)
             {
-                string key = ClubSeasonKey(prior.ClubId, prior.TargetSeason, prior.TargetLevel);
+                string key = ClubSeasonKey(prior.ClubId, prior.TargetSeason, prior.CompetitionId);
                 if (!generationPriorsByKey.TryAdd(key, prior))
                     throw new InvalidOperationException($"Duplicate club generation prior: {key}");
             }
@@ -135,8 +150,8 @@ namespace Data
         {
             FootballWorldHistoryData source = JsonConvert.DeserializeObject<FootballWorldHistoryData>(json);
             if (source == null) throw new InvalidOperationException("Football history JSON was empty or invalid.");
-            if (source.SchemaVersion != 1)
-                throw new InvalidOperationException($"Unsupported football history schema {source.SchemaVersion}; expected 1.");
+            if (source.SchemaVersion != 2)
+                throw new InvalidOperationException($"Unsupported football history schema {source.SchemaVersion}; expected 2.");
             return new FootballWorldHistory(source);
         }
 
@@ -148,16 +163,16 @@ namespace Data
 
         public bool TryGetClub(string clubId, out HistoricalClubRecord club) => clubsById.TryGetValue(clubId, out club);
 
-        public bool TryGetClubSeason(string clubId, string season, int level, out ClubSeasonRecord clubSeason) =>
-            clubSeasonsByKey.TryGetValue(ClubSeasonKey(clubId, season, level), out clubSeason);
+        public bool TryGetClubSeason(string clubId, string season, string competitionId, out ClubSeasonRecord clubSeason) =>
+            clubSeasonsByKey.TryGetValue(ClubSeasonKey(clubId, season, competitionId), out clubSeason);
 
-        public bool TryGetCompetitionSeason(string season, int level, out CompetitionSeasonRecord competition) =>
-            competitionsByKey.TryGetValue(CompetitionKey(season, level), out competition);
+        public bool TryGetCompetitionSeason(string countryCode, string season, string competitionId, out CompetitionSeasonRecord competition) =>
+            competitionsByKey.TryGetValue(CompetitionKey(countryCode, season, competitionId), out competition);
 
-        public bool TryGetGenerationPrior(string clubId, string season, int level, out ClubGenerationPriorRecord prior) =>
-            generationPriorsByKey.TryGetValue(ClubSeasonKey(clubId, season, level), out prior);
+        public bool TryGetGenerationPrior(string clubId, string season, string competitionId, out ClubGenerationPriorRecord prior) =>
+            generationPriorsByKey.TryGetValue(ClubSeasonKey(clubId, season, competitionId), out prior);
 
-        private static string ClubSeasonKey(string clubId, string season, int level) => $"{clubId}|{season}|{level}";
-        private static string CompetitionKey(string season, int level) => $"{season}|{level}";
+        private static string ClubSeasonKey(string clubId, string season, string competitionId) => $"{clubId}|{season}|{competitionId}";
+        private static string CompetitionKey(string countryCode, string season, string competitionId) => $"{countryCode}|{season}|{competitionId}";
     }
 }

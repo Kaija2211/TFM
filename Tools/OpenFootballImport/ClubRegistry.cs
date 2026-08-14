@@ -100,7 +100,7 @@ sealed class ClubRegistry
             if (content.Length == 0 || content.StartsWith('@')) continue;
             string[] fields = content.Split(',', StringSplitOptions.TrimEntries);
             string[] inlineNames = fields[0].Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            string name = inlineNames[0].Trim();
+            string name = Regex.Replace(inlineNames[0].Trim(), @"^(?:ii|iii|iv|v)\)\s*", "", RegexOptions.IgnoreCase);
             if (name.Length == 0 || name.Contains("=>", StringComparison.Ordinal) || name.Contains('⇒')) continue;
 
             string stableName = LifeSpanPattern.Replace(name, "").Trim();

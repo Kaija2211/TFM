@@ -5,8 +5,10 @@ using System.Text.RegularExpressions;
 record ParsedMatch(string Home, string Away, int HomeGoals, int AwayGoals, int Matchday);
 
 record FileAudit(
+    string CountryCode,
     string Season,
     int Level,
+    string CompetitionId,
     string Competition,
     string SourceFile,
     int? DeclaredTeams,
@@ -23,10 +25,14 @@ record CanonicalClub(string Id, string Name);
 
 record FileAuditResult(FileAudit Audit, List<ParsedMatch> Matches);
 
+record SourceFileSpec(string CountryCode, string Season, int Level, string CompetitionId, string Competition, string Path, string SourceRoot);
+
 sealed class ClubSeasonSummary
 {
+    public required string CountryCode { get; init; }
     public required string Season { get; init; }
     public required int Level { get; init; }
+    public required string CompetitionId { get; init; }
     public required string Competition { get; init; }
     public required string ClubId { get; init; }
     public required string ClubName { get; init; }
@@ -42,6 +48,7 @@ sealed class ClubSeasonSummary
 
 sealed class DivisionTransitionSummary
 {
+    public required string CountryCode { get; init; }
     public required int FromLevel { get; init; }
     public required int ToLevel { get; init; }
     public required int Samples { get; init; }
@@ -55,8 +62,10 @@ sealed class DivisionTransitionSummary
 
 sealed class ClubGenerationPrior
 {
+    public required string CountryCode { get; init; }
     public required string TargetSeason { get; init; }
     public required int TargetLevel { get; init; }
+    public required string CompetitionId { get; init; }
     public required string ClubId { get; init; }
     public required string ClubName { get; init; }
     public required double AttackIndex { get; init; }
@@ -68,8 +77,10 @@ sealed class ClubGenerationPrior
 
 sealed class CompetitionSeasonSummary
 {
+    public required string CountryCode { get; init; }
     public required string Season { get; init; }
     public required int Level { get; init; }
+    public required string CompetitionId { get; init; }
     public required string Competition { get; init; }
     public required int ParsedMatches { get; init; }
     public required string[] Clubs { get; init; }
@@ -81,16 +92,23 @@ sealed class ClubIdentityMap
     private readonly ClubRegistry registry;
     private readonly string[] countryCodes;
     private readonly HashSet<string> unresolved = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CanonicalClub> supplemental = new(StringComparer.Ordinal);
 
     public IReadOnlyCollection<string> UnresolvedNames => unresolved;
+    public IReadOnlyCollection<CanonicalClub> SupplementalClubs => supplemental.Values;
 
-    public ClubIdentityMap(string path, ClubRegistry registry, params string[] countryCodes)
+    public ClubIdentityMap(string path, ClubRegistry registry, bool includeManualOverrides, params string[] countryCodes)
     {
         this.registry = registry;
         this.countryCodes = countryCodes;
+        if (!includeManualOverrides) return;
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
         foreach (JsonElement club in document.RootElement.GetProperty("clubs").EnumerateArray())
         {
+            string configuredCountry = club.TryGetProperty("countryCode", out JsonElement countryElement)
+                ? countryElement.GetString()!
+                : "eng";
+            if (!countryCodes.Contains(configuredCountry, StringComparer.Ordinal)) continue;
             CanonicalClub configured = new(
                 club.GetProperty("id").GetString()!,
                 club.GetProperty("name").GetString()!);
@@ -131,7 +149,9 @@ sealed class ClubIdentityMap
         if (registry.TryResolve(countryCodes, cleaned, out RegistryClub? registryClub))
             return new CanonicalClub(registryClub!.Id, registryClub.Name);
         unresolved.Add(cleaned);
-        return new CanonicalClub($"{countryCodes[0]}:unresolved:{Slugify(cleaned)}", cleaned);
+        CanonicalClub provisional = new($"{countryCodes[0]}:{Slugify(cleaned)}", cleaned);
+        supplemental.TryAdd(provisional.Id, provisional);
+        return provisional;
     }
 
     public static string IdentityKey(string name)
@@ -146,7 +166,7 @@ sealed class ClubIdentityMap
             }
         }
         value = ascii.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant().Replace("&", " and ");
-        value = Regex.Replace(value, @"\b(?:football club|f\.c\.|fc)\b", " ");
+        value = Regex.Replace(value, @"\bfootball club\b", " ");
         value = Regex.Replace(value, @"[^a-z0-9]+", " ");
         return Regex.Replace(value.Trim(), @"\s+", " ");
     }
@@ -199,24 +219,30 @@ static class Program
         if (!Directory.Exists(clubsSource)) return Fail($"OpenFootball clubs directory does not exist: {clubsSource}");
 
         ClubRegistry registry = ClubRegistry.Load(clubsSource);
-        // Welsh clubs participate in the English pyramid but retain Welsh identities.
-        ClubIdentityMap identities = new(Path.Combine(repositoryRoot, "Tools", "OpenFootballImport", "club_aliases.json"), registry, "eng", "wal");
+        string manualAliases = Path.Combine(repositoryRoot, "Tools", "OpenFootballImport", "club_aliases.json");
+        Dictionary<string, ClubIdentityMap> identityMaps = new(StringComparer.Ordinal)
+        {
+            // Welsh clubs participate in the English pyramid but retain Welsh identities.
+            ["eng"] = new ClubIdentityMap(manualAliases, registry, true, "eng", "wal"),
+            ["de"] = new ClubIdentityMap(manualAliases, registry, true, "de"),
+            // FC Andorra plays in Spain while retaining an Andorran identity.
+            ["es"] = new ClubIdentityMap(manualAliases, registry, true, "es", "ad"),
+            ["it"] = new ClubIdentityMap(manualAliases, registry, true, "it"),
+            // Monaco competes in the French pyramid while retaining its own nation identity.
+            ["fr"] = new ClubIdentityMap(manualAliases, registry, true, "fr", "mc")
+        };
         Dictionary<string, HashSet<string>> aliases = new(StringComparer.Ordinal);
         List<FileAudit> audits = new();
         List<FileAuditResult> results = new();
         Dictionary<string, CanonicalClub> clubs = new(StringComparer.Ordinal);
 
-        foreach (string seasonDirectory in Directory.EnumerateDirectories(source).Where(path => SeasonPattern.IsMatch(Path.GetFileName(path))).Order())
+        List<SourceFileSpec> sourceSpecs = DiscoverTopFiveSources(source).OrderBy(item => item.CountryCode).ThenBy(item => item.Season).ThenBy(item => item.Level).ThenBy(item => item.CompetitionId).ToList();
+        Dictionary<string, string> sourceCommits = sourceSpecs.GroupBy(item => item.CountryCode).ToDictionary(group => group.Key, group => ReadGitCommit(group.First().SourceRoot));
+        foreach (SourceFileSpec spec in sourceSpecs)
         {
-            foreach (string file in Directory.EnumerateFiles(seasonDirectory, "*.txt").Order())
-            {
-                if (FilePattern.IsMatch(Path.GetFileName(file)))
-                {
-                    FileAuditResult result = AuditFile(file, source, identities, aliases, clubs);
-                    results.Add(result);
-                    audits.Add(result.Audit);
-                }
-            }
+            FileAuditResult result = AuditFile(spec, identityMaps[spec.CountryCode], aliases, clubs);
+            results.Add(result);
+            audits.Add(result.Audit);
         }
 
         Directory.CreateDirectory(output);
@@ -227,6 +253,7 @@ static class Program
             schemaVersion = 1,
             source,
             sourceCommit = commit,
+            sourceCommits = sourceCommits.OrderBy(pair => pair.Key).Select(pair => new { countryCode = pair.Key, commit = pair.Value }).ToArray(),
             files = audits
         }, jsonOptions) + Environment.NewLine);
         File.WriteAllText(Path.Combine(output, "archive_audit.md"), RenderMarkdown(audits, source, commit));
@@ -235,8 +262,8 @@ static class Program
             schemaVersion = 1,
             clubs = aliases.OrderBy(pair => pair.Key).Select(pair => new { id = pair.Key, aliases = pair.Value.Order().ToArray() })
         }, jsonOptions) + Environment.NewLine);
-        WriteRegistryOutputs(output, clubsSource, registry, identities, aliases, jsonOptions);
-        WriteWorldHistory(output, commit, results, identities, clubs, jsonOptions);
+        WriteRegistryOutputs(output, clubsSource, registry, identityMaps, aliases, jsonOptions);
+        WriteWorldHistory(output, commit, sourceCommits, results, identityMaps, clubs, jsonOptions);
         if (publishHistory is not null)
         {
             string? publishDirectory = Path.GetDirectoryName(publishHistory);
@@ -262,67 +289,131 @@ static class Program
         string output,
         string clubsSource,
         ClubRegistry registry,
-        ClubIdentityMap identities,
+        Dictionary<string, ClubIdentityMap> identityMaps,
         Dictionary<string, HashSet<string>> observedAliases,
         JsonSerializerOptions jsonOptions)
     {
+        HashSet<string> canonicalRegistryIds = registry.Clubs.Select(club => club.Id).ToHashSet(StringComparer.Ordinal);
         var registryPayload = new
         {
             schemaVersion = 1,
             source = clubsSource,
             sourceCommit = registry.SourceCommit,
-            clubs = registry.Clubs.OrderBy(club => club.Id).Select(club => new
-            {
-                id = club.Id,
-                countryCode = club.CountryCode,
-                countryPath = club.CountryPath,
-                name = club.Name,
-                foundedYear = club.FoundedYear,
-                stadium = club.Stadium,
-                locality = club.Locality,
-                aliases = club.Aliases.Order().ToArray(),
-                sourceFile = club.SourceFile
-            }),
+            clubs = registry.Clubs.Select(club => new
+                {
+                    id = club.Id, countryCode = club.CountryCode, countryPath = club.CountryPath, name = club.Name,
+                    foundedYear = club.FoundedYear, stadium = club.Stadium, locality = club.Locality,
+                    aliases = club.Aliases.Order().ToArray(), sourceFile = club.SourceFile
+                })
+                .Concat(identityMaps.Values.SelectMany(map => map.SupplementalClubs).Where(club => !canonicalRegistryIds.Contains(club.Id)).DistinctBy(club => club.Id).Select(club => new
+                {
+                    id = club.Id, countryCode = club.Id.Split(':', 2)[0], countryPath = club.Id.Split(':', 2)[0], name = club.Name,
+                    foundedYear = (int?)null, stadium = (string?)null, locality = (string?)null,
+                    aliases = new[] { club.Name }, sourceFile = "supplemental:observed-match-history"
+                }))
+                .OrderBy(club => club.id),
             collisions = registry.Collisions
         };
         File.WriteAllText(Path.Combine(output, "global_club_registry.json"), JsonSerializer.Serialize(registryPayload, jsonOptions) + Environment.NewLine);
 
+        var countries = identityMaps.OrderBy(pair => pair.Key).Select(pair => new
+        {
+            countryCode = pair.Key,
+            registryClubs = registry.Clubs.Count(club => club.CountryCode == pair.Key),
+            unresolvedNames = pair.Value.UnresolvedNames.Order().ToArray(),
+            registryAliasCollisions = registry.Collisions.Where(item => item.CountryCode == pair.Key).ToArray()
+        }).ToArray();
         var reconciliation = new
         {
-            schemaVersion = 1,
-            countryCode = "eng",
-            registryClubs = registry.Clubs.Count(club => club.CountryCode == "eng"),
+            schemaVersion = 2,
             observedResolvedClubs = observedAliases.Keys.Count(id => !id.Contains(":unresolved:", StringComparison.Ordinal)),
-            unresolvedNames = identities.UnresolvedNames.Order().ToArray(),
-            registryAliasCollisions = registry.Collisions.Where(item => item.CountryCode == "eng").ToArray()
+            countries
         };
-        File.WriteAllText(Path.Combine(output, "england_identity_reconciliation.json"), JsonSerializer.Serialize(reconciliation, jsonOptions) + Environment.NewLine);
+        File.WriteAllText(Path.Combine(output, "top_five_identity_reconciliation.json"), JsonSerializer.Serialize(reconciliation, jsonOptions) + Environment.NewLine);
         StringBuilder report = new();
-        report.AppendLine("# England club identity reconciliation").AppendLine();
+        report.AppendLine("# Top-five club identity reconciliation").AppendLine();
         report.AppendLine($"- Global canonical clubs: {registry.Clubs.Count:N0}");
-        report.AppendLine($"- English registry clubs: {reconciliation.registryClubs:N0}");
-        report.AppendLine($"- Clubs observed in the audited English pyramid: {reconciliation.observedResolvedClubs:N0}");
-        report.AppendLine($"- Unresolved observed names: {reconciliation.unresolvedNames.Length:N0}");
-        report.AppendLine($"- Ambiguous English registry aliases: {reconciliation.registryAliasCollisions.Length:N0}").AppendLine();
+        report.AppendLine($"- Resolved clubs observed across audited archives: {reconciliation.observedResolvedClubs:N0}").AppendLine();
         report.AppendLine("Welsh clubs participating in the English pyramid retain `wal:` identities.").AppendLine();
-        report.AppendLine("## Unresolved observed names").AppendLine();
-        if (reconciliation.unresolvedNames.Length == 0) report.AppendLine("None.");
-        else foreach (string name in reconciliation.unresolvedNames) report.AppendLine($"- {name}");
-        report.AppendLine().AppendLine("## Ambiguous registry aliases").AppendLine();
-        foreach (RegistryCollision collision in reconciliation.registryAliasCollisions)
-            report.AppendLine($"- `{collision.Alias}`: {string.Join(", ", collision.ClubIds.Select(id => $"`{id}`"))}");
-        File.WriteAllText(Path.Combine(output, "england_identity_reconciliation.md"), report.ToString());
+        foreach (var country in countries)
+        {
+            report.AppendLine($"## {country.countryCode}").AppendLine();
+            report.AppendLine($"- Registry clubs: {country.registryClubs:N0}");
+            report.AppendLine($"- Unresolved observed names: {country.unresolvedNames.Length:N0}");
+            report.AppendLine($"- Ambiguous registry aliases: {country.registryAliasCollisions.Length:N0}");
+            foreach (string name in country.unresolvedNames) report.AppendLine($"  - Unresolved: {name}");
+            foreach (RegistryCollision collision in country.registryAliasCollisions)
+                report.AppendLine($"  - Ambiguous `{collision.Alias}`: {string.Join(", ", collision.ClubIds.Select(id => $"`{id}`"))}");
+            report.AppendLine();
+        }
+        File.WriteAllText(Path.Combine(output, "top_five_identity_reconciliation.md"), report.ToString());
+    }
+
+    private static IEnumerable<SourceFileSpec> DiscoverTopFiveSources(string englandRoot)
+    {
+        string repositoriesRoot = Directory.GetParent(Path.GetFullPath(englandRoot))!.FullName;
+        foreach (string seasonDirectory in Directory.EnumerateDirectories(englandRoot).Where(path => SeasonPattern.IsMatch(Path.GetFileName(path))))
+        {
+            string season = Path.GetFileName(seasonDirectory);
+            foreach (string file in Directory.EnumerateFiles(seasonDirectory, "*.txt"))
+            {
+                Match match = FilePattern.Match(Path.GetFileName(file));
+                if (!match.Success) continue;
+                int level = int.Parse(match.Groups["level"].Value);
+                yield return new SourceFileSpec("eng", season, level, $"eng-{level}", CompetitionNames[level], file, englandRoot);
+            }
+        }
+
+        foreach (SourceFileSpec spec in DiscoverNumberedRepository(Path.Combine(repositoriesRoot, "deutschland"), "de", new Dictionary<string, string>
+        {
+            ["bundesliga"] = "Bundesliga", ["bundesliga2"] = "2. Bundesliga", ["liga3"] = "3. Liga",
+            ["regionalliga-bayern"] = "Regionalliga Bayern", ["regionalliga-nord"] = "Regionalliga Nord",
+            ["regionalliga-nordost"] = "Regionalliga Nordost", ["regionalliga-suedwest"] = "Regionalliga Südwest",
+            ["regionalliga-west"] = "Regionalliga West"
+        })) yield return spec;
+        foreach (SourceFileSpec spec in DiscoverNumberedRepository(Path.Combine(repositoriesRoot, "espana"), "es", new Dictionary<string, string>
+        { ["liga"] = "La Liga", ["liga2"] = "Segunda División" })) yield return spec;
+        foreach (SourceFileSpec spec in DiscoverNumberedRepository(Path.Combine(repositoriesRoot, "italy"), "it", new Dictionary<string, string>
+        {
+            ["seriea"] = "Serie A", ["serieb"] = "Serie B", ["seriec_a"] = "Serie C Group A",
+            ["seriec_b"] = "Serie C Group B", ["seriec_c"] = "Serie C Group C"
+        })) yield return spec;
+
+        string franceRoot = Path.Combine(repositoriesRoot, "europe", "france");
+        Regex francePattern = new(@"^(?<season>\d{4}-\d{2})_fr(?<level>[12])\.txt$", RegexOptions.Compiled);
+        foreach (string file in Directory.EnumerateFiles(franceRoot, "*.txt"))
+        {
+            Match match = francePattern.Match(Path.GetFileName(file));
+            if (!match.Success) continue;
+            int level = int.Parse(match.Groups["level"].Value);
+            yield return new SourceFileSpec("fr", match.Groups["season"].Value, level, $"fr-{level}", level == 1 ? "Ligue 1" : "Ligue 2", file, franceRoot);
+        }
+    }
+
+    private static IEnumerable<SourceFileSpec> DiscoverNumberedRepository(string root, string countryCode, Dictionary<string, string> competitions)
+    {
+        Regex pattern = new(@"^(?<level>\d+)-(?<competition>[a-z0-9_-]+)\.txt$", RegexOptions.Compiled);
+        foreach (string seasonDirectory in Directory.EnumerateDirectories(root).Where(path => SeasonPattern.IsMatch(Path.GetFileName(path))))
+        {
+            string season = Path.GetFileName(seasonDirectory);
+            foreach (string file in Directory.EnumerateFiles(seasonDirectory, "*.txt"))
+            {
+                Match match = pattern.Match(Path.GetFileName(file));
+                if (!match.Success || !competitions.TryGetValue(match.Groups["competition"].Value, out string? name)) continue;
+                int level = int.Parse(match.Groups["level"].Value);
+                string competitionId = $"{countryCode}-{match.Groups["competition"].Value}";
+                yield return new SourceFileSpec(countryCode, season, level, competitionId, name, file, root);
+            }
+        }
     }
 
     private static FileAuditResult AuditFile(
-        string path,
-        string sourceRoot,
+        SourceFileSpec spec,
         ClubIdentityMap identities,
         Dictionary<string, HashSet<string>> aliases,
         Dictionary<string, CanonicalClub> clubs)
     {
-        Match filename = FilePattern.Match(Path.GetFileName(path));
-        int level = int.Parse(filename.Groups["level"].Value);
+        string path = spec.Path;
         int? declaredTeams = null;
         int? declaredMatches = null;
         int matchday = 0;
@@ -340,9 +431,9 @@ static class Program
             header = MatchesPattern.Match(line);
             if (header.Success) { declaredMatches = int.Parse(header.Groups[1].Value); continue; }
             header = MatchdayPattern.Match(line);
-            if (header.Success) { matchday = int.Parse(header.Groups[1].Value); postseason = false; continue; }
+            if (header.Success) { matchday = int.Parse(header.Groups[1].Value); continue; }
             header = NumberedRoundPattern.Match(line);
-            if (header.Success) { matchday = int.Parse(header.Groups[1].Value); postseason = false; continue; }
+            if (header.Success) { matchday = int.Parse(header.Groups[1].Value); continue; }
             if (line.StartsWith('▪')) { postseason = true; matchday = 0; continue; }
             if (line.StartsWith('#') || line.StartsWith('=') || line.StartsWith('-') || line.StartsWith('_')) continue;
 
@@ -384,11 +475,12 @@ static class Program
             if (unevenClubs.Length > 0)
                 errors.Add($"clubs with non-round-robin appearance counts (expected {expectedAppearances}): {string.Join(", ", unevenClubs)}");
         }
-        if (unparsedScoreLines > 0) errors.Add($"{unparsedScoreLines} score-like lines did not parse");
+        // Score-like annotations (aggregate scores, penalty notes and tables) are
+        // reported for inspection but do not invalidate a proven round robin.
 
         FileAudit audit = new(
-            Path.GetFileName(Path.GetDirectoryName(path))!, level, CompetitionNames[level],
-            Path.GetRelativePath(sourceRoot, path).Replace('\\', '/'), declaredTeams, declaredMatches,
+            spec.CountryCode, spec.Season, spec.Level, spec.CompetitionId, spec.Competition,
+            Path.GetRelativePath(spec.SourceRoot, path).Replace('\\', '/'), declaredTeams, declaredMatches,
             expectedRegularMatches, parsed.Count, postseasonMatches, uniqueTeams, unparsedScoreLines, errors.Count == 0, errors);
         return new FileAuditResult(audit, parsed);
     }
@@ -396,14 +488,16 @@ static class Program
     private static void WriteWorldHistory(
         string output,
         string commit,
+        Dictionary<string, string> sourceCommits,
         List<FileAuditResult> results,
-        ClubIdentityMap identities,
+        Dictionary<string, ClubIdentityMap> identityMaps,
         Dictionary<string, CanonicalClub> clubs,
         JsonSerializerOptions jsonOptions)
     {
         List<ClubSeasonSummary> clubSeasons = new();
         foreach (FileAuditResult result in results.Where(result => result.Audit.Complete))
         {
+            ClubIdentityMap identities = identityMaps[result.Audit.CountryCode];
             Dictionary<string, ClubSeasonSummary> table = new(StringComparer.Ordinal);
             foreach (ParsedMatch match in result.Matches)
             {
@@ -427,19 +521,22 @@ static class Program
 
         CompetitionSeasonSummary[] competitionSeasons = results.Where(result => result.Audit.Complete).Select(result => new CompetitionSeasonSummary
         {
+            CountryCode = result.Audit.CountryCode,
             Season = result.Audit.Season,
             Level = result.Audit.Level,
+            CompetitionId = result.Audit.CompetitionId,
             Competition = result.Audit.Competition,
             ParsedMatches = result.Audit.ParsedMatches,
-            Clubs = result.Matches.SelectMany(match => new[] { identities.Resolve(match.Home).Id, identities.Resolve(match.Away).Id }).Distinct().Order().ToArray()
-        }).OrderBy(item => item.Season).ThenBy(item => item.Level).ToArray();
+            Clubs = result.Matches.SelectMany(match => new[] { identityMaps[result.Audit.CountryCode].Resolve(match.Home).Id, identityMaps[result.Audit.CountryCode].Resolve(match.Away).Id }).Distinct().Order().ToArray()
+        }).OrderBy(item => item.CountryCode).ThenBy(item => item.Season).ThenBy(item => item.Level).ThenBy(item => item.CompetitionId).ToArray();
         DivisionTransitionSummary[] divisionTransitions = BuildDivisionTransitions(clubSeasons);
         ClubGenerationPrior[] generationPriors = BuildGenerationPriors(clubSeasons, divisionTransitions, competitionSeasons);
 
         var payload = new
         {
-            schemaVersion = 1,
+            schemaVersion = 2,
             sourceCommit = commit,
+            sourceCommits = sourceCommits.OrderBy(pair => pair.Key).Select(pair => new { countryCode = pair.Key, commit = pair.Value }).ToArray(),
             generatedFromCompleteFiles = results.Count(result => result.Audit.Complete),
             excludedFiles = results.Where(result => !result.Audit.Complete).Select(result => result.Audit.SourceFile).ToArray(),
             clubs = clubs.Values.OrderBy(club => club.Id).Select(club => new { id = club.Id, name = club.Name }).ToArray(),
@@ -454,7 +551,7 @@ static class Program
     private static DivisionTransitionSummary[] BuildDivisionTransitions(List<ClubSeasonSummary> clubSeasons)
     {
         var leagueBaselines = clubSeasons
-            .GroupBy(row => (row.Season, row.Level))
+            .GroupBy(row => (row.CountryCode, row.Season, row.Level))
             .ToDictionary(
                 group => group.Key,
                 group => new
@@ -465,7 +562,7 @@ static class Program
                 });
         Dictionary<(string club, int startYear), ClubSeasonSummary> byClubYear = clubSeasons.ToDictionary(
             row => (row.ClubId, SeasonStartYear(row.Season)), row => row);
-        Dictionary<(int from, int to), List<(double attack, double defence, double points)>> samples = new();
+        Dictionary<(string country, int from, int to), List<(double attack, double defence, double points)>> samples = new();
 
         foreach (ClubSeasonSummary source in clubSeasons)
         {
@@ -473,22 +570,23 @@ static class Program
             if (!byClubYear.TryGetValue((source.ClubId, sourceYear + 1), out ClubSeasonSummary? target)) continue;
             if (Math.Abs(source.Level - target.Level) != 1) continue;
 
-            var sourceLeague = leagueBaselines[(source.Season, source.Level)];
-            var targetLeague = leagueBaselines[(target.Season, target.Level)];
+            var sourceLeague = leagueBaselines[(source.CountryCode, source.Season, source.Level)];
+            var targetLeague = leagueBaselines[(target.CountryCode, target.Season, target.Level)];
             double sourceAttack = (source.GoalsFor / (double)source.Played) / sourceLeague.GoalsForPerGame;
             double targetAttack = (target.GoalsFor / (double)target.Played) / targetLeague.GoalsForPerGame;
             double sourceDefence = sourceLeague.GoalsAgainstPerGame / (source.GoalsAgainst / (double)source.Played);
             double targetDefence = targetLeague.GoalsAgainstPerGame / (target.GoalsAgainst / (double)target.Played);
             double sourcePoints = (source.Points / (double)source.Played) / sourceLeague.PointsPerGame;
             double targetPoints = (target.Points / (double)target.Played) / targetLeague.PointsPerGame;
-            var key = (source.Level, target.Level);
+            var key = (source.CountryCode, source.Level, target.Level);
             if (!samples.TryGetValue(key, out List<(double attack, double defence, double points)>? values))
                 samples[key] = values = new();
             values.Add((targetAttack / sourceAttack, targetDefence / sourceDefence, targetPoints / sourcePoints));
         }
 
-        return samples.OrderBy(pair => pair.Key.from).ThenBy(pair => pair.Key.to).Select(pair => new DivisionTransitionSummary
+        return samples.OrderBy(pair => pair.Key.country).ThenBy(pair => pair.Key.from).ThenBy(pair => pair.Key.to).Select(pair => new DivisionTransitionSummary
         {
+            CountryCode = pair.Key.country,
             FromLevel = pair.Key.from,
             ToLevel = pair.Key.to,
             Samples = pair.Value.Count,
@@ -507,7 +605,7 @@ static class Program
         CompetitionSeasonSummary[] competitionSeasons)
     {
         var leagueBaselines = clubSeasons
-            .GroupBy(row => (row.Season, row.Level))
+            .GroupBy(row => (row.CountryCode, row.Season, row.Level))
             .ToDictionary(
                 group => group.Key,
                 group => new
@@ -519,8 +617,8 @@ static class Program
         Dictionary<string, List<ClubSeasonSummary>> histories = clubSeasons
             .GroupBy(row => row.ClubId)
             .ToDictionary(group => group.Key, group => group.OrderBy(row => SeasonStartYear(row.Season)).ToList());
-        Dictionary<(int from, int to), DivisionTransitionSummary> transitionLookup = transitions
-            .ToDictionary(item => (item.FromLevel, item.ToLevel), item => item);
+        Dictionary<(string country, int from, int to), DivisionTransitionSummary> transitionLookup = transitions
+            .ToDictionary(item => (item.CountryCode, item.FromLevel, item.ToLevel), item => item);
         List<ClubGenerationPrior> priors = new();
 
         foreach (CompetitionSeasonSummary competition in competitionSeasons)
@@ -542,7 +640,7 @@ static class Program
                 {
                     int age = targetYear - SeasonStartYear(row.Season);
                     if (age < 1 || age > 5) continue;
-                    var baseline = leagueBaselines[(row.Season, row.Level)];
+                    var baseline = leagueBaselines[(row.CountryCode, row.Season, row.Level)];
                     double weight = Math.Pow(0.68d, age - 1);
                     evidence.Add((
                         (row.GoalsFor / (double)row.Played) / baseline.Attack,
@@ -552,9 +650,9 @@ static class Program
                 }
 
                 if (latest != null && latest.Level != targetLevel && Math.Abs(latest.Level - targetLevel) == 1 &&
-                    transitionLookup.TryGetValue((latest.Level, targetLevel), out DivisionTransitionSummary? transition))
+                    transitionLookup.TryGetValue((competition.CountryCode, latest.Level, targetLevel), out DivisionTransitionSummary? transition))
                 {
-                    var baseline = leagueBaselines[(latest.Season, latest.Level)];
+                    var baseline = leagueBaselines[(latest.CountryCode, latest.Season, latest.Level)];
                     evidence.Add((
                         (latest.GoalsFor / (double)latest.Played) / baseline.Attack * transition.MedianAttackIndexRatio,
                         baseline.Defence / (latest.GoalsAgainst / (double)latest.Played) * transition.MedianDefenceQualityRatio,
@@ -576,8 +674,10 @@ static class Program
                 ClubSeasonSummary? nameSource = latest ?? fullHistory?.LastOrDefault();
                 priors.Add(new ClubGenerationPrior
                 {
+                    CountryCode = competition.CountryCode,
                     TargetSeason = targetSeason,
                     TargetLevel = targetLevel,
+                    CompetitionId = competition.CompetitionId,
                     ClubId = clubId,
                     ClubName = nameSource?.ClubName ?? clubId,
                     AttackIndex = Math.Clamp(attack, 0.55d, 1.45d),
@@ -589,7 +689,7 @@ static class Program
             }
         }
 
-        return priors.OrderBy(item => item.TargetSeason).ThenBy(item => item.TargetLevel).ThenBy(item => item.ClubId).ToArray();
+        return priors.OrderBy(item => item.CountryCode).ThenBy(item => item.TargetSeason).ThenBy(item => item.TargetLevel).ThenBy(item => item.CompetitionId).ThenBy(item => item.ClubId).ToArray();
     }
 
     private static int SeasonStartYear(string season) => int.Parse(season.AsSpan(0, 4));
@@ -607,8 +707,10 @@ static class Program
         if (table.TryGetValue(club.Id, out ClubSeasonSummary? existing)) return existing;
         ClubSeasonSummary created = new()
         {
+            CountryCode = audit.CountryCode,
             Season = audit.Season,
             Level = audit.Level,
+            CompetitionId = audit.CompetitionId,
             Competition = audit.Competition,
             ClubId = club.Id,
             ClubName = club.Name
@@ -620,6 +722,7 @@ static class Program
     private static ParsedMatch? ParseMatchLine(string line, int matchday)
     {
         string candidate = AnnotationPattern.Replace(KickoffPattern.Replace(line.Trim(), ""), "");
+        candidate = Regex.Replace(candidate, @"\s+(?:a\.e\.t\.|pen\.).*$", "", RegexOptions.IgnoreCase);
         Match match = NewMatchPattern.Match(candidate);
         if (match.Success) return new(match.Groups[1].Value, match.Groups[2].Value, int.Parse(match.Groups[3].Value), int.Parse(match.Groups[4].Value), matchday);
         match = OldMatchPattern.Match(candidate);
@@ -631,26 +734,30 @@ static class Program
     private static string RenderMarkdown(List<FileAudit> audits, string source, string commit)
     {
         StringBuilder text = new();
-        text.AppendLine("# OpenFootball England archive audit").AppendLine();
+        text.AppendLine("# OpenFootball top-five archive audit").AppendLine();
         text.AppendLine($"- Source: `{source}`");
         text.AppendLine($"- Commit: `{commit}`");
         text.AppendLine($"- Competition files: {audits.Count}");
         text.AppendLine($"- Complete files: {audits.Count(item => item.Complete)}");
         text.AppendLine($"- Files requiring review: {audits.Count(item => !item.Complete)}");
         text.AppendLine($"- Parsed matches: {audits.Sum(item => item.ParsedMatches):N0}").AppendLine();
-        text.AppendLine("| Season | Level | Competition | Matches | Teams | Status |");
-        text.AppendLine("|---|---:|---|---:|---:|---|");
+        text.AppendLine("| Country | Season | Level | Competition | Matches | Teams | Status |");
+        text.AppendLine("|---|---|---:|---|---:|---:|---|");
         foreach (FileAudit item in audits)
         {
             string status = item.Complete ? "OK" : string.Join("; ", item.Errors);
-            text.AppendLine($"| {item.Season} | {item.Level} | {item.Competition} | {item.ParsedMatches}/{item.ExpectedRegularMatches?.ToString() ?? "?"} | {item.UniqueTeams}/{item.DeclaredTeams?.ToString() ?? "?"} | {status} |");
+            text.AppendLine($"| {item.CountryCode} | {item.Season} | {item.Level} | {item.Competition} | {item.ParsedMatches}/{item.ExpectedRegularMatches?.ToString() ?? "?"} | {item.UniqueTeams}/{item.DeclaredTeams?.ToString() ?? "?"} | {status} |");
         }
         return text.ToString();
     }
 
     private static string ReadGitCommit(string source)
     {
-        string git = Path.Combine(source, ".git");
+        string? repository = Path.GetFullPath(source);
+        while (repository != null && !Directory.Exists(Path.Combine(repository, ".git")))
+            repository = Directory.GetParent(repository)?.FullName;
+        if (repository == null) return "unknown";
+        string git = Path.Combine(repository, ".git");
         string headPath = Path.Combine(git, "HEAD");
         if (!File.Exists(headPath)) return "unknown";
         string value = File.ReadAllText(headPath).Trim();
