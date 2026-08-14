@@ -4950,6 +4950,8 @@ namespace Manager
             bool scouted = transferNegotiation.IsTransferScouted(player);
             bool scoutAssigned = transferNegotiation.IsTransferScoutAssigned(player);
             ManagerTransferNegotiation.PendingBid pendingBid = transferNegotiation.GetPendingBid(player);
+            AgentTeam sourceTeam = FindTeamContainingPlayer(player);
+            ManagerTransferNegotiation.TransferAvailability availability = ManagerTransferNegotiation.GetAvailability(player, sourceTeam);
 
             string ovrCell = scouted ? GetDisplayRating(player.GetOverallRating()).ToString() : ManagerTransferNegotiation.GetDisplayOverallBand(player);
 
@@ -4968,15 +4970,22 @@ namespace Manager
                 // scouting a player I didn't want and couldn't undo it") - the row's
                 // own click handler already branches on IsTransferScoutAssigned (see
                 // OnBuyRowClicked), this is just the matching label.
-                statusCell = scoutAssigned ? "<color=#e8c547>SCOUTING... (click to cancel)</color>" : "SCOUT TO REVEAL";
+                string availabilityLabel = FormatTransferAvailability(availability);
+                statusCell = scoutAssigned
+                    ? $"{availabilityLabel} · <color=#e8c547>SCOUTING... (click to cancel)</color>"
+                    : $"{availabilityLabel} · SCOUT TO REVEAL";
+            }
+            else if (availability == ManagerTransferNegotiation.TransferAvailability.NotForSale)
+            {
+                statusCell = "<color=#e05a5a>NOT FOR SALE — NO POSITIONAL COVER</color>";
             }
             else
             {
-                AgentTeam sourceTeam = FindTeamContainingPlayer(player);
                 float recommended = ManagerTransferNegotiation.GetRecommendedBid(player, sourceTeam);
+                string availabilityLabel = FormatTransferAvailability(availability);
                 statusCell = recommended <= budget
-                    ? $"~£{recommended:F1}m  ·  MAKE BID"
-                    : $"~£{recommended:F1}m  ·  MAKE BID  <color=#e05a5a>(over budget)</color>";
+                    ? $"{availabilityLabel} · ~£{recommended:F1}m · MAKE BID"
+                    : $"{availabilityLabel} · ~£{recommended:F1}m · MAKE BID <color=#e05a5a>(over budget)</color>";
             }
 
             string[] cells =
@@ -4995,6 +5004,17 @@ namespace Manager
             // history); it falls back to the same row action instead.
             transferMarketListView.AddCustomGridRow(player, cells, TransferBuyColumnFractions, OnBuyRowClicked,
                 onNameClicked: p => { if (scouted) OpenTransferTargetDetail(p, browseList); else OnBuyRowClicked(p); });
+        }
+
+        private static string FormatTransferAvailability(ManagerTransferNegotiation.TransferAvailability availability)
+        {
+            switch (availability)
+            {
+                case ManagerTransferNegotiation.TransferAvailability.Available: return "<color=#3ddc84>AVAILABLE</color>";
+                case ManagerTransferNegotiation.TransferAvailability.KeyPlayer: return "<color=#e8c547>KEY PLAYER</color>";
+                case ManagerTransferNegotiation.TransferAvailability.NotForSale: return "<color=#e05a5a>NOT FOR SALE</color>";
+                default: return "NEGOTIABLE";
+            }
         }
 
         private void OpenTransferTargetDetail(PlayerAgent player, List<PlayerAgent> browseList)
@@ -5110,7 +5130,7 @@ namespace Manager
 
             if (pendingBid != null)
             {
-                SetTransferMarketStatus($"Still waiting to hear back on {target.Name} - check your Inbox after the next matchday.");
+                SetTransferMarketStatus($"Still waiting to hear back on {target.Name} - the response will arrive through Continue.");
                 return;
             }
 
@@ -5140,6 +5160,11 @@ namespace Manager
 
             string sourceTeamDisplay = transferMarketRowClubs.TryGetValue(target, out string t) ? t : "Unknown";
             AgentTeam sellingTeam = FindTeamContainingPlayer(target);
+            if (ManagerTransferNegotiation.GetAvailability(target, sellingTeam) == ManagerTransferNegotiation.TransferAvailability.NotForSale)
+            {
+                SetTransferMarketStatus($"{sourceTeamDisplay} will not sell {target.Name} without positional cover.");
+                return;
+            }
             ShowBidDialog(target, sellingTeam, sourceTeamDisplay);
         }
 

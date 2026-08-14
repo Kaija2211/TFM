@@ -34,6 +34,7 @@ namespace Manager
         public const int BidResponseDays = 2;
 
         public enum BidStatus { PendingResponse, AwaitingSignature }
+        public enum TransferAvailability { Available, Negotiable, KeyPlayer, NotForSale }
 
         public class PendingBid
         {
@@ -377,6 +378,21 @@ namespace Manager
             }
 
             return sourceTeam.Players.Count <= MinSeniorSquadSizeBeforeRefusingAllSales;
+        }
+
+        public static TransferAvailability GetAvailability(PlayerAgent target, AgentTeam sourceTeam)
+        {
+            if (target == null || sourceTeam == null) return TransferAvailability.Negotiable;
+            if (WouldLeaveSquadTooThin(target, sourceTeam)) return TransferAvailability.NotForSale;
+            if (sourceTeam.Reserves.Contains(target)) return TransferAvailability.Available;
+            if (!sourceTeam.StartingEleven.Contains(target)) return TransferAvailability.Negotiable;
+
+            List<PlayerAgent> ranked = new List<PlayerAgent>(sourceTeam.Players);
+            ranked.Sort((a, b) => b.GetOverallRating().CompareTo(a.GetOverallRating()));
+            int keyPlayerCutoff = Mathf.Max(3, Mathf.CeilToInt(ranked.Count * 0.2f));
+            return ranked.IndexOf(target) < keyPlayerCutoff
+                ? TransferAvailability.KeyPlayer
+                : TransferAvailability.Negotiable;
         }
 
         // Finalizes an accepted bid - the escrowed amount was already deducted at
