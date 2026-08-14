@@ -188,6 +188,7 @@ namespace Manager
         private WorldClubGenerationService worldGenerationService;
         private bool usesWorldGeneration;
         private float worldLeagueMeanOverall;
+        private float worldLeagueMaxPositiveDelta;
 
         private List<OpenFootballMatch> allSeasonFixtures = new();
         private List<OpenFootballMatch> managedTeamFixtures = new();
@@ -1769,6 +1770,7 @@ namespace Manager
         {
             usesWorldGeneration = worldGenerationService != null;
             worldLeagueMeanOverall = 0f;
+            worldLeagueMaxPositiveDelta = 0f;
             currentSeason = 1;
             currentFixtureIndex = 0;
             seasonEndRewardsAppliedForCurrentSeason = false;
@@ -3043,6 +3045,7 @@ namespace Manager
             currentSaveName = data.SaveName;
             usesWorldGeneration = data.UsesWorldGeneration && worldGenerationService != null;
             worldLeagueMeanOverall = 0f;
+            worldLeagueMaxPositiveDelta = 0f;
 
             managerName = data.ManagerName;
             managedTeamName = data.ManagedTeamName;
@@ -11723,6 +11726,14 @@ namespace Manager
                 count++;
             }
             worldLeagueMeanOverall = count > 0 ? total / count : 79.5f;
+            if (count > 0)
+            {
+                foreach (string teamName in availableTeamNames)
+                {
+                    if (!TryGetWorldTarget(teamName, out SquadQualityTarget target)) continue;
+                    worldLeagueMaxPositiveDelta = Mathf.Max(worldLeagueMaxPositiveDelta, target.FirstTeamOverall - worldLeagueMeanOverall);
+                }
+            }
             return worldLeagueMeanOverall;
         }
 
@@ -11731,8 +11742,16 @@ namespace Manager
             // Player quality remains the source of truth. These factors translate the
             // generated league-relative quality gap into the xG prior consumed by the
             // existing match simulator; reputation and historical results never enter.
-            const float ratingToLogStrength = 0.10f;
+            const float ratingToLogStrength = 0.24f;
             float delta = firstTeamOverall - GetWorldLeagueMeanOverall();
+            if (delta > 0f && worldLeagueMaxPositiveDelta > 0f)
+            {
+                // A concave positive curve keeps the best club fixed while avoiding a
+                // cliff immediately below the elite. Mid/high-table clubs remain
+                // ordered by player quality but are not treated as relegation-level
+                // opposition simply because they trail a capped historical outlier.
+                delta = Mathf.Sqrt(delta / worldLeagueMaxPositiveDelta) * worldLeagueMaxPositiveDelta;
+            }
             float attack = Mathf.Exp(delta * ratingToLogStrength);
             float defence = Mathf.Exp(-delta * ratingToLogStrength);
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);

@@ -19,7 +19,7 @@ public static class ManagerHolyBalanceAudit
     private const int Seed = 221104;
     private const float HomeGoalBase = 1.45f;
     private const float AwayGoalBase = 1.20f;
-    private const float RatingToLogStrength = 0.10f;
+    private const float RatingToLogStrength = 0.24f;
 
     private sealed class TableRow
     {
@@ -45,11 +45,18 @@ public static class ManagerHolyBalanceAudit
         if (clubs.Count != 20) throw new InvalidDataException($"Expected 20 latest English top-flight profiles, found {clubs.Count}.");
 
         float leagueMean = clubs.Average(profile => (float)profile.FirstTeamOverall);
+        float maxPositiveDelta = clubs.Max(profile => (float)profile.FirstTeamOverall - leagueMean);
         List<float> goalsPerGame = new();
         List<float> championPoints = new();
         List<float> bottomPoints = new();
+        List<float> fourthPoints = new();
+        List<float> medianPoints = new();
+        List<float> seventeenthPoints = new();
         List<float> bestGoalDifference = new();
         List<float> worstGoalDifference = new();
+        List<float> fourthGoalDifference = new();
+        List<float> medianGoalDifference = new();
+        List<float> seventeenthGoalDifference = new();
         int homeWins = 0;
         int draws = 0;
         int awayWins = 0;
@@ -64,7 +71,7 @@ public static class ManagerHolyBalanceAudit
             foreach (ClubWorldGenerationProfileRecord club in clubs)
             {
                 SquadQualityTarget target = new((float)club.FirstTeamOverall, (float)club.BenchOverall, (float)club.ReserveOverall);
-                teams[club.ClubName] = generator.GenerateSquad(club.ClubName, target);
+                teams[club.ClubName] = generator.GenerateSquad(RuntimePremierLeagueName(club.ClubName), target);
             }
 
             for (int season = 0; season < SeasonsPerWorld; season++)
@@ -77,10 +84,12 @@ public static class ManagerHolyBalanceAudit
                     foreach (ClubWorldGenerationProfileRecord away in clubs)
                     {
                         if (home.ClubId == away.ClubId) continue;
-                        float homeAttack = Mathf.Exp(((float)home.FirstTeamOverall - leagueMean) * RatingToLogStrength);
-                        float homeDefence = Mathf.Exp(-((float)home.FirstTeamOverall - leagueMean) * RatingToLogStrength);
-                        float awayAttack = Mathf.Exp(((float)away.FirstTeamOverall - leagueMean) * RatingToLogStrength);
-                        float awayDefence = Mathf.Exp(-((float)away.FirstTeamOverall - leagueMean) * RatingToLogStrength);
+                        float homeDelta = ShapeQualityDelta((float)home.FirstTeamOverall - leagueMean, maxPositiveDelta);
+                        float awayDelta = ShapeQualityDelta((float)away.FirstTeamOverall - leagueMean, maxPositiveDelta);
+                        float homeAttack = Mathf.Exp(homeDelta * RatingToLogStrength);
+                        float homeDefence = Mathf.Exp(-homeDelta * RatingToLogStrength);
+                        float awayAttack = Mathf.Exp(awayDelta * RatingToLogStrength);
+                        float awayDefence = Mathf.Exp(-awayDelta * RatingToLogStrength);
                         AgentTeam homeAdjusted = ManagerFormationFit.BuildFitAdjustedTeam(teams[home.ClubName], generator.GetStartingPositions(teams[home.ClubName].Formation));
                         AgentTeam awayAdjusted = ManagerFormationFit.BuildFitAdjustedTeam(teams[away.ClubName], generator.GetStartingPositions(teams[away.ClubName].Formation));
                         Manager.AgentMatchSimulator.AgentMatchResult result = simulator.SimulateMatch(
@@ -120,8 +129,14 @@ public static class ManagerHolyBalanceAudit
                     .ThenByDescending(pair => pair.Value.GoalsFor).ToArray();
                 goalsPerGame.Add(seasonGoals / (float)seasonMatches);
                 championPoints.Add(ordered[0].Value.Points);
+                fourthPoints.Add(ordered[3].Value.Points);
+                medianPoints.Add((ordered[9].Value.Points + ordered[10].Value.Points) / 2f);
+                seventeenthPoints.Add(ordered[16].Value.Points);
                 bottomPoints.Add(ordered[^1].Value.Points);
                 bestGoalDifference.Add(ordered[0].Value.GoalDifference);
+                fourthGoalDifference.Add(ordered[3].Value.GoalDifference);
+                medianGoalDifference.Add((ordered[9].Value.GoalDifference + ordered[10].Value.GoalDifference) / 2f);
+                seventeenthGoalDifference.Add(ordered[16].Value.GoalDifference);
                 worstGoalDifference.Add(ordered[^1].Value.GoalDifference);
                 titles[ordered[0].Key]++;
             }
@@ -130,15 +145,25 @@ public static class ManagerHolyBalanceAudit
         int totalMatches = Worlds * SeasonsPerWorld * clubs.Count * (clubs.Count - 1);
         float meanGoals = goalsPerGame.Average();
         float meanChampion = championPoints.Average();
+        float meanFourth = fourthPoints.Average();
+        float meanMedian = medianPoints.Average();
+        float meanSeventeenth = seventeenthPoints.Average();
         float meanBottom = bottomPoints.Average();
         float meanBestGd = bestGoalDifference.Average();
+        float meanFourthGd = fourthGoalDifference.Average();
+        float meanMedianGd = medianGoalDifference.Average();
+        float meanSeventeenthGd = seventeenthGoalDifference.Average();
         float meanWorstGd = worstGoalDifference.Average();
         float maxTitleShare = titles.Values.Max() / (float)(Worlds * SeasonsPerWorld);
-        bool pass = meanGoals >= 2.40f && meanGoals <= 3.20f &&
-                    meanChampion >= 72f && meanChampion <= 95f &&
-                    meanBottom >= 18f && meanBottom <= 38f &&
-                    meanBestGd >= 25f && meanBestGd <= 65f &&
-                    meanWorstGd <= -20f && meanWorstGd >= -55f &&
+        // Development-only standings evidence (1993-94 through 2024-25) anchors
+        // these ranges. They intentionally span the long-run and modern PL rather
+        // than forcing the simulator to reproduce the unusually extreme 2017-25 era.
+        bool pass = meanGoals >= 2.55f && meanGoals <= 2.95f &&
+                    meanChampion >= 82f && meanChampion <= 93f &&
+                    meanBottom >= 20f && meanBottom <= 29f &&
+                    meanBestGd >= 42f && meanBestGd <= 60f &&
+                    meanWorstGd <= -34f && meanWorstGd >= -50f &&
+                    meanMedianGd >= -5f && meanMedianGd <= 5f &&
                     maxTitleShare <= 0.45f;
 
         StringBuilder report = new();
@@ -147,8 +172,15 @@ public static class ManagerHolyBalanceAudit
         report.AppendLine($"- Status: **{(pass ? "PASS" : "REVIEW")}**");
         report.AppendLine($"- Goals/game: {meanGoals:F3}");
         report.AppendLine($"- Champion points: {meanChampion:F1}");
+        report.AppendLine($"- Fourth-place points: {meanFourth:F1}");
+        report.AppendLine($"- Median points: {meanMedian:F1}");
+        report.AppendLine($"- Seventeenth-place points: {meanSeventeenth:F1}");
         report.AppendLine($"- Bottom points: {meanBottom:F1}");
         report.AppendLine($"- Best goal difference: {meanBestGd:F1}");
+        report.AppendLine($"- Fourth-place goal difference: {meanFourthGd:F1}");
+        report.AppendLine($"- Fourth-place GD range (10th–90th percentile): {Percentile(fourthGoalDifference, 0.10f):F1} to {Percentile(fourthGoalDifference, 0.90f):F1}");
+        report.AppendLine($"- Median goal difference: {meanMedianGd:F1}");
+        report.AppendLine($"- Seventeenth-place goal difference: {meanSeventeenthGd:F1}");
         report.AppendLine($"- Worst goal difference: {meanWorstGd:F1}");
         report.AppendLine($"- Home/draw/away: {homeWins / (float)totalMatches:P1} / {draws / (float)totalMatches:P1} / {awayWins / (float)totalMatches:P1}");
         report.AppendLine($"- Highest title share: {maxTitleShare:P1}").AppendLine();
@@ -161,5 +193,38 @@ public static class ManagerHolyBalanceAudit
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         File.WriteAllText(output, report.ToString());
         Debug.Log($"Manager holy-balance audit {(pass ? "PASSED" : "requires review")}: GPG {meanGoals:F3}, champion {meanChampion:F1}, bottom {meanBottom:F1}, best GD {meanBestGd:F1}, worst GD {meanWorstGd:F1}, max title share {maxTitleShare:P1}. Report: {output}");
+    }
+
+    private static string RuntimePremierLeagueName(string canonicalName)
+    {
+        return canonicalName switch
+        {
+            "AFC Bournemouth" => "AFC Bournemouth",
+            "Brighton & Hove Albion FC" => "Brighton & Hove Albion",
+            "Manchester City FC" => "Manchester City",
+            "Manchester United FC" => "Manchester United",
+            "Nottingham Forest FC" => "Nottingham Forest",
+            "Sunderland AFC" => "Sunderland",
+            "Wolverhampton Wanderers FC" => "Wolverhampton Wanderers",
+            _ when canonicalName.EndsWith(" FC") => canonicalName[..^3],
+            _ => canonicalName
+        };
+    }
+
+    private static float Percentile(List<float> values, float percentile)
+    {
+        float[] ordered = values.OrderBy(value => value).ToArray();
+        if (ordered.Length == 0) return 0f;
+        float position = Mathf.Clamp01(percentile) * (ordered.Length - 1);
+        int lower = Mathf.FloorToInt(position);
+        int upper = Mathf.CeilToInt(position);
+        return Mathf.Lerp(ordered[lower], ordered[upper], position - lower);
+    }
+
+    private static float ShapeQualityDelta(float delta, float maxPositiveDelta)
+    {
+        return delta > 0f && maxPositiveDelta > 0f
+            ? Mathf.Sqrt(delta / maxPositiveDelta) * maxPositiveDelta
+            : delta;
     }
 }
