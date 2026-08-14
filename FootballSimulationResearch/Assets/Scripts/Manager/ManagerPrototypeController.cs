@@ -185,6 +185,9 @@ namespace Manager
         // separate from ResearchEvaluationRunner's own StatisticalModel instance, so
         // nothing here can affect the research evaluation flow or its metrics.
         private readonly StatisticalModel statisticalModel = new();
+        private WorldClubGenerationService worldGenerationService;
+        private bool usesWorldGeneration;
+        private float worldLeagueMeanOverall;
 
         private List<OpenFootballMatch> allSeasonFixtures = new();
         private List<OpenFootballMatch> managedTeamFixtures = new();
@@ -521,6 +524,7 @@ namespace Manager
             selectedTeamIndex = defaultIndex >= 0 ? defaultIndex : 0;
 
             TrainStatisticalModel();
+            InitializeWorldGenerationService();
 
             // Live team strength (session 16) - one-time-ever snapshot of the pure
             // trained values, before any Manager Mode gameplay this session ever gets a
@@ -1763,6 +1767,8 @@ namespace Manager
         // otherwise inherit all of it from whichever career ran before it.
         private void ResetSessionStateForNewCareer()
         {
+            usesWorldGeneration = worldGenerationService != null;
+            worldLeagueMeanOverall = 0f;
             currentSeason = 1;
             currentFixtureIndex = 0;
             seasonEndRewardsAppliedForCurrentSeason = false;
@@ -2913,6 +2919,7 @@ namespace Manager
 
             ManagerSaveData data = new ManagerSaveData
             {
+                UsesWorldGeneration = usesWorldGeneration,
                 SaveId = currentSaveId,
                 SaveName = currentSaveName,
                 ManagerName = managerName,
@@ -3034,6 +3041,8 @@ namespace Manager
             // from instead of minting a new one.
             currentSaveId = data.SaveId;
             currentSaveName = data.SaveName;
+            usesWorldGeneration = data.UsesWorldGeneration && worldGenerationService != null;
+            worldLeagueMeanOverall = 0f;
 
             managerName = data.ManagerName;
             managedTeamName = data.ManagedTeamName;
@@ -3102,6 +3111,10 @@ namespace Manager
             // one-time-ever training snapshot (see Start), never mutated, so they're
             // already correct for any team including a freshly-loaded managed one.
             baselineAverageOverallByTeam[managedTeamName] = GetAverageOverall(managedTeam);
+            if (usesWorldGeneration && TryGetWorldTarget(managedTeamName, out SquadQualityTarget loadedTarget))
+            {
+                ConfigureInitialWorldStrength(managedTeamName, loadedTarget.FirstTeamOverall);
+            }
 
             Dictionary<string, PlayerAgent> managedPlayersById = new();
             foreach (PlayerAgent p in managedTeam.Players) managedPlayersById[p.PlayerId] = p;
@@ -11664,6 +11677,71 @@ namespace Manager
 
         private AgentMatchSimulator.AgentMatchResult lastSimulatedResult;
 
+        private void InitializeWorldGenerationService()
+        {
+            try
+            {
+                TextAsset historyAsset = Resources.Load<TextAsset>("World/football_world_history");
+                TextAsset registryAsset = Resources.Load<TextAsset>("World/football_club_registry");
+                if (historyAsset == null || registryAsset == null)
+                {
+                    Debug.LogWarning("World generation data is unavailable; fresh careers will use the legacy bootstrap.");
+                    worldGenerationService = null;
+                    return;
+                }
+                worldGenerationService = new WorldClubGenerationService(
+                    FootballClubRegistry.FromTextAsset(registryAsset),
+                    FootballWorldHistory.FromTextAsset(historyAsset));
+            }
+            catch (Exception exception)
+            {
+                worldGenerationService = null;
+                Debug.LogError($"World generation data failed to load; using legacy bootstrap. {exception.Message}");
+            }
+        }
+
+        private bool TryGetWorldTarget(string teamName, out SquadQualityTarget target)
+        {
+            if (worldGenerationService != null &&
+                worldGenerationService.TryGetSquadQualityTarget("eng", teamName, out _, out target))
+            {
+                return true;
+            }
+            target = default;
+            return false;
+        }
+
+        private float GetWorldLeagueMeanOverall()
+        {
+            if (worldLeagueMeanOverall > 0f) return worldLeagueMeanOverall;
+            float total = 0f;
+            int count = 0;
+            foreach (string teamName in availableTeamNames)
+            {
+                if (!TryGetWorldTarget(teamName, out SquadQualityTarget target)) continue;
+                total += target.FirstTeamOverall;
+                count++;
+            }
+            worldLeagueMeanOverall = count > 0 ? total / count : 79.5f;
+            return worldLeagueMeanOverall;
+        }
+
+        private void ConfigureInitialWorldStrength(string teamName, float firstTeamOverall)
+        {
+            // Player quality remains the source of truth. These factors translate the
+            // generated league-relative quality gap into the xG prior consumed by the
+            // existing match simulator; reputation and historical results never enter.
+            const float ratingToLogStrength = 0.10f;
+            float delta = firstTeamOverall - GetWorldLeagueMeanOverall();
+            float attack = Mathf.Exp(delta * ratingToLogStrength);
+            float defence = Mathf.Exp(-delta * ratingToLogStrength);
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+            strength.AttackStrength = attack;
+            strength.DefenceStrength = defence;
+            originalAttackStrengthByTeam[teamName] = attack;
+            originalDefenceStrengthByTeam[teamName] = defence;
+        }
+
         private AgentTeam GetOrCreateAgentTeam(string teamName)
         {
             if (squadsByTeamName.TryGetValue(teamName, out AgentTeam existingTeam))
@@ -11671,9 +11749,17 @@ namespace Manager
                 return existingTeam;
             }
 
-            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
-
-            AgentTeam newTeam = squadGenerator.GenerateSquad(teamName, strength.AttackStrength, strength.DefenceStrength);
+            AgentTeam newTeam;
+            if (usesWorldGeneration && TryGetWorldTarget(teamName, out SquadQualityTarget target))
+            {
+                newTeam = squadGenerator.GenerateSquad(teamName, target);
+                ConfigureInitialWorldStrength(teamName, target.FirstTeamOverall);
+            }
+            else
+            {
+                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+                newTeam = squadGenerator.GenerateSquad(teamName, strength.AttackStrength, strength.DefenceStrength);
+            }
             ApplyDeveloperEasterEggPlayer(newTeam);
 
             squadsByTeamName[teamName] = newTeam;
@@ -11779,7 +11865,6 @@ namespace Manager
                 return pool;
             }
 
-            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
             pool = new List<PlayerAgent>();
 
             // DefenceStrength is inverted in AgentSquadGenerator (defenceMultiplier =
@@ -11789,9 +11874,20 @@ namespace Manager
             // reserve-pool defenders progressively BETTER the harder they were meant to
             // be discounted - confirmed live (see HANDOFF): discounting to 0.5x pushed a
             // CB's average Defending from 72.5 to 95.7, not down.
-            foreach (PlayerPosition position in ReservePoolPositions)
+            if (usesWorldGeneration && TryGetWorldTarget(teamName, out SquadQualityTarget target))
             {
-                pool.Add(squadGenerator.GenerateReservePlayer(position, strength.AttackStrength * 0.85f, strength.DefenceStrength / 0.85f));
+                foreach (PlayerPosition position in ReservePoolPositions)
+                {
+                    pool.Add(squadGenerator.GenerateReservePlayer(position, target));
+                }
+            }
+            else
+            {
+                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+                foreach (PlayerPosition position in ReservePoolPositions)
+                {
+                    pool.Add(squadGenerator.GenerateReservePlayer(position, strength.AttackStrength * 0.85f, strength.DefenceStrength / 0.85f));
+                }
             }
 
             reservePoolByTeamName[teamName] = pool;

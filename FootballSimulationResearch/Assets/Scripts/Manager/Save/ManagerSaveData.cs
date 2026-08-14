@@ -245,7 +245,11 @@ namespace Manager.Save
     [Serializable]
     public class ManagerSaveData
     {
-        public int SaveVersion = 1;
+        public int SaveVersion = 2;
+        // False for every pre-world-generation save because missing JSON boolean
+        // fields deserialize to false. New careers opt in explicitly, preserving the
+        // legacy squad/strength bootstrap for existing saves.
+        public bool UsesWorldGeneration;
 
         // Multi-save support (session 15) - SaveId is a GUID generated once when a
         // career starts and never changes for that career's lifetime; it's the actual

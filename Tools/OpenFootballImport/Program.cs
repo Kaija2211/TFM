@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Globalization;
 
 record ParsedMatch(string Home, string Away, int HomeGoals, int AwayGoals, int Matchday);
 
@@ -129,6 +130,7 @@ sealed class ClubWorldGenerationProfile
 }
 
 sealed record ClubHonoursEvidence(string ClubId, double HonoursScore, double ReputationFloor, string SourceUrl);
+sealed record ClubEloComparison(string ClubId, string ClubName, string CountryCode, double GeneratedOverall, double Elo);
 
 sealed class ClubIdentityMap
 {
@@ -248,6 +250,7 @@ static class Program
         string output = Path.Combine(repositoryRoot, "Temp", "OpenFootballAudit");
         string clubsSource = Path.GetFullPath(Path.Combine(repositoryRoot, "..", "clubs"));
         string europeanSource = Path.GetFullPath(Path.Combine(repositoryRoot, "..", "champions-league"));
+        string? clubEloSnapshot = null;
         string? publishHistory = null;
         string? publishClubs = null;
 
@@ -258,6 +261,7 @@ static class Program
             else if (args[index] == "--clubs-source" && index + 1 < args.Length) clubsSource = Path.GetFullPath(args[++index]);
             else if (args[index] == "--publish-history" && index + 1 < args.Length) publishHistory = Path.GetFullPath(args[++index]);
             else if (args[index] == "--publish-clubs" && index + 1 < args.Length) publishClubs = Path.GetFullPath(args[++index]);
+            else if (args[index] == "--club-elo-snapshot" && index + 1 < args.Length) clubEloSnapshot = Path.GetFullPath(args[++index]);
             else return Fail($"Unknown or incomplete argument: {args[index]}");
         }
 
@@ -314,7 +318,9 @@ static class Program
             clubs = aliases.OrderBy(pair => pair.Key).Select(pair => new { id = pair.Key, aliases = pair.Value.Order().ToArray() })
         }, jsonOptions) + Environment.NewLine);
         WriteRegistryOutputs(output, clubsSource, registry, identityMaps, aliases, jsonOptions);
-        WriteWorldHistory(output, commit, sourceCommits, honoursEvidence, europeanSeasons, results, identityMaps, clubs, jsonOptions);
+        ClubWorldGenerationProfile[] worldProfiles = WriteWorldHistory(output, commit, sourceCommits, honoursEvidence, europeanSeasons, results, identityMaps, clubs, jsonOptions);
+        if (clubEloSnapshot is not null)
+            WriteClubEloAudit(output, clubEloSnapshot, worldProfiles, registry);
         if (publishHistory is not null)
         {
             string? publishDirectory = Path.GetDirectoryName(publishHistory);
@@ -536,7 +542,7 @@ static class Program
         return new FileAuditResult(audit, parsed);
     }
 
-    private static void WriteWorldHistory(
+    private static ClubWorldGenerationProfile[] WriteWorldHistory(
         string output,
         string commit,
         Dictionary<string, string> sourceCommits,
@@ -603,6 +609,7 @@ static class Program
             clubSeasons
         };
         File.WriteAllText(Path.Combine(output, "football_world_history.json"), JsonSerializer.Serialize(payload, jsonOptions) + Environment.NewLine);
+        return worldGenerationProfiles;
     }
 
     private static ClubWorldGenerationProfile[] BuildWorldGenerationProfiles(
@@ -876,6 +883,114 @@ static class Program
         ("fr", 1) => 77.0d, ("fr", 2) => 69.0d,
         _ => 55.0d
     };
+
+    private static void WriteClubEloAudit(
+        string output,
+        string snapshotPath,
+        ClubWorldGenerationProfile[] profiles,
+        ClubRegistry registry)
+    {
+        if (!File.Exists(snapshotPath)) throw new FileNotFoundException("Club Elo snapshot does not exist.", snapshotPath);
+        Dictionary<string, string> countryCodes = new(StringComparer.Ordinal)
+        {
+            ["ENG"] = "eng", ["GER"] = "de", ["ESP"] = "es", ["ITA"] = "it", ["FRA"] = "fr"
+        };
+        Dictionary<string, string> aliases = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Bayern"] = "Bayern München",
+            ["Paris SG"] = "Paris Saint-Germain",
+            ["Man City"] = "Manchester City",
+            ["Man United"] = "Manchester United",
+            ["Inter"] = "FC Internazionale Milano",
+            ["Atletico"] = "Atlético Madrid",
+            ["Forest"] = "Nottingham Forest",
+            ["Bilbao"] = "Athletic Club",
+            ["Monaco"] = "AS Monaco",
+            ["Gladbach"] = "Borussia Mönchengladbach",
+            ["Koeln"] = "1. FC Köln",
+            ["Werder"] = "Werder Bremen"
+        };
+        Dictionary<string, ClubWorldGenerationProfile> currentTopFlight = profiles
+            .Where(profile => profile.Level == 1)
+            .GroupBy(profile => profile.CountryCode)
+            .SelectMany(country =>
+            {
+                int latest = country.Max(profile => SeasonStartYear(profile.ReferenceSeason));
+                return country.Where(profile => SeasonStartYear(profile.ReferenceSeason) == latest);
+            })
+            .ToDictionary(profile => profile.ClubId, StringComparer.Ordinal);
+        List<ClubEloComparison> comparisons = new();
+        List<string> unresolved = new();
+
+        foreach (string line in File.ReadLines(snapshotPath).Skip(1))
+        {
+            string[] fields = line.Split(',');
+            if (fields.Length < 5 || !countryCodes.TryGetValue(fields[2], out string? countryCode)) continue;
+            if (!int.TryParse(fields[3], out int level) || level != 1) continue;
+            string name = aliases.TryGetValue(fields[1], out string? replacement) ? replacement : fields[1];
+            string identityCountryCode = fields[2] == "FRA" && fields[1] == "Monaco" ? "mc" : countryCode;
+            if (!registry.TryResolve(identityCountryCode, name, out RegistryClub? club) || club == null ||
+                !currentTopFlight.TryGetValue(club.Id, out ClubWorldGenerationProfile? profile))
+            {
+                unresolved.Add($"{fields[2]}:{fields[1]}");
+                continue;
+            }
+            if (!double.TryParse(fields[4], NumberStyles.Float, CultureInfo.InvariantCulture, out double elo)) continue;
+            comparisons.Add(new ClubEloComparison(club.Id, profile.ClubName, profile.CountryCode, profile.FirstTeamOverall, elo));
+        }
+
+        double pearson = Pearson(comparisons.Select(item => item.GeneratedOverall).ToArray(), comparisons.Select(item => item.Elo).ToArray());
+        Dictionary<string, int> generatedRanks = comparisons.OrderByDescending(item => item.GeneratedOverall).Select((item, index) => (item.ClubId, Rank: index + 1)).ToDictionary(item => item.ClubId, item => item.Rank);
+        Dictionary<string, int> eloRanks = comparisons.OrderByDescending(item => item.Elo).Select((item, index) => (item.ClubId, Rank: index + 1)).ToDictionary(item => item.ClubId, item => item.Rank);
+        double spearman = Pearson(comparisons.Select(item => (double)generatedRanks[item.ClubId]).ToArray(), comparisons.Select(item => (double)eloRanks[item.ClubId]).ToArray());
+
+        StringBuilder report = new();
+        report.AppendLine("# Development-only Club Elo calibration audit").AppendLine();
+        report.AppendLine("Club Elo is external calibration evidence and is not published to Unity runtime assets.").AppendLine();
+        report.AppendLine($"- Snapshot: `{Path.GetFileName(snapshotPath)}`");
+        report.AppendLine($"- Matched current top-flight clubs: {comparisons.Count}");
+        report.AppendLine($"- Unresolved or out-of-season clubs: {unresolved.Distinct().Count()}");
+        report.AppendLine($"- Pearson correlation (generated overall vs Elo): {pearson:F3}");
+        report.AppendLine($"- Spearman rank correlation: {spearman:F3}").AppendLine();
+        report.AppendLine("| Country | Clubs | Generated mean | Generated spread | Elo mean | Elo spread |");
+        report.AppendLine("|---|---:|---:|---:|---:|---:|");
+        foreach (IGrouping<string, ClubEloComparison> country in comparisons.GroupBy(item => item.CountryCode).OrderBy(group => group.Key))
+        {
+            ClubEloComparison[] rows = country.ToArray();
+            report.AppendLine($"| {country.Key} | {rows.Length} | {rows.Average(item => item.GeneratedOverall):F2} | {rows.Max(item => item.GeneratedOverall) - rows.Min(item => item.GeneratedOverall):F2} | {rows.Average(item => item.Elo):F1} | {rows.Max(item => item.Elo) - rows.Min(item => item.Elo):F1} |");
+        }
+        report.AppendLine().AppendLine("## Largest rank disagreements").AppendLine();
+        report.AppendLine("| Club | Generated overall | Elo | Generated rank | Elo rank | Difference |");
+        report.AppendLine("|---|---:|---:|---:|---:|---:|");
+        foreach (ClubEloComparison item in comparisons.OrderByDescending(item => Math.Abs(generatedRanks[item.ClubId] - eloRanks[item.ClubId])).Take(20))
+        {
+            int difference = generatedRanks[item.ClubId] - eloRanks[item.ClubId];
+            report.AppendLine($"| {item.ClubName} | {item.GeneratedOverall:F2} | {item.Elo:F1} | {generatedRanks[item.ClubId]} | {eloRanks[item.ClubId]} | {difference:+#;-#;0} |");
+        }
+        if (unresolved.Count > 0)
+            report.AppendLine().AppendLine($"Unresolved: {string.Join(", ", unresolved.Distinct().Order())}");
+        File.WriteAllText(Path.Combine(output, "club_elo_audit.md"), report.ToString());
+        Console.WriteLine($"Club Elo audit: {comparisons.Count} matches, Pearson {pearson:F3}, Spearman {spearman:F3}.");
+    }
+
+    private static double Pearson(double[] left, double[] right)
+    {
+        if (left.Length != right.Length || left.Length < 2) return 0d;
+        double leftMean = left.Average();
+        double rightMean = right.Average();
+        double numerator = 0d;
+        double leftSquares = 0d;
+        double rightSquares = 0d;
+        for (int index = 0; index < left.Length; index++)
+        {
+            double leftDelta = left[index] - leftMean;
+            double rightDelta = right[index] - rightMean;
+            numerator += leftDelta * rightDelta;
+            leftSquares += leftDelta * leftDelta;
+            rightSquares += rightDelta * rightDelta;
+        }
+        return leftSquares <= 0d || rightSquares <= 0d ? 0d : numerator / Math.Sqrt(leftSquares * rightSquares);
+    }
 
     private static void WriteWorldGenerationAudit(string output, ClubWorldGenerationProfile[] profiles)
     {

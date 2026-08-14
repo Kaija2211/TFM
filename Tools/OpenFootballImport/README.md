@@ -37,6 +37,13 @@ dotnet run --project Tools/OpenFootballImport -- `
   --publish-clubs FootballSimulationResearch\Assets\Data\Generated\football_club_registry.json.txt
 ```
 
+For the development-only Club Elo comparison (the downloaded snapshot remains under
+ignored `Temp` and is never published into Unity), run:
+
+```powershell
+.\Tools\RunClubEloAudit.ps1
+```
+
 Publishing is explicit. The `.json.txt` suffix lets Unity import the generated JSON
 as a `TextAsset` and avoids the repository's broad historical `*.json` ignore rule.
 

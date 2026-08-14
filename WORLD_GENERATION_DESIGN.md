@@ -55,8 +55,9 @@ After creation, transfers, development, decline, injuries, condition, selection 
 tactics alter the players and therefore alter club strength. Historical inputs are
 not reapplied.
 
-The legacy strength-based generation route remains available for existing saves and
-research compatibility until the new-world audit is approved.
+Fresh Manager Mode careers use profile-based generation and record that choice in
+save schema v2. Older saves deserialize the missing flag as false and retain the
+legacy strength-based generation route. Research Mode remains unchanged.
 
 ## Holy balance gates
 
@@ -71,5 +72,6 @@ Major changes must check at least:
 
 The deterministic target-only audit runs 1,000 seasons per latest top division. It
 is a calibration check, not a substitute for the live match-engine audit. The editor
-menu `TFM -> Audits -> World Generation Profiles` generates actual player agents and
-must pass before the new bootstrap replaces legacy save creation.
+menu `TFM -> Audits -> World Generation Profiles` checks generated squad calibration.
+`TFM -> Audits -> Manager Holy Balance` then runs repeated full seasons through the
+actual generated players, formation-fit layer and Manager Mode match simulator.

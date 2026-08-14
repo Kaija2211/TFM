@@ -5,8 +5,8 @@ using Sim;
 namespace Manager
 {
     // Controlled bridge between immutable imported world data and generated player
-    // agents. Existing saves and the legacy Premier League bootstrap do not call this
-    // yet; future new-save creation can migrate one boundary at a time.
+    // agents. Fresh Manager Mode careers use this boundary; pre-v2 saves deliberately
+    // retain the legacy Premier League bootstrap for compatibility.
     public sealed class WorldClubGenerationService
     {
         private readonly FootballClubRegistry registry;
@@ -60,6 +60,21 @@ namespace Manager
                 return true;
             }
             clubId = null;
+            return false;
+        }
+
+        public bool TryGetSquadQualityTarget(
+            string countryCode,
+            string displayName,
+            out string clubId,
+            out SquadQualityTarget target)
+        {
+            if (TryResolveClubId(countryCode, displayName, out clubId))
+            {
+                target = GetSquadQualityTarget(clubId, countryCode);
+                return true;
+            }
+            target = default;
             return false;
         }
 
