@@ -298,7 +298,7 @@ namespace Manager.Save
     [Serializable]
     public class ManagerSaveData
     {
-        public int SaveVersion = 2;
+        public int SaveVersion = 3;
         // False for every pre-world-generation save because missing JSON boolean
         // fields deserialize to false. New careers opt in explicitly, preserving the
         // legacy squad/strength bootstrap for existing saves.
@@ -323,6 +323,8 @@ namespace Manager.Save
         public string ManagedTeamName;
         public int CurrentSeason;
         public int CurrentFixtureIndex;
+        public string CurrentCareerDate;
+        public int SeasonStartYear;
         public string ActiveSeasonFileName;
 
         public List<LeagueTableEntrySaveData> TableEntries = new();

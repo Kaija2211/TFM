@@ -193,6 +193,8 @@ namespace Manager
         private List<OpenFootballMatch> allSeasonFixtures = new();
         private List<OpenFootballMatch> managedTeamFixtures = new();
         private int currentFixtureIndex;
+        private readonly ManagerCareerCalendar careerCalendar = new();
+        private const int FirstCareerSeasonStartYear = 2026;
         private ManagerMentality selectedMentality = ManagerMentality.Balanced;
         private readonly ManagerTacticalSliders tacticalSliders = new();
 
@@ -1773,6 +1775,7 @@ namespace Manager
             worldLeagueMaxPositiveDelta = 0f;
             currentSeason = 1;
             currentFixtureIndex = 0;
+            careerCalendar.StartSeason(FirstCareerSeasonStartYear);
             seasonEndRewardsAppliedForCurrentSeason = false;
 
             playableTable.Reset();
@@ -2126,7 +2129,7 @@ namespace Manager
                 {
                     playNextImage.color = ManagerUITheme.Accent;
                 }
-                ManagerUITheme.NormalizeButtonLabel(playNextMatchButton, "NEXT MATCHDAY", ManagerUITheme.OnAccent, 20);
+                ManagerUITheme.NormalizeButtonLabel(playNextMatchButton, "CONTINUE", ManagerUITheme.OnAccent, 20);
             }
 
             float squadTop = menuTop + mainRowHeight + rowGap;
@@ -2299,7 +2302,8 @@ namespace Manager
 
             if (bylineLabel != null)
             {
-                bylineLabel.text = $"Manager {managerName}   ·   Matchday {currentFixtureIndex + 1}";
+                string window = careerCalendar.IsTransferWindowOpen ? "TRANSFER WINDOW OPEN" : "WINDOW CLOSED";
+                bylineLabel.text = $"Manager {managerName}   ·   {careerCalendar.DisplayDate}   ·   {window}";
                 bylineLabel.ForceMeshUpdate();
             }
 
@@ -2425,7 +2429,7 @@ namespace Manager
                 isTopHalf
                     ? $"The season has concluded, and the board is pleased with the progress made. Finishing {finalPosition}{GetOrdinalSuffix(finalPosition)} reflects good management, tactical decision-making, and effective squad use. This has been a strong foundation to build on."
                     : $"The season has concluded, and results have fallen short of expectations. A {finalPosition}{GetOrdinalSuffix(finalPosition)}-place finish had positive moments, but not enough consistency across the campaign. The board will review the situation carefully before deciding the next steps.",
-                currentFixtureIndex);
+                careerCalendar.CurrentDayNumber);
         }
 
         private void BuildEndOfSeasonChrome()
@@ -2593,7 +2597,9 @@ namespace Manager
 
         public void OnStartNewSeasonClicked()
         {
+            AdvanceCalendarTo(new DateTime(careerCalendar.SeasonStartYear + 1, 6, 1), stopForNewInboxMessage: false);
             currentSeason++;
+            careerCalendar.StartSeason(FirstCareerSeasonStartYear + currentSeason - 1);
             seasonEndRewardsAppliedForCurrentSeason = false;
 
             AgeAndReloadFixturesForNewSeason();
@@ -2643,7 +2649,7 @@ namespace Manager
 
             currentFixtureIndex = 0;
             simulatedMatchdays.Clear();
-            transferNegotiation.ForceResolveAllPending(finance, managedTeamName, inbox, FindTeamContainingPlayer, currentFixtureIndex);
+            transferNegotiation.ForceResolveAllPending(finance, managedTeamName, inbox, FindTeamContainingPlayer, careerCalendar.CurrentDayNumber);
 
             foreach (ManagerSquadRoles roles in squadRolesByTeamName.Values)
             {
@@ -2922,6 +2928,8 @@ namespace Manager
                 ManagedTeamName = managedTeamName,
                 CurrentSeason = currentSeason,
                 CurrentFixtureIndex = currentFixtureIndex,
+                CurrentCareerDate = careerCalendar.SerializeDate(),
+                SeasonStartYear = careerCalendar.SeasonStartYear,
                 ActiveSeasonFileName = allSeasonFixtures.Count > 0 ? allSeasonFixtures[0].Season : seasonFile.name,
                 ManagedSquad = AgentTeamSaveData.FromTeam(managedTeam),
                 ManagedBudget = budget,
@@ -3040,6 +3048,10 @@ namespace Manager
             managedTeamName = data.ManagedTeamName;
             currentSeason = data.CurrentSeason;
             currentFixtureIndex = data.CurrentFixtureIndex;
+            int restoredSeasonStartYear = data.SeasonStartYear > 0
+                ? data.SeasonStartYear
+                : FirstCareerSeasonStartYear + Mathf.Max(0, currentSeason - 1);
+            careerCalendar.Restore(restoredSeasonStartYear, data.CurrentCareerDate, currentFixtureIndex);
 
             TextAsset activeFile = FindSeasonFileAssetByName(data.ActiveSeasonFileName) ?? seasonFile;
             allSeasonFixtures = OpenFootballTextParser.ParseSeasonFile(activeFile.text, activeFile.name);
@@ -3234,9 +3246,25 @@ namespace Manager
             foreach (DiscoveredProspectSaveData dto in data.DiscoveredProspects)
             {
                 restoredDiscoveries.Add(dto.Prospect.ToPlayer());
-                restoredDiscoveryMatchdays.Add(dto.DiscoveredMatchday);
+                int discoveredDay = dto.DiscoveredMatchday;
+                if (data.SaveVersion < 3 && discoveredDay > 0)
+                {
+                    DateTime legacyDate = careerCalendar.GetFixtureDate(Mathf.Max(0, discoveredDay - 1));
+                    discoveredDay = careerCalendar.CurrentDayNumber + (int)(legacyDate.Date - careerCalendar.CurrentDate.Date).TotalDays;
+                }
+                restoredDiscoveryMatchdays.Add(discoveredDay);
             }
             scouting.RestoreDiscoveredProspects(restoredDiscoveries, restoredDiscoveryMatchdays);
+
+            if (data.SaveVersion < 3)
+            {
+                foreach (InboxMessageSaveData message in data.InboxMessages)
+                {
+                    if (message.MatchdayReceived <= 0) continue;
+                    DateTime legacyDate = careerCalendar.GetFixtureDate(Mathf.Max(0, message.MatchdayReceived - 1));
+                    message.MatchdayReceived = careerCalendar.CurrentDayNumber + (int)(legacyDate.Date - careerCalendar.CurrentDate.Date).TotalDays;
+                }
+            }
 
             inbox.RestoreFromSave(data.InboxMessages);
 
@@ -3994,7 +4022,7 @@ namespace Manager
                 TextMeshProUGUI bylineTMP = scoutingBylineObj.GetComponentInChildren<TextMeshProUGUI>();
                 if (bylineTMP != null)
                 {
-                    bylineTMP.text = $"{allProspects.Count} discovered   ·   unclaimed for {ManagerScouting.MatchdaysUntilPoached} matchdays and they're poached   ·   bring them into an empty Academy slot to keep them";
+                    bylineTMP.text = $"{allProspects.Count} discovered   ·   unclaimed for {ManagerScouting.DaysUntilPoached} days and they're poached   ·   bring them into an empty Academy slot to keep them";
                 }
             }
 
@@ -4003,8 +4031,8 @@ namespace Manager
             foreach (PlayerAgent prospect in allProspects)
             {
                 string nation = ManagerPlayerNationality.GetNationality(prospect).Name;
-                int left = scouting.GetMatchdaysUntilPoached(prospect, currentFixtureIndex);
-                string expiresCell = left <= 1 ? $"<color=#e05a5a>{left} MD left</color>" : $"{left} MD left";
+                int left = scouting.GetDaysUntilPoached(prospect, careerCalendar.CurrentDayNumber);
+                string expiresCell = left <= 2 ? $"<color=#e05a5a>{left}d left</color>" : $"{left}d left";
 
                 string[] cells =
                 {
@@ -4375,7 +4403,7 @@ namespace Manager
                     // Ascending = most urgent (fewest matchdays left) first by default,
                     // matching how every other column's "descending: true" first click
                     // already reads as "most interesting first" for that column.
-                    result = scouting.GetMatchdaysUntilPoached(b, currentFixtureIndex).CompareTo(scouting.GetMatchdaysUntilPoached(a, currentFixtureIndex));
+                    result = scouting.GetDaysUntilPoached(b, careerCalendar.CurrentDayNumber).CompareTo(scouting.GetDaysUntilPoached(a, careerCalendar.CurrentDayNumber));
                     break;
                 default:
                     result = 0;
@@ -4988,9 +5016,9 @@ namespace Manager
                     transferNegotiation.CancelTransferScout(target);
                     SetTransferMarketStatus($"Cancelled the scout assignment on {target.Name}.");
                 }
-                else if (transferNegotiation.TryAssignTransferScout(target, currentFixtureIndex))
+                else if (transferNegotiation.TryAssignTransferScout(target, careerCalendar.CurrentDayNumber))
                 {
-                    SetTransferMarketStatus($"Scout assigned to {target.Name} - report lands in your Inbox after the next matchday.");
+                    SetTransferMarketStatus($"Scout assigned to {target.Name} - report due in {ManagerTransferNegotiation.TransferScoutDurationDays} days.");
                 }
                 else if (transferNegotiation.ActiveTransferScoutAssignmentCount >= ManagerTransferNegotiation.MaxConcurrentTransferScouts)
                 {
@@ -5113,9 +5141,15 @@ namespace Manager
                 return;
             }
 
-            if (transferNegotiation.TryPlaceBid(target, amount, bidDialogSourceTeam, currentFixtureIndex, finance, managedTeamName))
+            if (!careerCalendar.IsTransferWindowOpen)
             {
-                SetTransferMarketStatus($"Bid of £{amount:F1}m submitted for {target.Name} - you'll hear back after the next matchday.");
+                SetTransferMarketStatus("The transfer window is closed.");
+                return;
+            }
+
+            if (transferNegotiation.TryPlaceBid(target, amount, bidDialogSourceTeam, careerCalendar.CurrentDayNumber, finance, managedTeamName))
+            {
+                SetTransferMarketStatus($"Bid of £{amount:F1}m submitted for {target.Name} - response expected in {ManagerTransferNegotiation.BidResponseDays} days.");
             }
             else
             {
@@ -5146,6 +5180,12 @@ namespace Manager
         // the Inbox message itself (see OnInboxSignClicked).
         private void OnSignPlayerClicked(PlayerAgent target)
         {
+            if (!careerCalendar.IsTransferWindowOpen)
+            {
+                SetTransferMarketStatus("The transfer window is closed - this deal cannot be completed today.");
+                return;
+            }
+
             if (!transferNegotiation.TrySign(target, finance, managedTeamName, out ManagerTransferNegotiation.PendingBid resolvedBid))
             {
                 return;
@@ -5464,7 +5504,7 @@ namespace Manager
             matchdayRect.pivot = new Vector2(1f, 1f);
             matchdayRect.anchoredPosition = new Vector2(-20f, -22f);
             matchdayRect.sizeDelta = new Vector2(200f, 32f);
-            ManagerUITheme.BuildLabel(matchdayObj.transform, $"Matchday {message.MatchdayReceived}", 18, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight, FontStyles.Normal);
+            ManagerUITheme.BuildLabel(matchdayObj.transform, ManagerCareerCalendar.DisplayDateForDay(message.MatchdayReceived), 18, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineRight, FontStyles.Normal);
 
             if (!message.IsExpanded)
             {
@@ -7112,7 +7152,7 @@ namespace Manager
             List<PlayerAgent> unavailableBench = new List<PlayerAgent>();
             foreach (PlayerAgent player in team.Bench)
             {
-                if (benchRoles.IsInjured(player, currentFixtureIndex)) unavailableBench.Add(player);
+                if (benchRoles.IsInjured(player, careerCalendar.CurrentDayNumber)) unavailableBench.Add(player);
                 else availableBench.Add(player);
             }
 
@@ -7211,7 +7251,7 @@ namespace Manager
             // awareness at all (see feedback in HANDOFF), so a manager could plan a
             // lineup around a player who's silently benched at kickoff. Doesn't block
             // selection yet, just makes it visible where the lineup is actually built.
-            bool isInjured = roles.IsInjured(player, currentFixtureIndex);
+            bool isInjured = roles.IsInjured(player, careerCalendar.CurrentDayNumber);
 
             GameObject pinObj = ManagerUITheme.BuildPitchPinVisual(
                 tacticsBoardPitchContainer,
@@ -7275,7 +7315,7 @@ namespace Manager
             // list already show this (session 9); the Tactics Board's own bench card was
             // the one place left without it, which mattered most for exactly the drag
             // gesture this icon is meant to warn against.
-            bool benchCardIsInjured = GetOrCreateSquadRoles(managedTeamName).IsInjured(player, currentFixtureIndex);
+            bool benchCardIsInjured = GetOrCreateSquadRoles(managedTeamName).IsInjured(player, careerCalendar.CurrentDayNumber);
             GameObject benchInjuryIcon = ManagerUITheme.BuildInjuryCrossIcon(cardObj.transform, 16f);
             RectTransform benchInjuryIconRect = benchInjuryIcon.GetComponent<RectTransform>();
             benchInjuryIconRect.anchorMin = new Vector2(0f, 0.5f);
@@ -7329,7 +7369,7 @@ namespace Manager
             // pin-to-pin swap never adds anyone to the starting XI who wasn't already in
             // it, so there's nothing new to block there.
             ManagerSquadRoles blockRoles = GetOrCreateSquadRoles(managedTeamName);
-            if (blockRoles.IsInjured(benchPlayer, currentFixtureIndex))
+            if (blockRoles.IsInjured(benchPlayer, careerCalendar.CurrentDayNumber))
             {
                 ShowTacticsBoardWarning($"{benchPlayer.Name} is injured and can't start");
                 RefreshTacticsBoardUI();
@@ -7454,7 +7494,7 @@ namespace Manager
             // at a time - applied here up front so auto-pick can never do in one click
             // what a manual drag isn't allowed to do at all.
             List<PlayerAgent> pool = new List<PlayerAgent>(team.Players);
-            pool.RemoveAll(p => roles.IsInjured(p, currentFixtureIndex)
+            pool.RemoveAll(p => roles.IsInjured(p, careerCalendar.CurrentDayNumber)
                 || (tacticsBoardOpenedMidMatch && playersSubbedOffThisMatch.Contains(p)));
 
             List<PlayerAgent> bestXI = new List<PlayerAgent>();
@@ -7880,7 +7920,7 @@ namespace Manager
 
             foreach (var (player, slot) in startingWithSlots)
             {
-                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
+                squadBrowseListView.AddPlayerGridRow(player, slot.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, careerCalendar.CurrentDayNumber), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
             }
 
             squadBrowseListView.AddSectionHeader($"Bench ({team.Bench.Count})");
@@ -7893,7 +7933,7 @@ namespace Manager
 
             foreach (PlayerAgent player in benchPlayers)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, careerCalendar.CurrentDayNumber), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
             }
 
             // Reserves section (session 16 - Thomas: "we need more players per team...
@@ -7919,7 +7959,7 @@ namespace Manager
 
             foreach (PlayerAgent player in sortedReserves)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, careerCalendar.CurrentDayNumber), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
@@ -8033,14 +8073,14 @@ namespace Manager
         // keeps a fully-fit player's number calm rather than loud, without hiding it.
         private string BuildFitnessBadgeSuffix(PlayerAgent player, ManagerSquadRoles roles)
         {
-            if (roles.IsInjured(player, currentFixtureIndex))
+            if (roles.IsInjured(player, careerCalendar.CurrentDayNumber))
             {
                 // No leading "INJ" text anymore - the injury cross icon (see
                 // ManagerUITheme.BuildInjuryCrossIcon) already says that visually now;
                 // this just adds the one piece of info the icon alone can't carry.
-                int returnMatchday = roles.GetInjuryReturnMatchday(player);
+                int returnDay = roles.GetInjuryReturnMatchday(player);
                 string dangerHex = ColorUtility.ToHtmlStringRGB(ManagerUITheme.Danger);
-                return $"<color=#{dangerHex}>(Ret. MD{returnMatchday + 1})</color>";
+                return $"<color=#{dangerHex}>(Ret. {ManagerCareerCalendar.DisplayDateForDay(returnDay)})</color>";
             }
 
             float condition = roles.GetCondition(player);
@@ -8992,9 +9032,72 @@ namespace Manager
                 return;
             }
 
+            DateTime fixtureDate = careerCalendar.GetFixtureDate(currentFixtureIndex);
+            if (careerCalendar.CurrentDate.Date < fixtureDate.Date)
+            {
+                bool interrupted = AdvanceCalendarTo(fixtureDate, stopForNewInboxMessage: true);
+                RefreshHubUI();
+                if (interrupted || careerCalendar.CurrentDate.Date < fixtureDate.Date) return;
+            }
+
             currentFixture = managedTeamFixtures[currentFixtureIndex];
 
             ShowMatchdayPrep();
+        }
+
+        private bool AdvanceCalendarTo(DateTime targetDate, bool stopForNewInboxMessage)
+        {
+            while (careerCalendar.CurrentDate.Date < targetDate.Date)
+            {
+                int messageCountBefore = inbox.Messages.Count;
+                bool windowWasOpen = careerCalendar.IsTransferWindowOpen;
+                careerCalendar.AdvanceOneDay();
+                int currentDay = careerCalendar.CurrentDayNumber;
+
+                scouting.ResolveDailyTick(currentDay, squadGenerator, inbox);
+                transferNegotiation.ResolveDueTransferScoutAssignments(currentDay, inbox, FindTeamContainingPlayer);
+                transferNegotiation.ResolveDueBids(currentDay, finance, managedTeamName, inbox, FindTeamContainingPlayer);
+                transferNegotiation.ResolveExpiredSignatures(currentDay, finance, managedTeamName, inbox);
+                ResolveDailyInjuryRecoveries();
+
+                if (windowWasOpen != careerCalendar.IsTransferWindowOpen)
+                {
+                    bool opened = careerCalendar.IsTransferWindowOpen;
+                    inbox.Add(InboxMessageType.RecruitmentTeaser,
+                        opened ? "Transfer Window Open" : "Transfer Window Closed",
+                        opened
+                            ? "The transfer window is now open. Registered transfers can be completed until the deadline."
+                            : "The transfer window has closed. New registered transfers must wait for the next window.",
+                        currentDay);
+                }
+
+                if (stopForNewInboxMessage && inbox.Messages.Count > messageCountBefore)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void ResolveDailyInjuryRecoveries()
+        {
+            if (injuredPlayersTracked.Count == 0) return;
+
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            List<PlayerAgent> recovered = new List<PlayerAgent>();
+            foreach (PlayerAgent player in injuredPlayersTracked)
+            {
+                if (!roles.IsInjured(player, careerCalendar.CurrentDayNumber)) recovered.Add(player);
+            }
+
+            foreach (PlayerAgent player in recovered)
+            {
+                injuredPlayersTracked.Remove(player);
+                inbox.Add(InboxMessageType.Recovery, $"{player.Name} Fit Again",
+                    $"{player.Name} has recovered from injury and is available for selection again.",
+                    careerCalendar.CurrentDayNumber);
+            }
         }
 
         private void ShowMatchdayPrep()
@@ -10272,6 +10375,7 @@ namespace Manager
         {
             while (currentFixtureIndex < managedTeamFixtures.Count)
             {
+                AdvanceCalendarTo(careerCalendar.GetFixtureDate(currentFixtureIndex), stopForNewInboxMessage: false);
                 OpenFootballMatch fixture = managedTeamFixtures[currentFixtureIndex];
 
                 // isAutoResolved: true (backlog item 10) - see ApplyMatchdayConditionAndInjuries
@@ -10281,10 +10385,6 @@ namespace Manager
                 SimulateOtherFixturesInMatchday(fixture.Matchday);
 
                 currentFixtureIndex++;
-                scouting.ResolveMatchdayTick(currentFixtureIndex, squadGenerator, inbox);
-                transferNegotiation.ResolveDueTransferScoutAssignments(currentFixtureIndex, inbox, FindTeamContainingPlayer);
-                transferNegotiation.ResolveDueBids(currentFixtureIndex, finance, managedTeamName, inbox, FindTeamContainingPlayer);
-                transferNegotiation.ResolveExpiredSignatures(currentFixtureIndex, finance, managedTeamName, inbox);
                 ResolveMatchdayInboxTicks();
                 ResolveNextMatchOnlyOverride();
             }
@@ -10424,7 +10524,7 @@ namespace Manager
                 body = $"The defeat to {opponentName} has raised concerns. It was not simply the result, but the manner of the performance that disappointed us. We expect you to review the tactical approach, squad selection, and mentality ahead of the next fixture.";
             }
 
-            inbox.Add(InboxMessageType.PostMatchReaction, title, body, currentFixtureIndex);
+            inbox.Add(InboxMessageType.PostMatchReaction, title, body, careerCalendar.CurrentDayNumber);
 
             CheckFormStreakMessages();
         }
@@ -10461,7 +10561,7 @@ namespace Manager
                     poorRunMessageSentForCurrentStreak = true;
                     inbox.Add(InboxMessageType.FormStreak, "Recent Form",
                         "Recent results have not met expectations. The board still supports your work, but we need to see signs of improvement soon. The squad has enough quality to be more competitive than recent performances suggest.",
-                        currentFixtureIndex);
+                        careerCalendar.CurrentDayNumber);
                 }
             }
             else
@@ -10476,7 +10576,7 @@ namespace Manager
                     strongRunMessageSentForCurrentStreak = true;
                     inbox.Add(InboxMessageType.FormStreak, "Momentum Building",
                         "The squad is starting to build momentum. Recent performances have improved confidence around the club, and the league table is beginning to reflect that. The challenge now is maintaining standards when the fixture list becomes more difficult.",
-                        currentFixtureIndex);
+                        careerCalendar.CurrentDayNumber);
                 }
             }
             else
@@ -10514,7 +10614,7 @@ namespace Manager
                 midSeasonReviewSentForCurrentSeason = true;
                 inbox.Add(InboxMessageType.MidSeasonReview, "Mid-Season Review",
                     "We have reached the midpoint of the season. The board has reviewed our league position, recent form, and overall squad performance. There is still time to improve, but the second half of the campaign will be important. Continue to make decisions that serve the long-term interests of the club.",
-                    currentFixtureIndex);
+                    careerCalendar.CurrentDayNumber);
             }
 
             // Low-stamina warning (#18) - cooldown-gated so a squad that stays fatigued
@@ -10537,7 +10637,7 @@ namespace Manager
                     lastLowStaminaWarningMatchday = currentFixtureIndex;
                     inbox.Add(InboxMessageType.LowStamina, "Fitness Concern",
                         "A few players are showing signs of fatigue. Heavy minutes can reduce sharpness late in matches, especially for players with lower stamina. Rotating the squad or using substitutions earlier may help avoid performance drops.",
-                        currentFixtureIndex);
+                        careerCalendar.CurrentDayNumber);
                 }
             }
 
@@ -10551,7 +10651,7 @@ namespace Manager
 
                 foreach (PlayerAgent player in injuredPlayersTracked)
                 {
-                    if (!roles.IsInjured(player, currentFixtureIndex))
+                    if (!roles.IsInjured(player, careerCalendar.CurrentDayNumber))
                     {
                         recovered ??= new List<PlayerAgent>();
                         recovered.Add(player);
@@ -10565,7 +10665,7 @@ namespace Manager
                         injuredPlayersTracked.Remove(player);
                         inbox.Add(InboxMessageType.Recovery, $"{player.Name} Fit Again",
                             $"{player.Name} has recovered from injury and is available for selection again.",
-                            currentFixtureIndex);
+                            careerCalendar.CurrentDayNumber);
                     }
                 }
             }
@@ -10806,7 +10906,7 @@ namespace Manager
             // place, so walking the live list while swapping into it would skip entries.
             foreach (PlayerAgent starter in new List<PlayerAgent>(team.StartingEleven))
             {
-                if (!roles.IsInjured(starter, currentFixtureIndex))
+                if (!roles.IsInjured(starter, careerCalendar.CurrentDayNumber))
                 {
                     continue;
                 }
@@ -10833,7 +10933,7 @@ namespace Manager
 
             foreach (PlayerAgent candidate in team.Bench)
             {
-                if (roles.IsInjured(candidate, currentFixtureIndex))
+                if (roles.IsInjured(candidate, careerCalendar.CurrentDayNumber))
                 {
                     continue;
                 }
@@ -11046,8 +11146,9 @@ namespace Manager
                 return;
             }
 
-            int duration = Mathf.Clamp(Mathf.RoundToInt((UnityEngine.Random.Range(1f, 6f) + UnityEngine.Random.Range(1f, 6f)) / 2f), 1, 8);
-            roles.SetInjured(player, currentFixtureIndex + duration + 1);
+            int durationWeeks = Mathf.Clamp(Mathf.RoundToInt((UnityEngine.Random.Range(1f, 6f) + UnityEngine.Random.Range(1f, 6f)) / 2f), 1, 8);
+            int durationDays = durationWeeks * 7;
+            roles.SetInjured(player, careerCalendar.CurrentDayNumber + durationDays);
             injuredPlayersTracked.Add(player);
 
             // Playtest backlog item (session 14) - injury Inbox message. Recovery is
@@ -11055,8 +11156,8 @@ namespace Manager
             // call site for "a player's return matchday just passed" - it's a threshold
             // crossed silently by IsInjured, not a discrete event like this roll is.
             inbox.Add(InboxMessageType.Injury, $"Injury: {player.Name}",
-                $"{player.Name} has picked up an injury and is expected to be out for approximately {duration} matchday{(duration == 1 ? "" : "s")}.",
-                currentFixtureIndex);
+                $"{player.Name} has picked up an injury and is expected to be out for approximately {durationWeeks} week{(durationWeeks == 1 ? "" : "s")}.",
+                careerCalendar.CurrentDayNumber);
         }
 
         // Lets the running replay coroutine finish out its remaining minutes without
@@ -11522,10 +11623,6 @@ namespace Manager
             ApplyFixtureResult(currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
-            scouting.ResolveMatchdayTick(currentFixtureIndex, squadGenerator, inbox);
-            transferNegotiation.ResolveDueTransferScoutAssignments(currentFixtureIndex, inbox, FindTeamContainingPlayer);
-            transferNegotiation.ResolveDueBids(currentFixtureIndex, finance, managedTeamName, inbox, FindTeamContainingPlayer);
-            transferNegotiation.ResolveExpiredSignatures(currentFixtureIndex, finance, managedTeamName, inbox);
             ResolveMatchdayInboxTicks();
             ResolveNextMatchOnlyOverride();
 

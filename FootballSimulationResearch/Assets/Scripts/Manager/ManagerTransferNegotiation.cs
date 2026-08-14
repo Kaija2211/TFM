@@ -29,7 +29,9 @@ namespace Manager
         // its own) - almost certainly the cause of a separately-reported "paid £100m,
         // player arrived 60-rated" bug. Same fix shape as ManagerScouting's poach timer:
         // sign within a window or the deal falls through and you're refunded.
-        public const int MatchdaysUntilSignatureExpires = 3;
+        public const int DaysUntilSignatureExpires = 7;
+        public const int TransferScoutDurationDays = 3;
+        public const int BidResponseDays = 2;
 
         public enum BidStatus { PendingResponse, AwaitingSignature }
 
@@ -91,7 +93,7 @@ namespace Manager
             return total;
         }
 
-        public bool TryAssignTransferScout(PlayerAgent target, int currentMatchdayIndex)
+        public bool TryAssignTransferScout(PlayerAgent target, int currentDayNumber)
         {
             if (transferScoutedPlayers.Contains(target) || transferScoutAssignmentResolveMatchday.ContainsKey(target))
             {
@@ -105,7 +107,7 @@ namespace Manager
 
             // Resolves one matchday later - same cadence as ManagerScouting.
             // TryAssignScout, a familiar established pattern rather than a new one.
-            transferScoutAssignmentResolveMatchday[target] = currentMatchdayIndex + 1;
+            transferScoutAssignmentResolveMatchday[target] = currentDayNumber + TransferScoutDurationDays;
             return true;
         }
 
@@ -124,13 +126,13 @@ namespace Manager
         // club so the scouting report can quote a real recommended bid - a Func rather
         // than a held reference, matching ManagerScouting taking AgentSquadGenerator as
         // a parameter instead of caching one.
-        public void ResolveDueTransferScoutAssignments(int currentMatchdayIndex, ManagerInbox inbox, Func<PlayerAgent, AgentTeam> getSellingTeam)
+        public void ResolveDueTransferScoutAssignments(int currentDayNumber, ManagerInbox inbox, Func<PlayerAgent, AgentTeam> getSellingTeam)
         {
             List<PlayerAgent> resolved = new List<PlayerAgent>();
 
             foreach (KeyValuePair<PlayerAgent, int> entry in transferScoutAssignmentResolveMatchday)
             {
-                if (currentMatchdayIndex >= entry.Value) resolved.Add(entry.Key);
+                if (currentDayNumber >= entry.Value) resolved.Add(entry.Key);
             }
 
             foreach (PlayerAgent player in resolved)
@@ -145,7 +147,7 @@ namespace Manager
                     $"True Overall {Mathf.RoundToInt(player.GetOverallRating())}. " +
                     $"Our scout reckons a bid around £{recommendedBid:F1}m gives you a real shot - head to the Transfer Market to make an offer.";
 
-                inbox.Add(InboxMessageType.ScoutingReport, $"Scouting Report: {player.Name}", body, currentMatchdayIndex);
+                inbox.Add(InboxMessageType.ScoutingReport, $"Scouting Report: {player.Name}", body, currentDayNumber);
             }
         }
 
@@ -264,7 +266,7 @@ namespace Manager
         // refunded on decline/walk-away, converted to a recorded spend on Sign) rather
         // than only touching the budget once resolved - Thomas's explicit call, so you
         // can't out-bid what you can actually afford across several pending targets.
-        public bool TryPlaceBid(PlayerAgent target, float amount, string sourceTeamName, int currentMatchdayIndex, ManagerClubFinance finance, string managedTeamName)
+        public bool TryPlaceBid(PlayerAgent target, float amount, string sourceTeamName, int currentDayNumber, ManagerClubFinance finance, string managedTeamName)
         {
             if (bidsByPlayer.ContainsKey(target) || bidsByPlayer.Count >= MaxConcurrentBids)
             {
@@ -282,7 +284,7 @@ namespace Manager
             {
                 Player = target,
                 BidAmount = amount,
-                ResolveMatchday = currentMatchdayIndex + 1,
+                ResolveMatchday = currentDayNumber + BidResponseDays,
                 SourceTeamName = sourceTeamName,
                 Status = BidStatus.PendingResponse
             };
@@ -302,13 +304,13 @@ namespace Manager
         // hollow out the overall 30-player squad even while every position has cover.
         private const int MinSeniorSquadSizeBeforeRefusingAllSales = 23;
 
-        public void ResolveDueBids(int currentMatchdayIndex, ManagerClubFinance finance, string managedTeamName, ManagerInbox inbox, Func<PlayerAgent, AgentTeam> getSellingTeam)
+        public void ResolveDueBids(int currentDayNumber, ManagerClubFinance finance, string managedTeamName, ManagerInbox inbox, Func<PlayerAgent, AgentTeam> getSellingTeam)
         {
             List<PlayerAgent> due = new List<PlayerAgent>();
 
             foreach (KeyValuePair<PlayerAgent, PendingBid> entry in bidsByPlayer)
             {
-                if (entry.Value.Status == BidStatus.PendingResponse && currentMatchdayIndex >= entry.Value.ResolveMatchday)
+                if (entry.Value.Status == BidStatus.PendingResponse && currentDayNumber >= entry.Value.ResolveMatchday)
                 {
                     due.Add(entry.Key);
                 }
@@ -332,12 +334,12 @@ namespace Manager
                 if (accepted)
                 {
                     bid.Status = BidStatus.AwaitingSignature;
-                    bid.AcceptedMatchday = currentMatchdayIndex;
+                    bid.AcceptedMatchday = currentDayNumber;
 
                     string body = $"{bid.SourceTeamName} have accepted your £{bid.BidAmount:F1}m bid for {player.Name}. " +
-                        $"Confirm to sign them within {MatchdaysUntilSignatureExpires} matchdays, or walk away and get your money back.";
+                        $"Confirm to sign them within {DaysUntilSignatureExpires} days, or walk away and get your money back.";
 
-                    inbox.Add(InboxMessageType.BidAccepted, $"Bid Accepted: {player.Name}", body, currentMatchdayIndex, actionPlayer: player);
+                    inbox.Add(InboxMessageType.BidAccepted, $"Bid Accepted: {player.Name}", body, currentDayNumber, actionPlayer: player);
                 }
                 else
                 {
@@ -349,7 +351,7 @@ namespace Manager
                         : $"{bid.SourceTeamName} have turned down your £{bid.BidAmount:F1}m bid for {player.Name}. " +
                           $"Your £{bid.BidAmount:F1}m has been refunded - you're free to try again.";
 
-                    inbox.Add(InboxMessageType.BidDeclined, $"Bid Declined: {player.Name}", body, currentMatchdayIndex);
+                    inbox.Add(InboxMessageType.BidDeclined, $"Bid Declined: {player.Name}", body, currentDayNumber);
                 }
             }
         }
@@ -415,14 +417,14 @@ namespace Manager
         // sitting indefinitely while the source player keeps living/developing on their
         // real club underneath the deal (see MatchdaysUntilSignatureExpires' own
         // comment for the real bug this fixes).
-        public void ResolveExpiredSignatures(int currentMatchdayIndex, ManagerClubFinance finance, string managedTeamName, ManagerInbox inbox)
+        public void ResolveExpiredSignatures(int currentDayNumber, ManagerClubFinance finance, string managedTeamName, ManagerInbox inbox)
         {
             List<PlayerAgent> expired = new List<PlayerAgent>();
 
             foreach (KeyValuePair<PlayerAgent, PendingBid> entry in bidsByPlayer)
             {
                 if (entry.Value.Status == BidStatus.AwaitingSignature &&
-                    currentMatchdayIndex - entry.Value.AcceptedMatchday >= MatchdaysUntilSignatureExpires)
+                    currentDayNumber - entry.Value.AcceptedMatchday >= DaysUntilSignatureExpires)
                 {
                     expired.Add(entry.Key);
                 }
@@ -437,7 +439,7 @@ namespace Manager
                 string body = $"{bid.SourceTeamName} have pulled out of the {player.Name} deal - you took too long to confirm. " +
                     $"Your £{bid.BidAmount:F1}m has been refunded.";
 
-                inbox.Add(InboxMessageType.BidDeclined, $"Deal Fell Through: {player.Name}", body, currentMatchdayIndex);
+                inbox.Add(InboxMessageType.BidDeclined, $"Deal Fell Through: {player.Name}", body, currentDayNumber);
             }
         }
 
@@ -472,7 +474,7 @@ namespace Manager
 
             foreach (PlayerAgent player in awaitingSignature)
             {
-                bidsByPlayer[player].AcceptedMatchday = currentMatchdayIndex - MatchdaysUntilSignatureExpires;
+                bidsByPlayer[player].AcceptedMatchday = currentMatchdayIndex - DaysUntilSignatureExpires;
             }
 
             ResolveDueBids(currentMatchdayIndex, finance, managedTeamName, inbox, getSellingTeam);

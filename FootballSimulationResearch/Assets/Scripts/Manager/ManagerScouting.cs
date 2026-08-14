@@ -36,8 +36,8 @@ namespace Manager
         public const int MaxTargetPositions = 3;
         private const int MinYouthAge = 14;
         private const int MaxYouthAge = 19;
-        private const float DiscoveryChancePerActiveMissionPerMatchday = 0.3f;
-        public const int MatchdaysUntilPoached = 3;
+        private const float DiscoveryChancePerActiveMissionPerDay = 0.08f;
+        public const int DaysUntilPoached = 14;
 
         private readonly List<PlayerPosition>[] missionPositions = new List<PlayerPosition>[ScoutSlots];
         private readonly List<PlayerAgent> discoveredProspects = new();
@@ -95,22 +95,22 @@ namespace Manager
             return discoveredMatchday.TryGetValue(prospect, out int md) ? md : 0;
         }
 
-        public int GetMatchdaysUntilPoached(PlayerAgent prospect, int currentMatchdayIndex)
+        public int GetDaysUntilPoached(PlayerAgent prospect, int currentDayNumber)
         {
-            int deadline = GetDiscoveredMatchday(prospect) + MatchdaysUntilPoached;
-            return Mathf.Max(0, deadline - currentMatchdayIndex);
+            int deadline = GetDiscoveredMatchday(prospect) + DaysUntilPoached;
+            return Mathf.Max(0, deadline - currentDayNumber);
         }
 
         // Called from the matchday-tick hooks - rolls each active mission for a new
         // discovery, then sweeps for anyone whose window has run out. inbox/
         // currentMatchdayIndex both passed rather than held, matching every other
         // system's "no held controller reference" convention.
-        public void ResolveMatchdayTick(int currentMatchdayIndex, AgentSquadGenerator generator, ManagerInbox inbox)
+        public void ResolveDailyTick(int currentDayNumber, AgentSquadGenerator generator, ManagerInbox inbox)
         {
             for (int slot = 0; slot < ScoutSlots; slot++)
             {
                 if (!IsMissionActive(slot)) continue;
-                if (Random.value > DiscoveryChancePerActiveMissionPerMatchday) continue;
+                if (Random.value > DiscoveryChancePerActiveMissionPerDay) continue;
 
                 List<PlayerPosition> positions = missionPositions[slot];
 
@@ -129,20 +129,20 @@ namespace Manager
 
                     PlayerAgent prospect = GenerateDiscovery(position, generator);
                     discoveredProspects.Add(prospect);
-                    discoveredMatchday[prospect] = currentMatchdayIndex;
+                    discoveredMatchday[prospect] = currentDayNumber;
 
                     inbox.Add(InboxMessageType.ScoutingReport, $"Scout Find: {prospect.Name}",
                         $"One of your scouts has found {prospect.Name} ({prospect.PrimaryPosition}, age {prospect.Age}) while searching for a {position}. " +
                         $"True Overall {Mathf.RoundToInt(prospect.GetOverallRating())}, Potential {GetDisplayPotential(prospect)}. " +
-                        $"Bring them into an empty Academy slot within {MatchdaysUntilPoached} matchdays or another club may snap them up.",
-                        currentMatchdayIndex);
+                        $"Bring them into an empty Academy slot within {DaysUntilPoached} days or another club may snap them up.",
+                        currentDayNumber);
                 }
             }
 
             List<PlayerAgent> poached = new List<PlayerAgent>();
             foreach (PlayerAgent prospect in discoveredProspects)
             {
-                if (currentMatchdayIndex - GetDiscoveredMatchday(prospect) >= MatchdaysUntilPoached)
+                if (currentDayNumber - GetDiscoveredMatchday(prospect) >= DaysUntilPoached)
                 {
                     poached.Add(prospect);
                 }
@@ -155,7 +155,7 @@ namespace Manager
 
                 inbox.Add(InboxMessageType.BidDeclined, $"Prospect Lost: {prospect.Name}",
                     $"{prospect.Name} has signed for another club - you didn't bring them into the Academy in time.",
-                    currentMatchdayIndex);
+                    currentDayNumber);
             }
         }
 
