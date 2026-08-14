@@ -70,6 +70,9 @@ sealed class ClubRegistry
         return false;
     }
 
+    public bool TryResolveGlobally(string rawName, out RegistryClub? club) =>
+        TryResolve(byId.Values.Select(item => item.CountryCode).Distinct(StringComparer.Ordinal), rawName, out club);
+
     private void ParseFile(string root, string file)
     {
         string relative = Path.GetRelativePath(root, file).Replace('\\', '/');

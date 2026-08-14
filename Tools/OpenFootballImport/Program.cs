@@ -27,6 +27,28 @@ record FileAuditResult(FileAudit Audit, List<ParsedMatch> Matches);
 
 record SourceFileSpec(string CountryCode, string Season, int Level, string CompetitionId, string Competition, string Path, string SourceRoot);
 
+record EuropeanClubSeason(
+    string ClubId,
+    string ClubName,
+    string Season,
+    string Competition,
+    bool Qualifying,
+    int Played,
+    int Points,
+    int KnockoutDepth);
+
+sealed class EuropeanAccumulator
+{
+    public required string ClubId { get; init; }
+    public required string ClubName { get; init; }
+    public required string Season { get; init; }
+    public required string Competition { get; init; }
+    public required bool Qualifying { get; init; }
+    public int Played { get; set; }
+    public int Points { get; set; }
+    public int KnockoutDepth { get; set; }
+}
+
 sealed class ClubSeasonSummary
 {
     public required string CountryCode { get; init; }
@@ -85,6 +107,28 @@ sealed class CompetitionSeasonSummary
     public required int ParsedMatches { get; init; }
     public required string[] Clubs { get; init; }
 }
+
+sealed class ClubWorldGenerationProfile
+{
+    public required string ClubId { get; init; }
+    public required string ClubName { get; init; }
+    public required string CountryCode { get; init; }
+    public required string ReferenceSeason { get; init; }
+    public required string CompetitionId { get; init; }
+    public required int Level { get; init; }
+    public required double Reputation { get; init; }
+    public required double FirstTeamOverall { get; init; }
+    public required double BenchOverall { get; init; }
+    public required double ReserveOverall { get; init; }
+    public required double Confidence { get; init; }
+    public required int EvidenceSeasons { get; init; }
+    public required double HonoursScore { get; init; }
+    public required double RecentEuropeanScore { get; init; }
+    public required double EuropeanReputationBoost { get; init; }
+    public required string ReputationSource { get; init; }
+}
+
+sealed record ClubHonoursEvidence(string ClubId, double HonoursScore, double ReputationFloor, string SourceUrl);
 
 sealed class ClubIdentityMap
 {
@@ -186,6 +230,7 @@ static class Program
     private static readonly Regex MatchesPattern = new(@"^#\s*Matches\s+(\d+)", RegexOptions.Compiled);
     private static readonly Regex KickoffPattern = new(@"^\d{1,2}:\d{2}\s+", RegexOptions.Compiled);
     private static readonly Regex AnnotationPattern = new(@"\s+\[[^\]]+\]\s*$", RegexOptions.Compiled);
+    private static readonly Regex UefaCountryPattern = new(@"\s+\((?<country>[A-Z]{3})\)\s*$", RegexOptions.Compiled);
 
     private static readonly Dictionary<int, string> CompetitionNames = new()
     {
@@ -202,6 +247,7 @@ static class Program
         string source = Path.GetFullPath(Path.Combine(repositoryRoot, "..", "england"));
         string output = Path.Combine(repositoryRoot, "Temp", "OpenFootballAudit");
         string clubsSource = Path.GetFullPath(Path.Combine(repositoryRoot, "..", "clubs"));
+        string europeanSource = Path.GetFullPath(Path.Combine(repositoryRoot, "..", "champions-league"));
         string? publishHistory = null;
         string? publishClubs = null;
 
@@ -238,6 +284,11 @@ static class Program
 
         List<SourceFileSpec> sourceSpecs = DiscoverTopFiveSources(source).OrderBy(item => item.CountryCode).ThenBy(item => item.Season).ThenBy(item => item.Level).ThenBy(item => item.CompetitionId).ToList();
         Dictionary<string, string> sourceCommits = sourceSpecs.GroupBy(item => item.CountryCode).ToDictionary(group => group.Key, group => ReadGitCommit(group.First().SourceRoot));
+        Dictionary<string, ClubHonoursEvidence> honoursEvidence = LoadHonoursEvidence(Path.Combine(repositoryRoot, "Tools", "OpenFootballImport", "club_honours.json"));
+        EuropeanClubSeason[] europeanSeasons = Directory.Exists(europeanSource)
+            ? LoadEuropeanSeasons(europeanSource, registry)
+            : Array.Empty<EuropeanClubSeason>();
+        sourceCommits["uefa"] = Directory.Exists(europeanSource) ? ReadGitCommit(europeanSource) : "missing";
         foreach (SourceFileSpec spec in sourceSpecs)
         {
             FileAuditResult result = AuditFile(spec, identityMaps[spec.CountryCode], aliases, clubs);
@@ -263,7 +314,7 @@ static class Program
             clubs = aliases.OrderBy(pair => pair.Key).Select(pair => new { id = pair.Key, aliases = pair.Value.Order().ToArray() })
         }, jsonOptions) + Environment.NewLine);
         WriteRegistryOutputs(output, clubsSource, registry, identityMaps, aliases, jsonOptions);
-        WriteWorldHistory(output, commit, sourceCommits, results, identityMaps, clubs, jsonOptions);
+        WriteWorldHistory(output, commit, sourceCommits, honoursEvidence, europeanSeasons, results, identityMaps, clubs, jsonOptions);
         if (publishHistory is not null)
         {
             string? publishDirectory = Path.GetDirectoryName(publishHistory);
@@ -489,6 +540,8 @@ static class Program
         string output,
         string commit,
         Dictionary<string, string> sourceCommits,
+        Dictionary<string, ClubHonoursEvidence> honoursEvidence,
+        EuropeanClubSeason[] europeanSeasons,
         List<FileAuditResult> results,
         Dictionary<string, ClubIdentityMap> identityMaps,
         Dictionary<string, CanonicalClub> clubs,
@@ -531,6 +584,8 @@ static class Program
         }).OrderBy(item => item.CountryCode).ThenBy(item => item.Season).ThenBy(item => item.Level).ThenBy(item => item.CompetitionId).ToArray();
         DivisionTransitionSummary[] divisionTransitions = BuildDivisionTransitions(clubSeasons);
         ClubGenerationPrior[] generationPriors = BuildGenerationPriors(clubSeasons, divisionTransitions, competitionSeasons);
+        ClubWorldGenerationProfile[] worldGenerationProfiles = BuildWorldGenerationProfiles(clubSeasons, honoursEvidence, europeanSeasons);
+        WriteWorldGenerationAudit(output, worldGenerationProfiles);
 
         var payload = new
         {
@@ -543,9 +598,348 @@ static class Program
             competitionSeasons,
             divisionTransitions,
             generationPriors,
+            europeanClubSeasons = europeanSeasons,
+            worldGenerationProfiles,
             clubSeasons
         };
         File.WriteAllText(Path.Combine(output, "football_world_history.json"), JsonSerializer.Serialize(payload, jsonOptions) + Environment.NewLine);
+    }
+
+    private static ClubWorldGenerationProfile[] BuildWorldGenerationProfiles(
+        List<ClubSeasonSummary> clubSeasons,
+        Dictionary<string, ClubHonoursEvidence> honoursEvidence,
+        EuropeanClubSeason[] europeanSeasons)
+    {
+        var leagueBaselines = clubSeasons
+            .GroupBy(row => (row.CountryCode, row.Season, row.Level))
+            .ToDictionary(group => group.Key, group => new
+            {
+                PointsPerGame = group.Sum(row => row.Points) / (double)group.Sum(row => row.Played),
+                GoalsPerGame = group.Sum(row => row.GoalsFor) / (double)group.Sum(row => row.Played)
+            });
+
+        List<ClubWorldGenerationProfile> profiles = new();
+        Dictionary<string, (double Score, double Boost)> europeanByClub = BuildEuropeanScores(europeanSeasons);
+        foreach (IGrouping<string, ClubSeasonSummary> history in clubSeasons.GroupBy(row => row.ClubId))
+        {
+            ClubSeasonSummary[] ordered = history.OrderBy(row => SeasonStartYear(row.Season)).ToArray();
+            ClubSeasonSummary latest = ordered[^1];
+            ClubSeasonSummary[] recent = ordered.Reverse().Take(5).ToArray();
+            double weightedPerformance = 0d;
+            double totalWeight = 0d;
+            for (int index = 0; index < recent.Length; index++)
+            {
+                ClubSeasonSummary row = recent[index];
+                var baseline = leagueBaselines[(row.CountryCode, row.Season, row.Level)];
+                double pointsIndex = (row.Points / (double)row.Played) / baseline.PointsPerGame;
+                double goalDifferenceScale = Math.Max(0.8d, baseline.GoalsPerGame);
+                double goalDifferenceIndex = (row.GoalDifference / (double)row.Played) / goalDifferenceScale;
+                double seasonPerformance = (pointsIndex - 1d) * 0.72d + goalDifferenceIndex * 0.28d;
+                double weight = Math.Pow(0.72d, index);
+                weightedPerformance += seasonPerformance * weight;
+                totalWeight += weight;
+            }
+
+            double performance = totalWeight > 0d ? weightedPerformance / totalWeight : 0d;
+            double baseOverall = BaseSquadOverall(latest.CountryCode, latest.Level);
+            double firstTeam = Math.Clamp(baseOverall + Math.Clamp(performance * 7.0d, -4.0d, 4.0d), 48d, 85d);
+            double benchGap = firstTeam >= 78d ? 2.3d : firstTeam >= 68d ? 2.8d : 3.2d;
+            double reserveGap = firstTeam >= 78d ? 5.2d : firstTeam >= 68d ? 5.8d : 6.5d;
+            double longevity = Math.Min(8d, Math.Sqrt(ordered.Length) * 1.65d);
+            int recentTopFlightSeasons = ordered.Reverse().Take(10).Count(row => row.Level == 1);
+            double eliteBonus = Math.Max(0d, firstTeam - 81.5d) * 3d;
+            double recentReputation = Math.Clamp(
+                20d + (firstTeam - 50d) * 1.75d + longevity * 0.5d + Math.Min(5d, recentTopFlightSeasons * 0.5d) + performance * 7d + eliteBonus,
+                10d, 94d);
+            bool hasHonours = honoursEvidence.TryGetValue(latest.ClubId, out ClubHonoursEvidence? honours);
+            bool hasEurope = europeanByClub.TryGetValue(latest.ClubId, out (double Score, double Boost) european);
+            double europeanAttenuation = Math.Clamp((100d - recentReputation) / 20d, 0.15d, 1d);
+            double reputation = Math.Min(97d, recentReputation + (hasEurope ? european.Boost * europeanAttenuation : 0d));
+            if (hasHonours) reputation = Math.Max(reputation, honours!.ReputationFloor);
+            double confidence = Math.Clamp(0.30d + ordered.Length * 0.065d, 0.30d, 0.95d);
+
+            profiles.Add(new ClubWorldGenerationProfile
+            {
+                ClubId = latest.ClubId,
+                ClubName = latest.ClubName,
+                CountryCode = latest.CountryCode,
+                ReferenceSeason = latest.Season,
+                CompetitionId = latest.CompetitionId,
+                Level = latest.Level,
+                Reputation = Math.Round(reputation, 3),
+                FirstTeamOverall = Math.Round(firstTeam, 3),
+                BenchOverall = Math.Round(firstTeam - benchGap, 3),
+                ReserveOverall = Math.Round(firstTeam - reserveGap, 3),
+                Confidence = Math.Round(confidence, 3),
+                EvidenceSeasons = ordered.Length,
+                HonoursScore = hasHonours ? Math.Round(honours!.HonoursScore, 3) : 0d,
+                RecentEuropeanScore = hasEurope ? Math.Round(european.Score, 3) : 0d,
+                EuropeanReputationBoost = hasEurope ? Math.Round(european.Boost, 3) : 0d,
+                ReputationSource = string.Join(" + ", new[]
+                {
+                    "recent domestic performance",
+                    hasEurope ? "recent European performance" : null,
+                    hasHonours ? "reviewed honours floor" : null
+                }.Where(value => value != null))
+            });
+        }
+        return profiles.OrderByDescending(profile => profile.Reputation).ThenBy(profile => profile.ClubId).ToArray();
+    }
+
+    private static Dictionary<string, ClubHonoursEvidence> LoadHonoursEvidence(string path)
+    {
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+        Dictionary<string, ClubHonoursEvidence> result = new(StringComparer.Ordinal);
+        foreach (JsonElement club in document.RootElement.GetProperty("clubs").EnumerateArray())
+        {
+            double score =
+                club.GetProperty("nationalLeague").GetInt32() * 2.0d +
+                club.GetProperty("nationalCup").GetInt32() * 1.0d +
+                club.GetProperty("nationalLeagueCup").GetInt32() * 0.5d +
+                club.GetProperty("europeanCup").GetInt32() * 5.0d +
+                club.GetProperty("uefaCup").GetInt32() * 2.5d;
+            ClubHonoursEvidence evidence = new(
+                club.GetProperty("clubId").GetString()!, score,
+                club.GetProperty("reputationFloor").GetDouble(),
+                club.GetProperty("sourceUrl").GetString()!);
+            if (!result.TryAdd(evidence.ClubId, evidence)) throw new InvalidDataException($"Duplicate honours record: {evidence.ClubId}");
+        }
+        return result;
+    }
+
+    private static EuropeanClubSeason[] LoadEuropeanSeasons(string root, ClubRegistry registry)
+    {
+        Dictionary<string, string> countryCodes = new(StringComparer.Ordinal)
+        {
+            ["ENG"] = "eng", ["WAL"] = "wal", ["SCO"] = "sco", ["NIR"] = "nir", ["IRL"] = "ie",
+            ["GER"] = "de", ["ESP"] = "es", ["ITA"] = "it", ["FRA"] = "fr", ["POR"] = "pt",
+            ["NED"] = "nl", ["BEL"] = "be", ["AUT"] = "at", ["SUI"] = "ch", ["DEN"] = "dk",
+            ["NOR"] = "no", ["SWE"] = "se", ["FIN"] = "fi", ["ISL"] = "is", ["POL"] = "pl",
+            ["CZE"] = "cz", ["SVK"] = "sk", ["HUN"] = "hu", ["ROU"] = "ro", ["BUL"] = "bg",
+            ["CRO"] = "hr", ["SRB"] = "rs", ["SVN"] = "si", ["BIH"] = "ba", ["MNE"] = "me",
+            ["MKD"] = "mk", ["ALB"] = "al", ["GRE"] = "gr", ["TUR"] = "tr", ["CYP"] = "cy",
+            ["ISR"] = "il", ["UKR"] = "ua", ["RUS"] = "ru", ["BLR"] = "by", ["MDA"] = "md",
+            ["GEO"] = "ge", ["ARM"] = "am", ["AZE"] = "az", ["KAZ"] = "kz", ["LUX"] = "lu",
+            ["LIE"] = "li", ["AND"] = "ad", ["SMR"] = "sm", ["MLT"] = "mt", ["KOS"] = "kos",
+            ["FRO"] = "fo", ["GIB"] = "gi", ["EST"] = "ee", ["LVA"] = "lv", ["LTU"] = "lt"
+        };
+        Dictionary<string, EuropeanAccumulator> totals = new(StringComparer.Ordinal);
+        HashSet<string> unresolved = new(StringComparer.Ordinal);
+
+        foreach (string file in Directory.EnumerateFiles(root, "*.txt", SearchOption.AllDirectories).Order())
+        {
+            string season = Path.GetFileName(Path.GetDirectoryName(file))!;
+            if (!SeasonPattern.IsMatch(season)) continue;
+            string code = Path.GetFileNameWithoutExtension(file);
+            bool qualifying = code.EndsWith('q');
+            string competition = code.StartsWith("cl", StringComparison.Ordinal) ? "Champions League"
+                : code.StartsWith("el", StringComparison.Ordinal) ? "Europa League"
+                : code.StartsWith("conf", StringComparison.Ordinal) ? "Conference League"
+                : string.Empty;
+            if (competition.Length == 0) continue;
+            int knockoutDepth = 0;
+
+            foreach (string rawLine in File.ReadLines(file))
+            {
+                string line = rawLine.Trim();
+                if (line.StartsWith('▪'))
+                {
+                    knockoutDepth = EuropeanKnockoutDepth(line);
+                    continue;
+                }
+                ParsedMatch? match = ParseMatchLine(line, 0);
+                if (match == null) continue;
+                RegistryClub? home = ResolveEuropeanClub(match.Home, registry, countryCodes);
+                RegistryClub? away = ResolveEuropeanClub(match.Away, registry, countryCodes);
+                if (home == null || away == null)
+                {
+                    if (home == null) unresolved.Add(match.Home);
+                    if (away == null) unresolved.Add(match.Away);
+                    continue;
+                }
+                AddEuropeanResult(home, season, competition, qualifying, match.HomeGoals, match.AwayGoals, knockoutDepth, totals);
+                AddEuropeanResult(away, season, competition, qualifying, match.AwayGoals, match.HomeGoals, knockoutDepth, totals);
+            }
+        }
+
+        if (unresolved.Count > 0)
+        {
+            Console.WriteLine($"UEFA identity audit: {unresolved.Count} unresolved names; unresolved matches were excluded.");
+            Console.WriteLine($"UEFA unresolved: {string.Join(" | ", unresolved.Order())}");
+        }
+        return totals.Values.Select(item => new EuropeanClubSeason(
+                item.ClubId, item.ClubName, item.Season, item.Competition, item.Qualifying,
+                item.Played, item.Points, item.KnockoutDepth))
+            .OrderBy(item => item.Season).ThenBy(item => item.Competition).ThenBy(item => item.ClubId).ToArray();
+    }
+
+    private static RegistryClub? ResolveEuropeanClub(string rawName, ClubRegistry registry, Dictionary<string, string> countryCodes)
+    {
+        string cleaned = Regex.Replace(rawName.Trim(), @"\s+", " ");
+        Match country = UefaCountryPattern.Match(cleaned);
+        if (country.Success)
+        {
+            cleaned = UefaCountryPattern.Replace(cleaned, "").Trim();
+            cleaned = cleaned switch
+            {
+                "AEK Athen" => "AEK Athens",
+                "APOEL Nikosia" => "APOEL Nicosia",
+                "Arda Kardzhali" => "FC Arda Kardzhali",
+                "Egnatia Rrogozhine" => "KF Egnatia Rrogozhinë",
+                "FC DAC 1904" => "FC DAC 1904 Dunajská Streda",
+                "FK Isloch Minsk" => "FC Isloch",
+                "FK Oleksandriya" => "FC Oleksandriya",
+                "FK Ordabasy" => "Ordabasy",
+                "KF Ballkani" => "KF Ballkani Suhareka",
+                "Olympiakos Piraeus" => "Olympiacos Piraeus",
+                "Omonia Nikosia" => "Omonia Nicosia",
+                "Sumgayıt FK" => "Sumgayit FK",
+                "Torpedo-BelAZ Zhodino" => "FC Torpedo-Belaz Zhodino",
+                "Zorya Lugansk" => "Zorya Luhansk",
+                _ => cleaned
+            };
+            if (countryCodes.TryGetValue(country.Groups["country"].Value, out string? code) && registry.TryResolve(code, cleaned, out RegistryClub? tagged))
+                return tagged;
+        }
+        return registry.TryResolveGlobally(cleaned, out RegistryClub? global) ? global : null;
+    }
+
+    private static void AddEuropeanResult(
+        RegistryClub club, string season, string competition, bool qualifying,
+        int goalsFor, int goalsAgainst, int knockoutDepth,
+        Dictionary<string, EuropeanAccumulator> totals)
+    {
+        string key = $"{club.Id}|{season}|{competition}|{qualifying}";
+        if (!totals.TryGetValue(key, out EuropeanAccumulator? total))
+        {
+            total = new EuropeanAccumulator
+            {
+                ClubId = club.Id, ClubName = club.Name, Season = season,
+                Competition = competition, Qualifying = qualifying
+            };
+            totals[key] = total;
+        }
+        total.Played++;
+        total.Points += goalsFor > goalsAgainst ? 3 : goalsFor == goalsAgainst ? 1 : 0;
+        total.KnockoutDepth = Math.Max(total.KnockoutDepth, knockoutDepth);
+    }
+
+    private static int EuropeanKnockoutDepth(string heading)
+    {
+        string value = heading.ToLowerInvariant();
+        if (value.Contains("quarter")) return 3;
+        if (value.Contains("semi")) return 4;
+        if (Regex.IsMatch(value, @"\bfinal\b") && !value.Contains("finals,")) return 5;
+        if (value.Contains("round of 16") || value.Contains("last 16")) return 2;
+        if (value.Contains("knockout") || value.Contains("play-off") || value.Contains("playoff")) return 1;
+        return 0;
+    }
+
+    private static Dictionary<string, (double Score, double Boost)> BuildEuropeanScores(EuropeanClubSeason[] seasons)
+    {
+        if (seasons.Length == 0) return new(StringComparer.Ordinal);
+        int latestYear = seasons.Max(item => SeasonStartYear(item.Season));
+        Dictionary<string, (double Score, double Boost)> result = new(StringComparer.Ordinal);
+        foreach (IGrouping<string, EuropeanClubSeason> club in seasons.GroupBy(item => item.ClubId))
+        {
+            double weighted = 0d;
+            double weights = 0d;
+            foreach (EuropeanClubSeason item in club.Where(item => latestYear - SeasonStartYear(item.Season) <= 4))
+            {
+                double competitionWeight = item.Competition switch
+                {
+                    "Champions League" => 1d,
+                    "Europa League" => 0.62d,
+                    _ => 0.40d
+                };
+                if (item.Qualifying) competitionWeight *= 0.25d;
+                double recency = Math.Pow(0.72d, latestYear - SeasonStartYear(item.Season));
+                double resultRate = item.Played > 0 ? item.Points / (item.Played * 3d) : 0d;
+                double participation = Math.Min(1d, item.Played / (item.Qualifying ? 6d : 8d));
+                double signal = 2d + resultRate * 4d + participation * 2d + item.KnockoutDepth / 5d * 2d;
+                weighted += signal * competitionWeight * recency;
+                weights += recency;
+            }
+            if (weights <= 0d) continue;
+            double score = weighted / weights;
+            result[club.Key] = (score, Math.Clamp(score * 0.8d, 0d, 8d));
+        }
+        return result;
+    }
+
+    private static double BaseSquadOverall(string countryCode, int level) => (countryCode, level) switch
+    {
+        ("eng", 1) => 79.5d, ("eng", 2) => 71.5d, ("eng", 3) => 66.0d, ("eng", 4) => 62.0d, ("eng", 5) => 58.0d,
+        ("de", 1) => 79.0d, ("de", 2) => 71.0d, ("de", 3) => 65.0d, ("de", 4) => 60.0d,
+        ("es", 1) => 78.5d, ("es", 2) => 70.0d,
+        ("it", 1) => 78.0d, ("it", 2) => 69.5d, ("it", 3) => 63.0d,
+        ("fr", 1) => 77.0d, ("fr", 2) => 69.0d,
+        _ => 55.0d
+    };
+
+    private static void WriteWorldGenerationAudit(string output, ClubWorldGenerationProfile[] profiles)
+    {
+        const int simulatedSeasons = 1000;
+        Random random = new(221104);
+        StringBuilder report = new();
+        report.AppendLine("# World-generation target audit").AppendLine();
+        report.AppendLine($"Deterministic target-only calibration: {simulatedSeasons:N0} double round-robin seasons per latest top division.");
+        report.AppendLine("This does not claim to test the live match engine; it checks whether generated squad targets imply sane league-scale ranges.").AppendLine();
+        report.AppendLine("| Country | Season | Clubs | Quality spread | Reputation spread | Goals/game | Champion points | Bottom points | Best GD | Worst GD | Status |");
+        report.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|");
+
+        foreach (IGrouping<string, ClubWorldGenerationProfile> country in profiles.Where(profile => profile.Level == 1).GroupBy(profile => profile.CountryCode).OrderBy(group => group.Key))
+        {
+            string latestSeason = country.Max(profile => profile.ReferenceSeason)!;
+            ClubWorldGenerationProfile[] clubs = country.Where(profile => profile.ReferenceSeason == latestSeason).OrderBy(profile => profile.ClubId).ToArray();
+            if (clubs.Length < 10) continue;
+            List<double> goalsPerGame = new(), championPoints = new(), bottomPoints = new(), bestGoalDifference = new(), worstGoalDifference = new();
+            for (int simulation = 0; simulation < simulatedSeasons; simulation++)
+            {
+                int[] points = new int[clubs.Length];
+                int[] goalDifference = new int[clubs.Length];
+                int totalGoals = 0, matches = 0;
+                for (int home = 0; home < clubs.Length; home++)
+                {
+                    for (int away = 0; away < clubs.Length; away++)
+                    {
+                        if (home == away) continue;
+                        double difference = clubs[home].FirstTeamOverall - clubs[away].FirstTeamOverall;
+                        int homeGoals = SamplePoisson(random, 1.48d * Math.Exp(difference * 0.100d));
+                        int awayGoals = SamplePoisson(random, 1.20d * Math.Exp(-difference * 0.100d));
+                        totalGoals += homeGoals + awayGoals;
+                        matches++;
+                        goalDifference[home] += homeGoals - awayGoals;
+                        goalDifference[away] += awayGoals - homeGoals;
+                        if (homeGoals > awayGoals) points[home] += 3;
+                        else if (awayGoals > homeGoals) points[away] += 3;
+                        else { points[home]++; points[away]++; }
+                    }
+                }
+                goalsPerGame.Add(totalGoals / (double)matches);
+                championPoints.Add(points.Max());
+                bottomPoints.Add(points.Min());
+                bestGoalDifference.Add(goalDifference.Max());
+                worstGoalDifference.Add(goalDifference.Min());
+            }
+
+            double qualitySpread = clubs.Max(club => club.FirstTeamOverall) - clubs.Min(club => club.FirstTeamOverall);
+            double reputationSpread = clubs.Max(club => club.Reputation) - clubs.Min(club => club.Reputation);
+            double meanGoals = goalsPerGame.Average();
+            double meanBestGd = bestGoalDifference.Average();
+            bool sane = qualitySpread <= 10d && meanGoals is >= 2.4d and <= 3.4d && meanBestGd <= 70d;
+            report.AppendLine($"| {country.Key} | {latestSeason} | {clubs.Length} | {qualitySpread:F2} | {reputationSpread:F2} | {meanGoals:F2} | {championPoints.Average():F1} | {bottomPoints.Average():F1} | {meanBestGd:F1} | {worstGoalDifference.Average():F1} | {(sane ? "PASS" : "REVIEW")} |");
+        }
+        File.WriteAllText(Path.Combine(output, "world_generation_audit.md"), report.ToString());
+    }
+
+    private static int SamplePoisson(Random random, double lambda)
+    {
+        double limit = Math.Exp(-Math.Clamp(lambda, 0.05d, 8d));
+        int count = 0;
+        double product = 1d;
+        do { count++; product *= random.NextDouble(); } while (product > limit);
+        return count - 1;
     }
 
     private static DivisionTransitionSummary[] BuildDivisionTransitions(List<ClubSeasonSummary> clubSeasons)

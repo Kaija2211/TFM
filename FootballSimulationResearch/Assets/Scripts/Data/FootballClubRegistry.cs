@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using UnityEngine;
 
@@ -33,6 +36,8 @@ namespace Data
     {
         private readonly FootballClubRegistryData data;
         private readonly Dictionary<string, WorldClubRecord> clubsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, WorldClubRecord> clubsByAlias = new(StringComparer.Ordinal);
+        private readonly HashSet<string> ambiguousAliases = new(StringComparer.Ordinal);
 
         public FootballClubRegistryData Data => data;
 
@@ -45,6 +50,8 @@ namespace Data
                     throw new InvalidOperationException("World club registry contains a club without an ID.");
                 if (!clubsById.TryAdd(club.Id, club))
                     throw new InvalidOperationException($"Duplicate world club ID: {club.Id}");
+                AddAlias(club.CountryCode, club.Name, club);
+                foreach (string alias in club.Aliases) AddAlias(club.CountryCode, alias, club);
             }
         }
 
@@ -64,5 +71,46 @@ namespace Data
         }
 
         public bool TryGetClub(string clubId, out WorldClubRecord club) => clubsById.TryGetValue(clubId, out club);
+
+        public bool TryResolveAlias(string countryCode, string name, out WorldClubRecord club)
+        {
+            string key = AliasKey(countryCode, name);
+            if (!ambiguousAliases.Contains(key) && clubsByAlias.TryGetValue(key, out club)) return true;
+            string withoutSuffix = Regex.Replace(Normalize(name), @"\s+(?:afc|fc)$", "");
+            key = $"{countryCode}|{withoutSuffix}";
+            if (!ambiguousAliases.Contains(key) && clubsByAlias.TryGetValue(key, out club)) return true;
+            club = null;
+            return false;
+        }
+
+        private void AddAlias(string countryCode, string alias, WorldClubRecord club)
+        {
+            AddAliasKey(AliasKey(countryCode, alias), club);
+            string withoutSuffix = Regex.Replace(Normalize(alias), @"\s+(?:afc|fc)$", "");
+            AddAliasKey($"{countryCode}|{withoutSuffix}", club);
+        }
+
+        private void AddAliasKey(string key, WorldClubRecord club)
+        {
+            if (ambiguousAliases.Contains(key)) return;
+            if (clubsByAlias.TryGetValue(key, out WorldClubRecord existing) && existing.Id != club.Id)
+            {
+                clubsByAlias.Remove(key);
+                ambiguousAliases.Add(key);
+                return;
+            }
+            clubsByAlias[key] = club;
+        }
+
+        private static string AliasKey(string countryCode, string name) => $"{countryCode}|{Normalize(name)}";
+
+        private static string Normalize(string value)
+        {
+            string decomposed = (value ?? string.Empty).Normalize(NormalizationForm.FormD);
+            StringBuilder text = new();
+            foreach (char character in decomposed)
+                if (CharUnicodeInfo.GetUnicodeCategory(character) != UnicodeCategory.NonSpacingMark) text.Append(character);
+            return Regex.Replace(text.ToString().ToLowerInvariant().Replace("&", " and "), @"[^a-z0-9]+", " ").Trim();
+        }
     }
 }

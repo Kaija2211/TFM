@@ -19,7 +19,43 @@ namespace Data
         [JsonProperty("competitionSeasons")] public List<CompetitionSeasonRecord> CompetitionSeasons = new();
         [JsonProperty("divisionTransitions")] public List<DivisionTransitionRecord> DivisionTransitions = new();
         [JsonProperty("generationPriors")] public List<ClubGenerationPriorRecord> GenerationPriors = new();
+        [JsonProperty("europeanClubSeasons")] public List<EuropeanClubSeasonRecord> EuropeanClubSeasons = new();
+        [JsonProperty("worldGenerationProfiles")] public List<ClubWorldGenerationProfileRecord> WorldGenerationProfiles = new();
         [JsonProperty("clubSeasons")] public List<ClubSeasonRecord> ClubSeasons = new();
+    }
+
+    [Serializable]
+    public sealed class EuropeanClubSeasonRecord
+    {
+        [JsonProperty("clubId")] public string ClubId;
+        [JsonProperty("clubName")] public string ClubName;
+        [JsonProperty("season")] public string Season;
+        [JsonProperty("competition")] public string Competition;
+        [JsonProperty("qualifying")] public bool Qualifying;
+        [JsonProperty("played")] public int Played;
+        [JsonProperty("points")] public int Points;
+        [JsonProperty("knockoutDepth")] public int KnockoutDepth;
+    }
+
+    [Serializable]
+    public sealed class ClubWorldGenerationProfileRecord
+    {
+        [JsonProperty("clubId")] public string ClubId;
+        [JsonProperty("clubName")] public string ClubName;
+        [JsonProperty("countryCode")] public string CountryCode;
+        [JsonProperty("referenceSeason")] public string ReferenceSeason;
+        [JsonProperty("competitionId")] public string CompetitionId;
+        [JsonProperty("level")] public int Level;
+        [JsonProperty("reputation")] public double Reputation;
+        [JsonProperty("firstTeamOverall")] public double FirstTeamOverall;
+        [JsonProperty("benchOverall")] public double BenchOverall;
+        [JsonProperty("reserveOverall")] public double ReserveOverall;
+        [JsonProperty("confidence")] public double Confidence;
+        [JsonProperty("evidenceSeasons")] public int EvidenceSeasons;
+        [JsonProperty("honoursScore")] public double HonoursScore;
+        [JsonProperty("recentEuropeanScore")] public double RecentEuropeanScore;
+        [JsonProperty("europeanReputationBoost")] public double EuropeanReputationBoost;
+        [JsonProperty("reputationSource")] public string ReputationSource;
     }
 
     [Serializable]
@@ -108,6 +144,7 @@ namespace Data
         private readonly Dictionary<string, ClubSeasonRecord> clubSeasonsByKey = new(StringComparer.Ordinal);
         private readonly Dictionary<string, CompetitionSeasonRecord> competitionsByKey = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ClubGenerationPriorRecord> generationPriorsByKey = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, ClubWorldGenerationProfileRecord> worldGenerationProfilesByClub = new(StringComparer.Ordinal);
 
         public FootballWorldHistoryData Data => data;
 
@@ -144,6 +181,15 @@ namespace Data
                 if (!generationPriorsByKey.TryAdd(key, prior))
                     throw new InvalidOperationException($"Duplicate club generation prior: {key}");
             }
+
+
+            foreach (ClubWorldGenerationProfileRecord profile in source.WorldGenerationProfiles)
+            {
+                if (!clubsById.ContainsKey(profile.ClubId))
+                    throw new InvalidOperationException($"World-generation profile references unknown club ID: {profile.ClubId}");
+                if (!worldGenerationProfilesByClub.TryAdd(profile.ClubId, profile))
+                    throw new InvalidOperationException($"Duplicate world-generation profile: {profile.ClubId}");
+            }
         }
 
         public static FootballWorldHistory FromJson(string json)
@@ -171,6 +217,9 @@ namespace Data
 
         public bool TryGetGenerationPrior(string clubId, string season, string competitionId, out ClubGenerationPriorRecord prior) =>
             generationPriorsByKey.TryGetValue(ClubSeasonKey(clubId, season, competitionId), out prior);
+
+        public bool TryGetWorldGenerationProfile(string clubId, out ClubWorldGenerationProfileRecord profile) =>
+            worldGenerationProfilesByClub.TryGetValue(clubId, out profile);
 
         private static string ClubSeasonKey(string clubId, string season, string competitionId) => $"{clubId}|{season}|{competitionId}";
         private static string CompetitionKey(string countryCode, string season, string competitionId) => $"{countryCode}|{season}|{competitionId}";

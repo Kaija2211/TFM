@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "https://github.com/gitgitaway/MMM-MyTeams-Honours",
+  "sourceCommit": "d31c60a",
+  "attribution": "Honours extraction logic adapted from MMM-MyTeams-Honours (MIT); facts cached from English Wikipedia.",
+  "clubs": [
+    {
+      "clubId": "eng:liverpool-fc",
+      "sourceUrl": "https://en.wikipedia.org/wiki/Liverpool_F.C.#Honours",
+      "sourceLastModified": "2026-03-23T18:00:23Z",
+      "nationalLeague": 21,
+      "nationalCup": 9,
+      "nationalLeagueCup": 10,
+      "europeanCup": 6,
+      "uefaCup": 3,
+      "reputationFloor": 97,
+      "reviewStatus": "reviewed-cache-import"
+    },
+    {
+      "clubId": "sco:celtic-fc",
+      "sourceUrl": "https://en.wikipedia.org/wiki/Celtic_F.C.#Honours",
+      "sourceLastModified": "2026-03-23T18:00:25Z",
+      "nationalLeague": 55,
+      "nationalCup": 42,
+      "nationalLeagueCup": 22,
+      "europeanCup": 1,
+      "uefaCup": 0,
+      "reputationFloor": 91,
+      "reviewStatus": "reviewed-cache-import-league-context-adjusted"
+    }
+  ]
+}

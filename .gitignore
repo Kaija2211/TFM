@@ -15,3 +15,5 @@
 sysinfo.txt
 Assets/Resources/football-data-config.json
 *.json
+!Tools/OpenFootballImport/club_aliases.json
+!Tools/OpenFootballImport/club_honours.json

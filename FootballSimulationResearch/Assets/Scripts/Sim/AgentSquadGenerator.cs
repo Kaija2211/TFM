@@ -3,6 +3,20 @@ using UnityEngine;
 
 namespace Sim
 {
+    public sealed class SquadQualityTarget
+    {
+        public float FirstTeamOverall;
+        public float BenchOverall;
+        public float ReserveOverall;
+
+        public SquadQualityTarget(float firstTeamOverall, float benchOverall, float reserveOverall)
+        {
+            FirstTeamOverall = firstTeamOverall;
+            BenchOverall = benchOverall;
+            ReserveOverall = reserveOverall;
+        }
+    }
+
     public class AgentSquadGenerator
     {
         // Expanded from an original 30 to cut down on birthday-paradox collisions across
@@ -95,6 +109,24 @@ namespace Sim
         public PlayerAgent GenerateReservePlayer(PlayerPosition position, float attackStrength, float defenceStrength)
         {
             return GeneratePlayer(GenerateUniqueName(), position, attackStrength, defenceStrength);
+        }
+
+        public PlayerAgent GenerateReservePlayer(PlayerPosition position, SquadQualityTarget target)
+        {
+            PlayerAgent player = GeneratePlayer(GenerateUniqueName(), position, 1f, 1f);
+            ShiftPlayerToOverall(player, target.ReserveOverall);
+            return player;
+        }
+
+        // New-world generation boundary. Historical results choose only these squad
+        // quality targets; neutral player generation plus calibration creates the
+        // players. Match systems never read history or reputation from this method.
+        public AgentTeam GenerateSquad(string teamName, SquadQualityTarget target)
+        {
+            AgentTeam team = GenerateSquad(teamName, 1f, 1f);
+            ShiftGroupToAverage(team.StartingEleven, target.FirstTeamOverall);
+            ShiftGroupToAverage(team.Bench, target.BenchOverall);
+            return team;
         }
 
         public AgentTeam GenerateSquad(
@@ -447,6 +479,63 @@ namespace Sim
 
             return player;
         }
+
+        private static void ShiftGroupToAverage(List<PlayerAgent> players, float targetAverage)
+        {
+            if (players == null || players.Count == 0) return;
+            for (int pass = 0; pass < 3; pass++)
+            {
+                float current = 0f;
+                foreach (PlayerAgent player in players) current += player.GetOverallRating();
+                float shift = targetAverage - current / players.Count;
+                if (Mathf.Abs(shift) < 0.02f) break;
+                foreach (PlayerAgent player in players) ShiftPlayerAttributes(player, shift);
+            }
+        }
+
+        private static void ShiftPlayerToOverall(PlayerAgent player, float targetOverall)
+        {
+            for (int pass = 0; pass < 3; pass++)
+            {
+                float shift = targetOverall - player.GetOverallRating();
+                if (Mathf.Abs(shift) < 0.02f) break;
+                ShiftPlayerAttributes(player, shift);
+            }
+        }
+
+        private static void ShiftPlayerAttributes(PlayerAgent player, float shift)
+        {
+            player.Finishing = Shift(player.Finishing, shift);
+            player.Passing = Shift(player.Passing, shift);
+            player.Dribbling = Shift(player.Dribbling, shift);
+            player.Crossing = Shift(player.Crossing, shift);
+            player.Heading = Shift(player.Heading, shift);
+            player.LongShots = Shift(player.LongShots, shift);
+            player.ThroughBalls = Shift(player.ThroughBalls, shift);
+            player.FreeKicks = Shift(player.FreeKicks, shift);
+            player.Creativity = Shift(player.Creativity, shift);
+            player.Positioning = Shift(player.Positioning, shift);
+            player.Composure = Shift(player.Composure, shift);
+            player.OffTheBall = Shift(player.OffTheBall, shift);
+            player.Leadership = Shift(player.Leadership, shift * 0.5f);
+            player.Defending = Shift(player.Defending, shift);
+            player.Tackling = Shift(player.Tackling, shift);
+            player.Marking = Shift(player.Marking, shift);
+            player.Pace = Shift(player.Pace, shift);
+            player.Strength = Shift(player.Strength, shift);
+            player.Stamina = Shift(player.Stamina, shift);
+            player.Aerial = Shift(player.Aerial, shift);
+            player.WeakFoot = Shift(player.WeakFoot, shift * 0.5f);
+            if (player.PrimaryPosition == PlayerPosition.GK)
+            {
+                player.Goalkeeping = Shift(player.Goalkeeping, shift);
+                player.Reflexes = Shift(player.Reflexes, shift);
+            }
+            float newOverall = player.GetOverallRating();
+            player.Potential = Mathf.Clamp(Mathf.Max(newOverall, player.Potential + shift), newOverall, 99f);
+        }
+
+        private static float Shift(float value, float amount) => Mathf.Clamp(value + amount, 1f, 99f);
 
         // Session 7 additions (LongShots/ThroughBalls/OffTheBall/Marking/FreeKicks) -
         // deliberately a single self-contained pass wrapped in a Random.State save/

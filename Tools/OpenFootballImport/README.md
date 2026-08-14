@@ -3,6 +3,9 @@
 This offline tool audits the English, German, Spanish, Italian and French league
 archives before historical data is allowed to influence TFM's world generation.
 It also builds a global identity registry from `openfootball/clubs`.
+When the sibling `champions-league` repository is present, the importer also audits
+UEFA Champions League, Europa League and Conference League results and uses them only
+for the recent-European component of club reputation.
 
 The raw archive deliberately lives outside Unity's `Assets` directory. By default
 the script expects the sibling clone created by GitHub Desktop:
@@ -14,6 +17,7 @@ the script expects the sibling clone created by GitHub Desktop:
 ../italy
 ../europe
 ../clubs
+../champions-league
 ```
 
 Run from the FootballResearchProject repository root:
@@ -48,8 +52,12 @@ legacy team-strength model:
   for all five target countries.
 - `top_five_identity_reconciliation.md` — human-readable version of that report.
 - `football_world_history.json` — stable clubs, validated competition-season
-  membership, and reconstructed club-season tables. Only files passing every audit
-  check are included.
+  membership, reconstructed club-season tables, generation priors, and separate
+  reputation/first-team/bench/reserve world-generation targets. Only files passing
+  every audit check are included.
+- `world_generation_audit.md` — deterministic 1,000-season-per-league calibration
+  of goals, points and goal-difference ranges implied by the latest top-flight squad
+  targets. This complements rather than replaces the live match-engine audit.
 
 `club_aliases.json` contains checked-in, reviewed identity overrides. Missing
 lower-tier clubs observed in valid match history receive stable supplemental IDs

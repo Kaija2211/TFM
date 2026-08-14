@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "clubs": [
+    {
+      "id": "afc-bournemouth",
+      "name": "AFC Bournemouth",
+      "aliases": ["AFC Bournemouth", "AFC Bournemouth FC", "Bournemouth"]
+    },
+    {
+      "id": "brighton-and-hove-albion",
+      "name": "Brighton & Hove Albion",
+      "aliases": ["Brighton & Hove Albion", "Brighton & Hove Albion FC", "Brighton and Hove Albion"]
+    },
+    {
+      "id": "manchester-city",
+      "name": "Manchester City",
+      "aliases": ["Manchester City", "Manchester City FC"]
+    },
+    {
+      "id": "manchester-united",
+      "name": "Manchester United",
+      "aliases": ["Manchester United", "Manchester United FC"]
+    },
+    {
+      "id": "newcastle-united",
+      "name": "Newcastle United",
+      "aliases": ["Newcastle United", "Newcastle United FC"]
+    },
+    {
+      "id": "nottingham-forest",
+      "name": "Nottingham Forest",
+      "aliases": ["Nottingham Forest", "Nottingham Forest FC"]
+    },
+    {
+      "id": "sunderland-afc",
+      "name": "Sunderland",
+      "aliases": ["Sunderland", "Sunderland AFC"]
+    },
+    {
+      "id": "tottenham-hotspur",
+      "name": "Tottenham Hotspur",
+      "aliases": ["Tottenham Hotspur", "Tottenham Hotspur FC", "Tottenham Hotspurs"]
+    },
+    {
+      "id": "wolverhampton-wanderers",
+      "name": "Wolverhampton Wanderers",
+      "aliases": ["Wolverhampton Wanderers", "Wolverhampton Wanderers FC", "Wolves"]
+    },
+    {
+      "id": "eng:brackley-town",
+      "name": "Brackley Town",
+      "aliases": ["Brackley Town"]
+    },
+    {
+      "id": "eng:chester-city",
+      "name": "Chester City",
+      "aliases": ["Chester City"]
+    },
+    {
+      "id": "eng:north-ferriby-united",
+      "name": "North Ferriby United",
+      "aliases": ["North Ferriby United"]
+    },
+    {
+      "id": "eng:truro-city",
+      "name": "Truro City",
+      "aliases": ["Truro City"]
+    },
+    {
+      "countryCode": "es",
+      "id": "es:gimnastic-tarragona",
+      "name": "Gimnàstic Tarragona",
+      "aliases": ["Gimnàstic de Tarragona"]
+    },
+    {
+      "countryCode": "es",
+      "id": "es:rc-celta-vigo",
+      "name": "RC Celta Vigo",
+      "aliases": ["RC Celta"]
+    },
+    {
+      "countryCode": "es",
+      "id": "es:real-madrid",
+      "name": "Real Madrid",
+      "aliases": ["Real Madrid C.F."]
+    },
+    {
+      "countryCode": "es",
+      "id": "es:athletic-club-bilbao-b",
+      "name": "Athletic Club Bilbao B",
+      "aliases": ["Athletic Club B"]
+    },
+    {
+      "countryCode": "ad",
+      "id": "ad:fc-andorra",
+      "name": "FC Andorra",
+      "aliases": ["FC Andorra"]
+    },
+    {
+      "countryCode": "fr",
+      "id": "fr:gfc-ajaccio",
+      "name": "GFC Ajaccio",
+      "aliases": ["Gazélec FC Ajaccio"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:carpi",
+      "name": "Carpi",
+      "aliases": ["AC Carpi"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:rimini-fc-ssd",
+      "name": "Rimini FC SSD",
+      "aliases": ["AC Rimini"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:lr-vicenza-virtus",
+      "name": "LR Vicenza Virtus",
+      "aliases": ["L.R. Vicenza", "L.R. Vicenza Virtus"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:alessandria",
+      "name": "Alessandria",
+      "aliases": ["US Alessandria 1912"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:ss-arezzo",
+      "name": "SS Arezzo",
+      "aliases": ["US Arezzo"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:us-triestina-calcio",
+      "name": "US Triestina Calcio",
+      "aliases": ["US Triestina"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:pontedera",
+      "name": "Pontedera",
+      "aliases": ["US Pontedera"]
+    },
+    {
+      "countryCode": "it",
+      "id": "it:vis-pesaro-1898",
+      "name": "Vis Pesaro 1898",
+      "aliases": ["Vis Pesaro"]
+    }
+  ]
+}
