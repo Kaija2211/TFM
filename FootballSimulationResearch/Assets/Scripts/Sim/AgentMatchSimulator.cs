@@ -19,6 +19,20 @@ namespace Sim
         {
             public int Minute;
             public string Description;
+            public bool IsGoal;
+            public bool HomeTeamScored;
+            public bool IsShot;
+
+            // Which side took the shot - set on every shot event (goal or saved), unlike
+            // HomeTeamScored which is only meaningful on goals. Added so Manager Mode can
+            // show a per-team shot split; purely additive, doesn't affect HomeGoals/
+            // AwayGoals or any control flow in ResolveAttack.
+            public bool HomeTeamAttacking;
+
+            // The scoring player's name, set only on goal events (from `shooter` at the
+            // exact point IsGoal is set - the actual scorer, not parsed from Description).
+            // Purely additive, same as HomeTeamAttacking above.
+            public string ScorerName;
         }
 
         public class AgentMatchResult
@@ -108,6 +122,125 @@ namespace Sim
 
                 // If a team is already well ahead, reduce low-value extra attacks.
                 // This keeps extreme scorelines under control.
+                if (homeAttacks && goalDifference >= 3 && Random.value < 0.60f)
+                {
+                    continue;
+                }
+
+                if (!homeAttacks && goalDifference <= -3 && Random.value < 0.60f)
+                {
+                    continue;
+                }
+
+                AgentTeam attackingTeam = homeAttacks ? homeTeam : awayTeam;
+                AgentTeam defendingTeam = homeAttacks ? awayTeam : homeTeam;
+
+                ScoreStateModifier attackingMentality = homeAttacks
+                    ? homeMentality
+                    : awayMentality;
+
+                ScoreStateModifier defendingMentality = homeAttacks
+                    ? awayMentality
+                    : homeMentality;
+
+                float attackingExpectedGoals = homeAttacks
+                    ? expectedHomeGoals
+                    : expectedAwayGoals;
+
+                float adjustedAttackingExpectedGoals =
+                    attackingExpectedGoals * attackingMentality.AttackQualityMultiplier;
+
+                ResolveAttack(
+                    minute,
+                    attackingTeam,
+                    defendingTeam,
+                    homeAttacks,
+                    adjustedAttackingExpectedGoals,
+                    defendingMentality.DefensiveMultiplier,
+                    result
+                );
+            }
+
+            return result;
+        }
+
+        // Manager Mode only: mirrors SimulateMatch's own loop exactly, but resuming from
+        // a given minute/score instead of kickoff. Added so an in-match substitution can
+        // genuinely change the remainder of the match (new XI feeds PickShooterForChance
+        // etc. from here on) without touching SimulateMatch above, which Research Mode's
+        // ResearchEvaluationRunner also calls and which must stay byte-for-byte unchanged.
+        public AgentMatchResult SimulateFromMinute(
+            AgentTeam homeTeam,
+            AgentTeam awayTeam,
+            float expectedHomeGoals,
+            float expectedAwayGoals,
+            int startMinute,
+            int startHomeGoals,
+            int startAwayGoals)
+        {
+            AgentMatchResult result = new AgentMatchResult
+            {
+                HomeTeamName = homeTeam.TeamName,
+                AwayTeamName = awayTeam.TeamName,
+                HomeGoals = startHomeGoals,
+                AwayGoals = startAwayGoals
+            };
+
+            float totalExpectedGoals = Mathf.Max(0.1f, expectedHomeGoals + expectedAwayGoals);
+
+            float eventChancePerMinute = Mathf.Clamp(
+                0.18f + totalExpectedGoals * 0.035f,
+                0.18f,
+                0.32f
+            );
+
+            float rawHomeAttackChance = expectedHomeGoals / totalExpectedGoals;
+
+            float homeAttackChance = Mathf.Clamp(
+                Mathf.Lerp(0.52f, rawHomeAttackChance, 0.45f),
+                0.35f,
+                0.65f
+            );
+
+            for (int minute = Mathf.Max(1, startMinute); minute <= 90; minute++)
+            {
+                if (Random.value > eventChancePerMinute)
+                {
+                    continue;
+                }
+
+                ScoreStateModifier homeMentality = GetScoreStateModifier(
+                    result.HomeGoals,
+                    result.AwayGoals,
+                    minute
+                );
+
+                ScoreStateModifier awayMentality = GetScoreStateModifier(
+                    result.AwayGoals,
+                    result.HomeGoals,
+                    minute
+                );
+
+                float adjustedHomeAttackWeight =
+                    homeAttackChance * homeMentality.AttackShareMultiplier;
+
+                float adjustedAwayAttackWeight =
+                    (1f - homeAttackChance) * awayMentality.AttackShareMultiplier;
+
+                float adjustedHomeAttackChance =
+                    adjustedHomeAttackWeight /
+                    Mathf.Max(0.01f, adjustedHomeAttackWeight + adjustedAwayAttackWeight);
+
+                adjustedHomeAttackChance = Mathf.Clamp(
+                    adjustedHomeAttackChance,
+                    0.30f,
+                    0.70f
+                );
+
+                bool homeAttacks = Random.value < adjustedHomeAttackChance;
+
+                int goalDifference = result.HomeGoals - result.AwayGoals;
+
                 if (homeAttacks && goalDifference >= 3 && Random.value < 0.60f)
                 {
                     continue;
@@ -243,7 +376,12 @@ namespace Sim
                         creator,
                         shooter,
                         chanceType
-                    )
+                    ),
+                    IsGoal = true,
+                    HomeTeamScored = homeAttacks,
+                    IsShot = true,
+                    HomeTeamAttacking = homeAttacks,
+                    ScorerName = shooter.Name
                 });
             }
             else
@@ -256,7 +394,9 @@ namespace Sim
                         shooter,
                         goalkeeper,
                         chanceType
-                    )
+                    ),
+                    IsShot = true,
+                    HomeTeamAttacking = homeAttacks
                 });
             }
         }

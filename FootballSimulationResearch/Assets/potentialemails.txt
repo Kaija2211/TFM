@@ -1,0 +1,441 @@
+1. Welcome email — new career
+
+Subject: Welcome to {ClubName}
+
+From: Club Board
+
+Manager,
+
+Welcome to {ClubName}. The board is pleased to confirm your appointment ahead of the new Premier League season.
+
+Our expectations are simple: establish a clear identity, manage the squad responsibly, and ensure the club remains competitive over the full campaign.
+
+You will have immediate access to the squad screen, upcoming fixtures, tactical setup, and matchday controls.
+
+Good luck. The season starts now.
+
+— {ClubName} Board
+
+2. Pre-season board expectations
+
+Subject: Season Expectations
+
+From: Club Board
+
+Manager,
+
+Before the season begins, we want to outline our expectations.
+
+The board will primarily judge performance through league position, consistency of results, and squad development. While individual defeats will not define your future, long poor runs of form will naturally increase pressure.
+
+We expect you to make tactical decisions that reflect the strength of the squad and the quality of upcoming opposition.
+
+— Club Board
+
+3. Upcoming big match
+
+Subject: Important Fixture Ahead: {OpponentName}
+
+From: Assistant Manager
+
+Boss,
+
+The next fixture against {OpponentName} could be an important one.
+
+They have looked dangerous recently, and this may be a good time to review the squad, check player roles, and decide whether to approach the match aggressively or more cautiously.
+
+A strong result here could build real momentum.
+
+— Assistant Manager
+
+4. Weak opponent warning
+
+Subject: Avoid Complacency
+
+From: Assistant Manager
+
+Boss,
+
+On paper, {OpponentName} are a side we should be looking to beat.
+
+That said, matches like this can become awkward if we start slowly or leave too much space in transition. A focused performance should give us a strong chance, but complacency would make life harder than it needs to be.
+
+— Assistant Manager
+
+5. Strong opponent warning
+
+Subject: Difficult Match Ahead
+
+From: Tactical Analyst
+
+Manager,
+
+Our next match against {OpponentName} will be one of the tougher fixtures on the calendar.
+
+They are expected to create chances, so our tactical setup may be important. A defensive approach could limit their threat, while a more aggressive setup may give us a better chance of causing problems ourselves.
+
+The decision depends on how much risk you want to accept.
+
+— Tactical Analyst
+
+6. After a win
+
+Subject: Good Result
+
+From: Club Board
+
+Manager,
+
+Congratulations on the result against {OpponentName}.
+
+The performance has helped strengthen our position in the league table and should give the squad confidence going into the next fixture.
+
+Keep the standards high.
+
+— Club Board
+
+7. After a big win
+
+Subject: Excellent Performance
+
+From: Assistant Manager
+
+Boss,
+
+That was an excellent result.
+
+The players looked confident, the match events went our way, and the scoreline will give the dressing room a real lift. Performances like this can define the mood around the club.
+
+Let’s make sure we build on it rather than treating it as a one-off.
+
+— Assistant Manager
+
+8. After a draw
+
+Subject: Points Shared
+
+From: Assistant Manager
+
+Boss,
+
+The draw against {OpponentName} leaves us with mixed feelings.
+
+There were positives in the performance, but also moments where the match could have slipped away. Depending on the opponent, this may prove to be a useful point, but there is still room to improve.
+
+— Assistant Manager
+
+9. After a loss
+
+Subject: Disappointing Result
+
+From: Club Board
+
+Manager,
+
+The result against {OpponentName} was disappointing.
+
+The board understands that setbacks are part of a long season, but we expect a response in the next match. Consistency will be important if we are to meet our objectives.
+
+— Club Board
+
+10. After a heavy loss
+
+Subject: Performance Concerns
+
+From: Club Board
+
+Manager,
+
+The defeat to {OpponentName} has raised concerns.
+
+It was not simply the result, but the manner of the performance that disappointed us. We expect you to review the tactical approach, squad selection, and mentality ahead of the next fixture.
+
+A response is needed.
+
+— Club Board
+
+11. Poor run of form
+
+Subject: Recent Form
+
+From: Club Board
+
+Manager,
+
+Recent results have not met expectations.
+
+The board still supports your work, but we need to see signs of improvement soon. The squad has enough quality to be more competitive than recent performances suggest.
+
+The next few fixtures may prove important.
+
+— Club Board
+
+12. Strong run of form
+
+Subject: Momentum Building
+
+From: Assistant Manager
+
+Boss,
+
+The squad is starting to build momentum.
+
+Recent performances have improved confidence around the club, and the league table is beginning to reflect that. The challenge now is maintaining standards when the fixture list becomes more difficult.
+
+— Assistant Manager
+
+13. Player in good form
+
+Subject: {PlayerName} Impressing
+
+From: Assistant Manager
+
+Boss,
+
+{PlayerName} has been performing well recently.
+
+His recent contributions suggest he may deserve a continued place in the starting eleven. Depending on the next opponent, it may be worth building part of the game plan around his strengths.
+
+— Assistant Manager
+
+14. Player struggling
+
+Subject: Concern Over {PlayerName}
+
+From: Assistant Manager
+
+Boss,
+
+{PlayerName} has looked below his best lately.
+
+This does not necessarily mean he should be dropped, but it may be worth reviewing his role, position, or workload. A short spell on the bench could help, especially if another player is pushing for a chance.
+
+— Assistant Manager
+
+15. Bench player asking for chance
+
+Subject: Selection Request
+
+From: {PlayerName}
+
+Boss,
+
+I feel I’m ready to contribute more.
+
+I understand competition for places is strong, but I’d like the opportunity to show what I can do. Even a substitute appearance would mean a lot.
+
+— {PlayerName}
+
+16. Player unhappy after being benched
+
+Subject: Playing Time Concern
+
+From: {PlayerName}
+
+Boss,
+
+I wanted to speak honestly about my playing time.
+
+I respect your decisions, but I feel I can offer more to the team than I’m currently being given the chance to show. I hope I can prove myself soon.
+
+— {PlayerName}
+
+17. Substitute made impact
+
+Subject: Substitution Paid Off
+
+From: Assistant Manager
+
+Boss,
+
+The substitution involving {PlayerName} had a clear impact.
+
+Fresh legs made a difference late in the match, and it showed how useful the bench can be when managed carefully. This could be worth remembering in future tight games.
+
+— Assistant Manager
+
+18. Low stamina warning
+
+Subject: Fitness Concern
+
+From: Fitness Coach
+
+Manager,
+
+A few players are showing signs of fatigue.
+
+Heavy minutes can reduce sharpness late in matches, especially for players with lower stamina. Rotating the squad or using substitutions earlier may help avoid performance drops.
+
+— Fitness Coach
+
+19. Tactical suggestion — attack wide
+
+Subject: Tactical Note: Wide Areas
+
+From: Tactical Analyst
+
+Manager,
+
+Our analysis suggests {OpponentName} may be vulnerable in wide areas.
+
+If selected players have enough pace, crossing, and dribbling quality, a wider attacking approach could create useful chances. This may be especially effective if their full-backs or wing-backs are weaker defensively.
+
+— Tactical Analyst
+
+20. Tactical suggestion — protect the middle
+
+Subject: Tactical Note: Central Control
+
+From: Tactical Analyst
+
+Manager,
+
+{OpponentName} are strongest through central areas.
+
+It may be worth using a more compact shape and asking midfielders to limit space between the lines. Giving them too much room centrally could allow them to control the match.
+
+— Tactical Analyst
+
+21. Tactical suggestion — underdog approach
+
+Subject: Tactical Note: Managing Risk
+
+From: Assistant Manager
+
+Boss,
+
+We are not favourites going into the next match.
+
+That does not mean we cannot get a result. A lower-risk approach could keep us in the game, while selective attacking moments may give us a chance to punish mistakes.
+
+The key will be choosing when to take risks.
+
+— Assistant Manager
+
+22. Tactical suggestion — chasing game
+
+Subject: When Behind
+
+From: Assistant Manager
+
+Boss,
+
+When we are behind late in a match, switching to a more attacking mentality can increase pressure on the opponent.
+
+It may create more chances, but it can also leave us exposed. The decision is about whether the risk is worth taking.
+
+— Assistant Manager
+
+23. Tactical suggestion — protecting lead
+
+Subject: Seeing Out Matches
+
+From: Assistant Manager
+
+Boss,
+
+When protecting a lead, a more defensive mentality can help reduce the opponent’s attacking opportunities.
+
+It may limit our own chances going forward, but in certain matches, control and structure matter more than chasing another goal.
+
+— Assistant Manager
+
+24. Rivalry match
+
+Subject: Rivalry Fixture Ahead
+
+From: Club Media Officer
+
+Manager,
+
+The supporters will be watching the next match closely.
+
+Fixtures like this can carry extra pressure, even when the league table suggests otherwise. A strong performance against {OpponentName} would mean a lot to the fans.
+
+— Media Officer
+
+25. Fans happy
+
+Subject: Supporter Mood Improving
+
+From: Media Officer
+
+Manager,
+
+Supporter reaction has been positive after recent results.
+
+Fans have responded well to the team’s performances and there is growing belief around the club. Maintaining that connection could be important as the season develops.
+
+— Media Officer
+
+26. Fans frustrated
+
+Subject: Supporter Frustration
+
+From: Media Officer
+
+Manager,
+
+Supporter mood has dipped following recent performances.
+
+The fans are not turning on the team, but there is frustration about results and the style of play. A convincing performance soon would help calm things down.
+
+— Media Officer
+
+27. Mid-season review
+
+Subject: Mid-Season Review
+
+From: Club Board
+
+Manager,
+
+We have reached the midpoint of the season.
+
+The board has reviewed our league position, recent form, and overall squad performance. There is still time to improve, but the second half of the campaign will be important.
+
+Continue to make decisions that serve the long-term interests of the club.
+
+— Club Board
+
+28. End-season success
+
+Subject: Season Review
+
+From: Club Board
+
+Manager,
+
+The season has concluded, and the board is pleased with the progress made.
+
+Results over the campaign have reflected good management, tactical decision-making, and effective squad use. This has been a strong foundation to build on.
+
+— Club Board
+
+29. End-season disappointment
+
+Subject: Season Review
+
+From: Club Board
+
+Manager,
+
+The season has concluded, and results have fallen short of expectations.
+
+There were positive moments, but not enough consistency across the campaign. The board will review the situation carefully before deciding the next steps.
+
+— Club Board
+
+30. Generic scout-style future hook
+
+Subject: Player Recruitment Report Available
+
+From: Recruitment Team
+
+Manager,
+
+The recruitment department has begun compiling reports on potential squad improvements.
+
+This system is not currently active, but future versions could allow you to review targets, compare player attributes, and strengthen weak areas of the squad.
+
+— Recruitment Team
