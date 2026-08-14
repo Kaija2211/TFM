@@ -9,6 +9,7 @@ namespace Sim
 
         public List<PlayerAgent> StartingEleven = new();
         public List<PlayerAgent> Bench = new();
+        public List<PlayerAgent> Reserves = new();
 
         public List<PlayerAgent> Players = new();
 
@@ -32,6 +33,44 @@ namespace Sim
 
             Bench.Add(player);
             Players.Add(player);
+        }
+
+        public void AddReservePlayer(PlayerAgent player)
+        {
+            player.IsStartingEleven = false;
+            Reserves.Add(player);
+            Players.Add(player);
+        }
+
+        public void AddSquadPlayer(PlayerAgent player)
+        {
+            if (Bench.Count < 9) AddBenchPlayer(player);
+            else AddReservePlayer(player);
+        }
+
+        public bool PromoteReserveToBench(PlayerAgent player)
+        {
+            if (!Reserves.Remove(player)) return false;
+
+            player.IsStartingEleven = false;
+            if (Bench.Count >= 9)
+            {
+                PlayerAgent demoted = Bench[Bench.Count - 1];
+                Bench.RemoveAt(Bench.Count - 1);
+                Reserves.Add(demoted);
+            }
+
+            Bench.Add(player);
+            return true;
+        }
+
+        public bool RemovePlayer(PlayerAgent player)
+        {
+            bool removed = StartingEleven.Remove(player);
+            removed |= Bench.Remove(player);
+            removed |= Reserves.Remove(player);
+            removed |= Players.Remove(player);
+            return removed;
         }
 
         // Swaps one starter for one bench player. Both must already belong to this
@@ -91,7 +130,16 @@ namespace Sim
         {
             Formation = newFormation;
 
+            List<PlayerAgent> available = new();
+            foreach (PlayerAgent player in StartingEleven)
+                if (!newStartingEleven.Contains(player) && !available.Contains(player)) available.Add(player);
+            foreach (PlayerAgent player in Bench)
+                if (!newStartingEleven.Contains(player) && !available.Contains(player)) available.Add(player);
+            foreach (PlayerAgent player in Reserves)
+                if (!newStartingEleven.Contains(player) && !available.Contains(player)) available.Add(player);
+
             List<PlayerAgent> newBench = new();
+            List<PlayerAgent> newReserves = new();
 
             foreach (PlayerAgent player in Players)
             {
@@ -100,12 +148,14 @@ namespace Sim
 
                 if (!isStarting)
                 {
-                    newBench.Add(player);
+                    if (available.Contains(player) && newBench.Count < 9) newBench.Add(player);
+                    else newReserves.Add(player);
                 }
             }
 
             StartingEleven = new List<PlayerAgent>(newStartingEleven);
             Bench = newBench;
+            Reserves = newReserves;
         }
     }
 }

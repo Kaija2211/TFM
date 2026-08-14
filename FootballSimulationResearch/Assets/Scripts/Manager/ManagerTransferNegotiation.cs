@@ -298,10 +298,9 @@ namespace Manager
         // they refuse every further sale outright regardless of position or price -
         // session 16, Thomas: "if they are at the point where they only have 5 bench
         // players, they also won't sell." A blanket depth floor on top of
-        // WouldLeaveSquadTooThin's per-position check, since repeated sales that each
-        // individually still leave "one player" at a position can still hollow out a
-        // squad's overall depth long before any single position hits zero.
-        private const int MinBenchDepthBeforeRefusingAllSales = 5;
+        // WouldLeaveSquadTooThin's per-position check, since repeated sales can still
+        // hollow out the overall 30-player squad even while every position has cover.
+        private const int MinSeniorSquadSizeBeforeRefusingAllSales = 23;
 
         public void ResolveDueBids(int currentMatchdayIndex, ManagerClubFinance finance, string managedTeamName, ManagerInbox inbox, Func<PlayerAgent, AgentTeam> getSellingTeam)
         {
@@ -366,7 +365,16 @@ namespace Manager
             bool hasAnotherAtExactPosition = sourceTeam.Players.Exists(p => p != target && p.PrimaryPosition == target.PrimaryPosition);
             if (!hasAnotherAtExactPosition) return true;
 
-            return sourceTeam.Bench.Count <= MinBenchDepthBeforeRefusingAllSales;
+            // Clubs begin with three keepers. Requiring two to remain means only one can
+            // be sold before a replacement arrives, and retirement replacement keeps
+            // that rule viable over long careers.
+            if (target.PrimaryPosition == PlayerPosition.GK)
+            {
+                int remainingGoalkeepers = sourceTeam.Players.FindAll(p => p != target && p.PrimaryPosition == PlayerPosition.GK).Count;
+                if (remainingGoalkeepers < 2) return true;
+            }
+
+            return sourceTeam.Players.Count <= MinSeniorSquadSizeBeforeRefusingAllSales;
         }
 
         // Finalizes an accepted bid - the escrowed amount was already deducted at

@@ -126,6 +126,7 @@ namespace Sim
             AgentTeam team = GenerateSquad(teamName, 1f, 1f);
             ShiftGroupToAverage(team.StartingEleven, target.FirstTeamOverall);
             ShiftGroupToAverage(team.Bench, target.BenchOverall);
+            ShiftGroupToAverage(team.Reserves, target.ReserveOverall);
             return team;
         }
 
@@ -163,6 +164,18 @@ namespace Sim
 
                 AddSecondaryPositions(player);
                 team.AddBenchPlayer(player);
+            }
+
+            foreach (PlayerPosition position in GetReservePositions())
+            {
+                PlayerAgent player = GeneratePlayer(
+                    GenerateUniqueName(),
+                    position,
+                    attackStrength * 0.88f,
+                    defenceStrength / 0.88f
+                );
+
+                team.AddReservePlayer(player);
             }
 
             return team;
@@ -485,6 +498,26 @@ namespace Sim
             AddSecondaryPositions(player);
 
             return player;
+        }
+
+        private static List<PlayerPosition> GetReservePositions()
+        {
+            // Ten-player wider squad. Together with the starting and substitute
+            // goalkeepers this guarantees three GKs, while the remaining slots provide
+            // a second layer of cover across every outfield unit.
+            return new List<PlayerPosition>
+            {
+                PlayerPosition.GK,
+                PlayerPosition.CB,
+                PlayerPosition.CB,
+                PlayerPosition.RB,
+                PlayerPosition.LB,
+                PlayerPosition.DM,
+                PlayerPosition.CM,
+                PlayerPosition.RW,
+                PlayerPosition.LW,
+                PlayerPosition.ST
+            };
         }
 
         private static void ShiftGroupToAverage(List<PlayerAgent> players, float targetAverage)

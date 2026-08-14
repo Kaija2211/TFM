@@ -17,8 +17,8 @@ public static class ManagerHolyBalanceAudit
     // Keep 200 audited seasons, but spread them across more independently generated
     // squads so one unusually favourable world is not counted twenty times in title
     // concentration and table-shape metrics.
-    private const int Worlds = 20;
-    private const int SeasonsPerWorld = 10;
+    private const int Worlds = 100;
+    private const int SeasonsPerWorld = 2;
     private const int Seed = 221104;
 
     private sealed class TableRow

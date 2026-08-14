@@ -1793,7 +1793,6 @@ namespace Manager
             nextMatchOverrideDefaultStartingEleven = null;
 
             squadsByTeamName.Clear();
-            reservePoolByTeamName.Clear();
             squadRolesByTeamName.Clear();
             simulatedMatchdays.Clear();
             loanTracker.Clear();
@@ -2668,13 +2667,7 @@ namespace Manager
         {
             foreach (AgentTeam team in squadsByTeamName.Values)
             {
-                foreach (PlayerAgent player in team.StartingEleven) player.Age += 1;
-                foreach (PlayerAgent player in team.Bench) player.Age += 1;
-            }
-
-            foreach (List<PlayerAgent> reservePool in reservePoolByTeamName.Values)
-            {
-                foreach (PlayerAgent player in reservePool) player.Age += 1;
+                foreach (PlayerAgent player in team.Players) player.Age += 1;
             }
 
             // Discovered-but-unclaimed youth prospects keep developing whether or not
@@ -2754,7 +2747,10 @@ namespace Manager
                     }
                     else
                     {
-                        ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorAiFirstTeam);
+                        float playingTime = team.Reserves.Contains(player)
+                            ? AssumedPlayingTimeFactorUncalledReserve
+                            : AssumedPlayingTimeFactorAiFirstTeam;
+                        ManagerPlayerDevelopment.ApplySeasonProgression(player, playingTime);
                     }
                 }
 
@@ -2764,14 +2760,6 @@ namespace Manager
                 // replacements have both landed for this team, so the recalculation sees
                 // this season's real final squad, not a stale one.
                 RecalculateLiveTeamStrength(teamName, team);
-            }
-
-            foreach (KeyValuePair<string, List<PlayerAgent>> entry in reservePoolByTeamName)
-            {
-                foreach (PlayerAgent player in entry.Value)
-                {
-                    ManagerPlayerDevelopment.ApplySeasonProgression(player, AssumedPlayingTimeFactorUncalledReserve);
-                }
             }
 
             // Discovered-but-unclaimed youth prospects (session 8, Phase 2; mission
@@ -2811,7 +2799,7 @@ namespace Manager
 
                 if (squadsByTeamName.TryGetValue(loan.OriginTeamName, out AgentTeam originTeam))
                 {
-                    originTeam.AddBenchPlayer(loan.Player);
+                    originTeam.AddSquadPlayer(loan.Player);
                 }
             }
         }
@@ -2864,6 +2852,7 @@ namespace Manager
 
                 int startingIndex = team.StartingEleven.IndexOf(retiree);
                 int benchIndex = team.Bench.IndexOf(retiree);
+                int reserveIndex = team.Reserves.IndexOf(retiree);
                 int playersIndex = team.Players.IndexOf(retiree);
 
                 if (startingIndex >= 0)
@@ -2874,6 +2863,11 @@ namespace Manager
                 else if (benchIndex >= 0)
                 {
                     team.Bench[benchIndex] = replacement;
+                    replacement.IsStartingEleven = false;
+                }
+                else if (reserveIndex >= 0)
+                {
+                    team.Reserves[reserveIndex] = replacement;
                     replacement.IsStartingEleven = false;
                 }
 
@@ -2949,11 +2943,6 @@ namespace Manager
                 AttackDefendRole role = roles.GetRole(player);
                 if (role == AttackDefendRole.Attacking) data.ManagedRoles.AttackingRolePlayerIds.Add(player.PlayerId);
                 else if (role == AttackDefendRole.Defensive) data.ManagedRoles.DefensiveRolePlayerIds.Add(player.PlayerId);
-            }
-
-            if (reservePoolByTeamName.TryGetValue(managedTeamName, out List<PlayerAgent> reserves))
-            {
-                foreach (PlayerAgent p in reserves) data.ManagedReservePool.Add(PlayerAgentSaveData.FromPlayer(p));
             }
 
             // Loan system (session 9) - see ManagerSaveData.LoanedOutPlayers' comment.
@@ -3089,7 +3078,6 @@ namespace Manager
             }
 
             squadsByTeamName.Clear();
-            reservePoolByTeamName.Clear();
             squadRolesByTeamName.Clear();
             simulatedMatchdays.Clear();
             loanTracker.Clear();
@@ -3122,9 +3110,41 @@ namespace Manager
             Dictionary<string, PlayerAgent> managedPlayersById = new();
             foreach (PlayerAgent p in managedTeam.Players) managedPlayersById[p.PlayerId] = p;
 
-            List<PlayerAgent> restoredReserves = new();
-            foreach (PlayerAgentSaveData dto in data.ManagedReservePool) restoredReserves.Add(dto.ToPlayer());
-            reservePoolByTeamName[managedTeamName] = restoredReserves;
+            // Legacy saves kept a separate hidden emergency pool. New saves persist
+            // reserves inside AgentTeamSaveData; import up to ten legacy players only
+            // when that new list is absent, giving old careers the same 30-player shape.
+            if (managedTeam.Reserves.Count == 0 && data.ManagedReservePool != null)
+            {
+                List<PlayerAgent> legacyPool = new List<PlayerAgent>();
+                foreach (PlayerAgentSaveData dto in data.ManagedReservePool) legacyPool.Add(dto.ToPlayer());
+
+                PlayerPosition[] migrationSlots =
+                {
+                    PlayerPosition.GK, PlayerPosition.CB, PlayerPosition.CB,
+                    PlayerPosition.RB, PlayerPosition.LB, PlayerPosition.DM,
+                    PlayerPosition.CM, PlayerPosition.RW, PlayerPosition.LW,
+                    PlayerPosition.ST
+                };
+
+                foreach (PlayerPosition slot in migrationSlots)
+                {
+                    if (legacyPool.Count == 0) break;
+                    PlayerAgent best = legacyPool[0];
+                    float bestFit = best.GetPositionFit(slot);
+                    foreach (PlayerAgent candidate in legacyPool)
+                    {
+                        float fit = candidate.GetPositionFit(slot);
+                        if (fit > bestFit)
+                        {
+                            best = candidate;
+                            bestFit = fit;
+                        }
+                    }
+
+                    legacyPool.Remove(best);
+                    managedTeam.AddReservePlayer(best);
+                }
+            }
 
             // Loan system (session 9) - re-register each restored player as on loan
             // (SendOnLoan rolls a fresh destination flavor name, harmless since it was
@@ -4285,13 +4305,7 @@ namespace Manager
         {
             if (academy.TryPromoteToReserves(prospect))
             {
-                if (!reservePoolByTeamName.TryGetValue(managedTeamName, out List<PlayerAgent> reserves))
-                {
-                    reserves = new List<PlayerAgent>();
-                    reservePoolByTeamName[managedTeamName] = reserves;
-                }
-
-                reserves.Add(prospect);
+                GetOrCreateAgentTeam(managedTeamName).AddReservePlayer(prospect);
             }
 
             RefreshScoutingUI();
@@ -5166,11 +5180,10 @@ namespace Manager
                     }
                 }
 
-                sourceSquad.Bench.Remove(target);
-                sourceSquad.Players.Remove(target);
+                sourceSquad.RemovePlayer(target);
             }
 
-            GetOrCreateAgentTeam(managedTeamName).AddBenchPlayer(target);
+            GetOrCreateAgentTeam(managedTeamName).AddSquadPlayer(target);
 
             MarkInboxMessagesResolvedForPlayer(target);
             SetTransferMarketStatus($"Signed {target.Name} for £{resolvedBid.BidAmount:F1}m!");
@@ -5209,15 +5222,16 @@ namespace Manager
 
         private void OnSellRowClicked(PlayerAgent target)
         {
-            if (!squadsByTeamName.TryGetValue(managedTeamName, out AgentTeam team) || !team.Bench.Contains(target))
+            if (!squadsByTeamName.TryGetValue(managedTeamName, out AgentTeam team)
+                || team.StartingEleven.Contains(target)
+                || !team.Players.Contains(target))
             {
                 return;
             }
 
             float sellPrice = ManagerClubFinance.GetSellPrice(target);
 
-            team.Bench.Remove(target);
-            team.Players.Remove(target);
+            team.RemovePlayer(target);
             finance.AdjustBudget(managedTeamName, sellPrice);
             finance.RecordTransferIncome(managedTeamName, sellPrice);
 
@@ -7894,7 +7908,7 @@ namespace Manager
             // null, same pattern as the opponent-pitch browse view) - these players
             // aren't on the real matchday squad, so Sell/role-assignment/etc. don't
             // apply to them the way they do for Starting XI/Bench rows.
-            List<PlayerAgent> reservePlayers = GetOrCreateReservePool(managedTeamName);
+            List<PlayerAgent> reservePlayers = team.Reserves;
             squadBrowseListView.AddSectionHeader($"Reserves ({reservePlayers.Count})");
 
             List<PlayerAgent> sortedReserves = new List<PlayerAgent>(reservePlayers);
@@ -7905,7 +7919,7 @@ namespace Manager
 
             foreach (PlayerAgent player in sortedReserves)
             {
-                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), null, ageText: player.Age.ToString());
+                squadBrowseListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), OnSquadRowClicked, BuildRoleBadgeSuffix(player, squadRoles), squadRoles.IsInjured(player, currentFixtureIndex), BuildFitnessBadgeSuffix(player, squadRoles), player.Age.ToString(), $"£{ManagerClubFinance.GetMarketValue(player):F1}m");
             }
 
             // Rows are cleared and rebuilt fresh every refresh - same rapid
@@ -8061,8 +8075,7 @@ namespace Manager
             else
             {
                 AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
-                inspectSquadPlayers = new List<PlayerAgent>(team.StartingEleven);
-                inspectSquadPlayers.AddRange(team.Bench);
+                inspectSquadPlayers = new List<PlayerAgent>(team.Players);
             }
 
             inspectIsAcademyProspect = isAcademyProspect;
@@ -8239,7 +8252,7 @@ namespace Manager
             // would otherwise misleadingly default to "Bench" for everyone.
             string squadStatus = !inspectIsOwnSquad
                 ? (playerInspectReturnTarget == PlayerInspectReturnTarget.Scouting ? "Scouting Target" : "Transfer Target")
-                : player.IsStartingEleven ? "Starting XI" : "Bench";
+                : player.IsStartingEleven ? "Starting XI" : GetOrCreateAgentTeam(managedTeamName).Reserves.Contains(player) ? "Reserves" : "Bench";
 
             // Centered max-width:1600px content region within the full-stretch 1920-wide
             // container, matching the mockup's centered layout instead of edge-to-edge.
@@ -9192,6 +9205,12 @@ namespace Manager
                 opponentSquadListView.AddSectionHeader($"Bench ({opponentTeam.Bench.Count})");
 
                 foreach (PlayerAgent player in opponentTeam.Bench)
+                {
+                    opponentSquadListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), null);
+                }
+
+                opponentSquadListView.AddSectionHeader($"Reserves ({opponentTeam.Reserves.Count})");
+                foreach (PlayerAgent player in opponentTeam.Reserves)
                 {
                     opponentSquadListView.AddPlayerGridRow(player, player.PrimaryPosition.ToString(), GetDisplayRating(player.GetOverallRating()), GetRatingPercent(player), null);
                 }
@@ -10874,6 +10893,7 @@ namespace Manager
                 {
                     team.SubstitutePlayer(player, replacement);
                     team.Bench.Remove(player);
+                    team.Reserves.Remove(player);
                 }
                 else
                 {
@@ -10883,6 +10903,7 @@ namespace Manager
             else
             {
                 team.Bench.Remove(player);
+                team.Reserves.Remove(player);
             }
 
             team.Players.Remove(player);
@@ -11950,70 +11971,9 @@ namespace Manager
             return total / team.Players.Count;
         }
 
-        // Reserve pool depth (session 7, injuries phase) - a safety net beneath the real
-        // 20-man matchday squad (11 starters + 9 bench, the bench number deliberately
-        // matching the real Premier League matchday-squad rule - never inflated to make
-        // room for this). Only ever generated/consulted for managedTeamName - AI opponents
-        // never run out of a position since there's no injury tracking for them at all
-        // (see ManagerSquadRoles), so generating reserves for all 19 of them would be pure
-        // waste. Deliberately generated at a softened team strength (0.85x) - a reserve
-        // being a clear step down from the first team is the point, not a bug; there's
-        // still enough RollAttribute variance for an occasional promising one.
-        private readonly Dictionary<string, List<PlayerAgent>> reservePoolByTeamName = new();
-
-        // Expanded from 11 to 21 (session 16 - Thomas: "we need more players per team...
-        // an actual reserve. After an injury, my team's already looking a bit shallow")
-        // - roughly doubled coverage per position plus a DM slot that didn't exist
-        // before at all, so a second injury in the same area (or a position the old
-        // 1-per-slot list had no cover for) doesn't read as an immediate squad crisis.
-        private static readonly PlayerPosition[] ReservePoolPositions =
-        {
-            PlayerPosition.GK, PlayerPosition.GK,
-            PlayerPosition.CB, PlayerPosition.CB, PlayerPosition.CB,
-            PlayerPosition.RB, PlayerPosition.RB,
-            PlayerPosition.LB, PlayerPosition.LB,
-            PlayerPosition.DM, PlayerPosition.DM,
-            PlayerPosition.CM, PlayerPosition.CM,
-            PlayerPosition.AM, PlayerPosition.AM,
-            PlayerPosition.RW, PlayerPosition.RW,
-            PlayerPosition.LW, PlayerPosition.LW,
-            PlayerPosition.ST, PlayerPosition.ST
-        };
-
         private List<PlayerAgent> GetOrCreateReservePool(string teamName)
         {
-            if (reservePoolByTeamName.TryGetValue(teamName, out List<PlayerAgent> pool))
-            {
-                return pool;
-            }
-
-            pool = new List<PlayerAgent>();
-
-            // DefenceStrength is inverted in AgentSquadGenerator (defenceMultiplier =
-            // 1/defenceStrength - lower DefenceStrength means fewer goals conceded, i.e.
-            // a BETTER defence), so a genuine discount divides it rather than multiplying
-            // like AttackStrength does. Multiplying it (the old code) accidentally made
-            // reserve-pool defenders progressively BETTER the harder they were meant to
-            // be discounted - confirmed live (see HANDOFF): discounting to 0.5x pushed a
-            // CB's average Defending from 72.5 to 95.7, not down.
-            if (usesWorldGeneration && TryGetWorldTarget(teamName, out SquadQualityTarget target))
-            {
-                foreach (PlayerPosition position in ReservePoolPositions)
-                {
-                    pool.Add(squadGenerator.GenerateReservePlayer(position, target));
-                }
-            }
-            else
-            {
-                StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
-                foreach (PlayerPosition position in ReservePoolPositions)
-                {
-                    pool.Add(squadGenerator.GenerateReservePlayer(position, strength.AttackStrength * 0.85f, strength.DefenceStrength / 0.85f));
-                }
-            }
-
-            reservePoolByTeamName[teamName] = pool;
-            return pool;
+            return GetOrCreateAgentTeam(teamName).Reserves;
         }
 
         // Promotes the best-fitting available reserve straight onto the real matchday
@@ -12047,8 +12007,7 @@ namespace Manager
                 }
             }
 
-            pool.Remove(best);
-            GetOrCreateAgentTeam(teamName).AddBenchPlayer(best);
+            GetOrCreateAgentTeam(teamName).PromoteReserveToBench(best);
 
             return best;
         }

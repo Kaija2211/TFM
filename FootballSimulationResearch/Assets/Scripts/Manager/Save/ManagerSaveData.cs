@@ -170,6 +170,7 @@ namespace Manager.Save
         public Formation Formation;
         public List<PlayerAgentSaveData> StartingEleven = new();
         public List<PlayerAgentSaveData> Bench = new();
+        public List<PlayerAgentSaveData> Reserves = new();
 
         public static AgentTeamSaveData FromTeam(AgentTeam team)
         {
@@ -177,6 +178,7 @@ namespace Manager.Save
 
             foreach (PlayerAgent p in team.StartingEleven) data.StartingEleven.Add(PlayerAgentSaveData.FromPlayer(p));
             foreach (PlayerAgent p in team.Bench) data.Bench.Add(PlayerAgentSaveData.FromPlayer(p));
+            foreach (PlayerAgent p in team.Reserves) data.Reserves.Add(PlayerAgentSaveData.FromPlayer(p));
 
             return data;
         }
@@ -187,6 +189,7 @@ namespace Manager.Save
 
             foreach (PlayerAgentSaveData dto in StartingEleven) team.AddStarter(dto.ToPlayer());
             foreach (PlayerAgentSaveData dto in Bench) team.AddBenchPlayer(dto.ToPlayer());
+            foreach (PlayerAgentSaveData dto in Reserves) team.AddReservePlayer(dto.ToPlayer());
 
             return team;
         }
