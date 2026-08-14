@@ -23,6 +23,7 @@ Priority labels:
 
 ### P1 — UX and quality-of-life
 
+- [ ] **Thomas's wishlist: use a real position dropdown in Transfer Search.** The current implementation cycles through positions one click at a time, which is cumbersome when reaching later options such as ST. Replace it with a fast, scrollable dropdown supporting `Any position` and direct selection; preserve the active filter when moving between transfer views.
 - [ ] **Increase mouse-wheel scrolling speed on every list/dropdown without a draggable scrollbar.** Most obvious in role-assignment dropdowns. Centralize scroll sensitivity rather than fixing individual screens ad hoc.
 - [ ] **Auto-pick must consider Condition.** Candidate score should combine ability, position fit, availability, and Condition so a tired star is not blindly selected over fit cover.
 - [ ] **Collapse expanded Inbox emails when leaving the Inbox.** Reopening should start from a clean collapsed list.

@@ -4463,6 +4463,15 @@ namespace Manager
         private Button transferMarketBuyTabButton;
         private Button transferMarketSellTabButton;
         private bool transferMarketShowingBuyTab = true;
+        private readonly ManagerTransferSearch transferSearch = new();
+        private TMP_InputField transferPlayerSearchInput;
+        private TMP_InputField transferClubSearchInput;
+        private TMP_InputField transferNationSearchInput;
+        private TMP_InputField transferMinAgeInput;
+        private TMP_InputField transferMaxAgeInput;
+        private Button transferPositionFilterButton;
+        private Button transferClearFiltersButton;
+        private int transferPositionFilterIndex = -1;
 
         // Session 13 - looks up a player's current AI club purely by scanning
         // squadsByTeamName, rather than trusting transferMarketRowClubs (only ever
@@ -4524,7 +4533,7 @@ namespace Manager
                 return;
             }
 
-            const float headerHeight = 110f;
+            const float headerHeight = 180f;
 
             transferMarketPanel = new GameObject("TransferMarketPanel", typeof(RectTransform));
             transferMarketPanel.transform.SetParent(seasonHubPanel.transform.parent, false);
@@ -4565,6 +4574,24 @@ namespace Manager
             transferMarketSellTabButton = ManagerUITheme.BuildButton(header.transform, "SELL", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(transferMarketSellTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-406f, -27f), new Vector2(120f, 36f));
             transferMarketSellTabButton.onClick.AddListener(OnTransferMarketSellTabClicked);
+
+            const float filterTop = 122f;
+            const float filterHeight = 38f;
+            float filterX = 60f;
+            transferPlayerSearchInput = BuildTransferFilterInput(header.transform, ref filterX, filterTop, 220f, filterHeight, "Player name");
+            transferClubSearchInput = BuildTransferFilterInput(header.transform, ref filterX, filterTop, 220f, filterHeight, "Club");
+            transferNationSearchInput = BuildTransferFilterInput(header.transform, ref filterX, filterTop, 190f, filterHeight, "Nationality");
+            transferMinAgeInput = BuildTransferFilterInput(header.transform, ref filterX, filterTop, 120f, filterHeight, "Min age", numeric: true);
+            transferMaxAgeInput = BuildTransferFilterInput(header.transform, ref filterX, filterTop, 120f, filterHeight, "Max age", numeric: true);
+
+            transferPositionFilterButton = ManagerUITheme.BuildButton(header.transform, "ANY POSITION", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
+            ManagerUITheme.SetPointAnchor(transferPositionFilterButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(filterX, -filterTop), new Vector2(180f, filterHeight));
+            transferPositionFilterButton.onClick.AddListener(OnCycleTransferPositionFilter);
+            filterX += 192f;
+
+            transferClearFiltersButton = ManagerUITheme.BuildButton(header.transform, "CLEAR", ManagerUITheme.CardNeutral, ManagerUITheme.TextMuted, 12);
+            ManagerUITheme.SetPointAnchor(transferClearFiltersButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(filterX, -filterTop), new Vector2(110f, filterHeight));
+            transferClearFiltersButton.onClick.AddListener(OnClearTransferFilters);
 
             const float contentWidth = 1600f;
             const float sideMargin = (1920f - contentWidth) / 2f;
@@ -4649,6 +4676,59 @@ namespace Manager
             StartCoroutine(RecoverBlankLabelsNextFrame(transferMarketPanel.transform));
         }
 
+        private TMP_InputField BuildTransferFilterInput(Transform parent, ref float x, float top, float width, float height, string placeholder, bool numeric = false)
+        {
+            GameObject container = new GameObject($"{placeholder.Replace(" ", string.Empty)}Filter", typeof(RectTransform));
+            container.transform.SetParent(parent, false);
+            ManagerUITheme.SetPointAnchor(container.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(x, -top), new Vector2(width, height));
+            TMP_InputField input = ManagerUITheme.BuildInputField(container.transform, placeholder, 13, numeric ? 2 : 32);
+            RectTransform inputRect = input.GetComponent<RectTransform>();
+            inputRect.anchorMin = Vector2.zero;
+            inputRect.anchorMax = Vector2.one;
+            inputRect.offsetMin = Vector2.zero;
+            inputRect.offsetMax = Vector2.zero;
+            if (numeric) input.contentType = TMP_InputField.ContentType.IntegerNumber;
+            input.onValueChanged.AddListener(_ => OnTransferSearchChanged());
+            x += width + 12f;
+            return input;
+        }
+
+        private void OnTransferSearchChanged()
+        {
+            transferSearch.PlayerName = transferPlayerSearchInput?.text ?? string.Empty;
+            transferSearch.ClubName = transferClubSearchInput?.text ?? string.Empty;
+            transferSearch.Nationality = transferNationSearchInput?.text ?? string.Empty;
+            transferSearch.MinimumAge = int.TryParse(transferMinAgeInput?.text, out int minimumAge) ? minimumAge : null;
+            transferSearch.MaximumAge = int.TryParse(transferMaxAgeInput?.text, out int maximumAge) ? maximumAge : null;
+            if (transferMarketShowingBuyTab) RefreshTransferMarketUI();
+        }
+
+        private void OnCycleTransferPositionFilter()
+        {
+            Array values = Enum.GetValues(typeof(PlayerPosition));
+            transferPositionFilterIndex++;
+            if (transferPositionFilterIndex >= values.Length) transferPositionFilterIndex = -1;
+            transferSearch.Position = transferPositionFilterIndex < 0
+                ? null
+                : (PlayerPosition?)values.GetValue(transferPositionFilterIndex);
+            string label = transferSearch.Position.HasValue ? transferSearch.Position.Value.ToString() : "ANY POSITION";
+            ManagerUITheme.NormalizeButtonLabel(transferPositionFilterButton, label, ManagerUITheme.TextBody, 12);
+            RefreshTransferMarketUI();
+        }
+
+        private void OnClearTransferFilters()
+        {
+            transferSearch.Clear();
+            transferPositionFilterIndex = -1;
+            if (transferPlayerSearchInput != null) transferPlayerSearchInput.text = string.Empty;
+            if (transferClubSearchInput != null) transferClubSearchInput.text = string.Empty;
+            if (transferNationSearchInput != null) transferNationSearchInput.text = string.Empty;
+            if (transferMinAgeInput != null) transferMinAgeInput.text = string.Empty;
+            if (transferMaxAgeInput != null) transferMaxAgeInput.text = string.Empty;
+            ManagerUITheme.NormalizeButtonLabel(transferPositionFilterButton, "ANY POSITION", ManagerUITheme.TextBody, 12);
+            RefreshTransferMarketUI();
+        }
+
         private readonly Dictionary<PlayerAgent, string> transferMarketRowClubs = new();
 
         // Sortable columns (session 9 - Thomas: "click OVR to sort high to low"), same
@@ -4702,6 +4782,15 @@ namespace Manager
                 ManagerUITheme.NormalizeButtonLabel(transferMarketSellTabButton, "SELL", !transferMarketShowingBuyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
             }
 
+            bool showSearch = transferMarketShowingBuyTab;
+            if (transferPlayerSearchInput != null) transferPlayerSearchInput.transform.parent.gameObject.SetActive(showSearch);
+            if (transferClubSearchInput != null) transferClubSearchInput.transform.parent.gameObject.SetActive(showSearch);
+            if (transferNationSearchInput != null) transferNationSearchInput.transform.parent.gameObject.SetActive(showSearch);
+            if (transferMinAgeInput != null) transferMinAgeInput.transform.parent.gameObject.SetActive(showSearch);
+            if (transferMaxAgeInput != null) transferMaxAgeInput.transform.parent.gameObject.SetActive(showSearch);
+            if (transferPositionFilterButton != null) transferPositionFilterButton.gameObject.SetActive(showSearch);
+            if (transferClearFiltersButton != null) transferClearFiltersButton.gameObject.SetActive(showSearch);
+
             transferMarketListView.Clear();
             transferMarketRowClubs.Clear();
 
@@ -4727,6 +4816,13 @@ namespace Manager
         private void RefreshTransferMarketBuyList(float budget)
         {
             List<PlayerAgent> players = new List<PlayerAgent>();
+            transferMarketListView.AddCustomGridHeaderRow(TransferBuyColumnHeaders, TransferBuyColumnFractions, OnTransferBuyColumnHeaderClicked, transferBuySortColumn, transferBuySortDescending);
+
+            if (!transferSearch.HasCriteria)
+            {
+                transferMarketListView.AddSectionHeader("SEARCH THE MARKET — choose at least one filter to discover players in this world");
+                return;
+            }
 
             foreach (string teamName in availableTeamNames)
             {
@@ -4744,6 +4840,13 @@ namespace Manager
                 }
             }
 
+            // Generate every active club before evaluating nationality. Nationalities
+            // are assigned lazily and consume Unity's random stream; filtering while
+            // clubs were still being generated would let a UI search alter later clubs'
+            // generated players in the same career.
+            players.RemoveAll(player => !transferSearch.Matches(player,
+                transferMarketRowClubs.TryGetValue(player, out string club) ? club : string.Empty));
+
             // Scouted youth prospects deliberately do NOT appear here anymore (session
             // 13 Youth rework) - Thomas's explicit call: the Missions/Youth page is
             // genuinely for youth now, every discovery has to be brought into the
@@ -4755,7 +4858,13 @@ namespace Manager
                 players.Sort((a, b) => CompareTransferBuyColumn(a, b, transferBuySortColumn, transferBuySortDescending));
             }
 
-            transferMarketListView.AddCustomGridHeaderRow(TransferBuyColumnHeaders, TransferBuyColumnFractions, OnTransferBuyColumnHeaderClicked, transferBuySortColumn, transferBuySortDescending);
+            if (players.Count == 0)
+            {
+                transferMarketListView.AddSectionHeader("NO PLAYERS MATCH — broaden the search or clear a filter");
+                return;
+            }
+
+            transferMarketListView.AddSectionHeader($"SEARCH RESULTS ({players.Count})");
 
             foreach (PlayerAgent player in players)
             {
