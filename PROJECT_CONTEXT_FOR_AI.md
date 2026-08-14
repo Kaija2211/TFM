@@ -1,12 +1,20 @@
-# Master's Work — AI Handoff Context
+# TFM — AI Project Context
 
-This file is intended as a stable project-context document for AI assistants working on the repository. It summarises the MSc project, course context, research framing, implementation direction, evaluation plan, and current project boundaries without relying on source-code details.
+This file is intended as stable project context for AI assistants working on the repository. It records where TFM came from, the submitted MSc research artefact that established its simulation foundation, and the current direction as a football-management game.
 
-Last updated: 2026-08-12
+Last updated: 2026-08-14
 Student: Thomas Kaija Bernards — 100475
 Programme: MSc Professional Practice in Games Programming, SAE Institute London
 Working project title: **The Art of the Trade-off: Balancing Realism and Performance in Large-Scale Football Simulations**
 Possible prototype/game-facing title under discussion: **Beyond the Scoreline**, **Touchline**, **The Technical Area**, **Match Engine**, or **Season Lab**.
+
+## Current project status (post-submission)
+
+Thomas submitted TFM v0.1 and the dissertation on 2026-08-14. The MSc research phase is complete. The `unity6-ai-prototype` branch preserves that submitted prototype lineage; `main` is now the unrestricted game-development branch.
+
+The research material below is historical and architectural context, not an active development constraint. There are no protected or untouchable source files anymore. AI assistants may modify, consolidate, replace, or remove code across `Manager`, `ManagerSim`, `Sim`, `Data`, Research Mode, evaluation tooling, shared models, and project settings when doing so serves the current game.
+
+Current priority: make TFM an actual, maintainable, enjoyable football-management game. Prefer sound architecture, player-facing quality, testing, and long-term maintainability over preserving dissertation-era boundaries.
 
 ---
 
@@ -56,7 +64,7 @@ The programme guide emphasises:
 - managing work through online/VLE-supported study;
 - holistic assessment based on portfolio, milestones, project management, reflection, transferable skills, and discipline-specific production.
 
-For AI assistants: this is not only a software project. It is an MSc artefact plus written academic submission. Suggestions should support evidence, reflection, professional development, and academic defensibility, not just feature growth.
+Historical note: during the MSc phase this was both software and an assessed artefact. That submission is now complete; future suggestions should focus on making the game better rather than preserving assessment constraints.
 
 ---
 
@@ -117,7 +125,7 @@ This revision should be explained transparently in the dissertation as a practic
 
 The project initially considered/used football-data.org API access, but later moved toward local OpenFootball-style season text files for reproducibility and to avoid API access limitations. The PDS plan already identified dataset access restrictions and local caching as important risk-mitigation concerns, so this pivot is academically defensible.
 
-Important dataset principles:
+Historical dataset principles used for the submitted evaluation:
 
 - Do not mix training and evaluation data.
 - Preserve an unseen holdout season for evaluation.
@@ -127,7 +135,7 @@ Important dataset principles:
 
 ---
 
-## 6. Research Mode vs Manager Mode
+## 6. Research Mode vs Manager Mode (historical architecture)
 
 The project now has two conceptually separate modes:
 
@@ -144,7 +152,7 @@ Research Mode is used for:
 - exporting evaluation evidence;
 - supporting the dissertation's quantitative findings.
 
-Research Mode should remain clean, reproducible, and isolated from game-facing features.
+Research Mode was kept clean and reproducible for the submitted comparison. It may now be changed, repurposed, integrated, or retired if that benefits the game or its development tooling.
 
 ### Manager Mode
 
@@ -168,15 +176,15 @@ Current Manager Mode features include:
 - text-based match replay and full-time statistics;
 - UI design direction based on a dark navy/green football-management concept.
 
-Manager Mode is allowed to be more game-like and user-facing, but it must not contaminate Research Mode metrics or alter research evaluation behaviour.
+Manager Mode became the foundation of the actual game. The former requirement to isolate it from Research Mode no longer applies.
 
 ### The ManagerSim fork (added 2026-08-09)
 
-Manager Mode now has its own duplicate of the match simulator, free to edit: `Assets/Scripts/ManagerSim/AgentMatchSimulator.cs`. It started as a byte-for-byte copy of `Assets/Scripts/Sim/AgentMatchSimulator.cs` and is free to diverge from there - it exists specifically so Manager Mode can get real match-resolution changes (its first use: a genuine on/off-target shot distinction, for an honest Shots on Target stat) without ever touching the protected original.
+Manager Mode has its own duplicate of the match simulator at `Assets/Scripts/ManagerSim/AgentMatchSimulator.cs`. It started as a byte-for-byte copy of `Assets/Scripts/Sim/AgentMatchSimulator.cs` so the submitted research comparison could remain stable while game-facing match logic evolved.
 
-How it stays safe: the fork is declared `namespace Manager` (not a new namespace) with the exact same class/type names as the original. `ManagerPrototypeController.cs` is itself `namespace Manager` and already had `using Sim;`, so C#'s same-namespace type resolution makes the fork shadow `Sim.AgentMatchSimulator` there automatically - no call sites needed to change. `ResearchEvaluationRunner.cs` (`namespace Data`, no `using Manager;`) is completely unaffected and still resolves to the real, untouched `Sim.AgentMatchSimulator`. This was verified live, not just reasoned about - a temporary marker string proved the fork is genuinely what Manager Mode runs, then removed.
+The fork is declared in `namespace Manager` with the same class/type names as the original. `ManagerPrototypeController.cs` therefore resolves the Manager fork, while `ResearchEvaluationRunner.cs` resolves `Sim.AgentMatchSimulator`. This is useful architectural history, not a boundary that must be preserved.
 
-**If a future Manager Mode feature needs a real match-logic change** (not just pre/post-processing around the sim, which `ManagerFormationFit`/`ManagerMentalityModifier` already do without needing a fork): check whether the ManagerSim fork already covers it before assuming the protected original needs touching - it usually doesn't need to. The same fork-by-namespace-shadowing pattern could apply to some other currently-protected `Sim`/`Data` file later if a concrete need arises; it hasn't been needed yet beyond this one file.
+Future work may edit either simulator, merge them behind shared components/interfaces, replace them, or remove obsolete Research Mode duplication. Choose the architecture that best supports the game; no file is protected.
 
 ---
 
@@ -337,34 +345,55 @@ Suggested wording:
 
 ---
 
-## 12. Current guardrails for AI assistants
+## 12. Current development principles for AI assistants
 
-When working on this repo, follow these constraints:
+The dissertation-era restrictions are retired. When working on this repo:
 
-1. **Do not modify Research Mode unless explicitly asked.**
-2. **Keep Manager Mode separate from Research Mode.**
-3. **Do not change evaluation metrics silently.**
-4. **Do not change the training/evaluation split without explicit approval.**
-5. **Do not invent fake Statistical Model event narratives.**
-6. **Do not add features before preserving/committing working states.**
-7. **After changes, summarise files created/modified and how to test.**
-8. **Prefer small, testable tickets over broad refactors.**
-9. **If implementation would affect research numbers, stop and ask.**
-10. **Preserve academic honesty over making the prototype look more impressive.**
-11. **Multithreading/parallelism is out of scope.** Do not suggest or implement it (e.g. `Task.Run`, `Thread`, `Parallel.For`) as a performance fix for Research Mode or Manager Mode — this is a deliberate scope-control decision, and it keeps the recorded SM-vs-ABM execution time / sims-per-minute comparison on a consistent single-threaded basis.
-12. **"Don't touch the match simulator" means the original, not Manager Mode's fork.** `Assets/Scripts/Sim/AgentMatchSimulator.cs` must stay untouched (guardrail #1 above). `Assets/Scripts/ManagerSim/AgentMatchSimulator.cs` is a deliberate, free-to-edit Manager Mode-only duplicate (see section 6) - editing it is normal Manager Mode work, not a Research Mode violation. Always verify with `git diff` on the `Sim/` original specifically (not just "no errors") before considering a match-logic change to be Research-Mode-safe.
-13. **Any change to `ManagerSim/AgentMatchSimulator.cs`'s scoring/shot/save probability logic must be checked against real goals/match, both-teams-scored%, and scoreless-draw% before being considered done - not just "no compile errors."** The goals-per-match/MAE figures in section 7 took real calibration effort to get realistic, and it's easy to silently break that balance elsewhere (e.g. session 6: adding a genuine on/off-target split for the Shots on Target stat accidentally stacked a second probability filter in front of the existing goal roll, quietly cutting Manager Mode's goals/match from a realistic ~2.8 to ~1.2 and pushing scoreless draws to ~30% - not caught until Thomas noticed goals felt too rare in actual play). The fastest real check: instantiate `Manager.AgentMatchSimulator` and `Sim.AgentMatchSimulator` directly in a throwaway script (via `Unity_RunCommand` or similar), simulate ~200 matches between the same freshly-generated teams through both, and compare average goals/match and BTTS% side by side - they should track closely (protected original's own generated-team output is the ground truth to match against, not just "feels plausible").
-14. **At the end of a working session, append a dated entry to `DEVLOG.md` (repo root)** summarising what was done, problems encountered and how they were fixed, and any academic-honesty/architecture notes worth keeping for the dissertation write-up. `DEVLOG.md` is a single running journal - new entries go at the **top** - not a per-session file (no `devlog1.md`, `devlog2.md`, etc.); this keeps it a single citable, chronologically readable artefact rather than a set of files a future session has to go hunting for. This is separate from `HANDOFF.md`, which is overwritten each session to hand off *current* state and is not a history.
+1. **No source file or subsystem is untouchable.** Modify shared `Sim`, `Data`, Manager Mode, Research Mode, evaluation code, project settings, or assets when the task calls for it.
+2. **Architecture may cross the old mode boundary.** Reuse, merge, refactor, or replace dissertation-era forks and duplicated systems when that improves maintainability.
+3. **Research metrics are no longer approval gates.** They remain useful historical benchmarks, not immutable product requirements.
+4. **Parallelism is allowed.** Threads, tasks, jobs, Burst, ECS, async workflows, or other performance approaches may be considered when technically appropriate and safely implemented.
+5. **Preserve working states before risky changes.** Respect the current branch/worktree, existing user changes, and version-control safety.
+6. **After changes, summarise what changed and how it was verified.**
+7. **Prefer focused, testable work, but broad refactors are allowed** when the architecture genuinely benefits and verification is proportionate.
+8. **Protect “the holy balance” through testing, not file restrictions.** Changes to scoring, shots, saves, player growth, transfers, tactics, condition, injuries, finances, league outcomes, team strength, or fixture simulation should be validated against relevant distributions and player-facing expectations. See the protocol below.
+9. **Treat historical research code honestly.** Do not rewrite or relabel old evidence as if it came from the submitted experiment, but feel free to improve or replace the runtime systems used by the game.
+10. **Maintain useful project history.** Continue using `DEVLOG.md` and `HANDOFF.md` when they add value, but they are development tools now rather than submission requirements.
 
-Useful rule:
+Current rule:
 
-> Game-facing features may improve Manager Mode, but they must not alter the controlled Research Mode comparison unless Thomas explicitly approves and re-runs evidence.
+> The submitted MSc artefact is preserved in Git history and on `unity6-ai-prototype`; development on `main` is free to evolve TFM into the strongest game it can become.
+
+### The holy balance
+
+Thomas refers to the established statistical plausibility of TFM’s football world as **“the holy balance.”** Major changes are allowed to alter simulation code, but they must not casually or silently wreck scorelines, goals per match, goal differences, points totals, or league-table shape.
+
+Treat a change as holy-balance-sensitive if it can directly or indirectly affect:
+
+- scoring, shooting, saving, chance creation, defending, or match-event probabilities;
+- player attributes, Overall, Potential, aging, development, fatigue, condition, injuries, or position fit;
+- tactics, formations, substitutions, mentality, squad selection, or team-strength calculations;
+- transfers, retirement replacement, squad generation, finances, or AI squad depth;
+- fixture processing, season rollover, league-table updates, or simulation randomness.
+
+For a significant balance-sensitive change, verification should normally include:
+
+1. Simulate multiple complete 20-team seasons—preferably at least five, with all 380 fixtures applied per season.
+2. Record league-wide goals per match, both-teams-to-score rate, scoreless-draw rate, and the scoreline distribution where practical.
+3. Record champion and bottom-club points, overall points range, goals-for/goals-against range, and goal-difference range.
+4. Inspect representative strong, middle, and weak clubs for plausible results and long-term team-strength drift.
+5. Check for pathological outcomes: runaway 100+ point seasons becoming routine, implausibly compressed tables, extreme GD inflation, widespread scoreless matches, excessive goal totals, or clubs structurally collapsing because of missing players.
+6. Compare against the previous known-good build or a baseline run using enough repeated simulation to distinguish a real regression from random variance.
+
+Historical Manager Mode checks have produced roughly **2.8–2.9 total goals per match** across full seasons, with plausible 20-team points and GD spreads. This is a reference neighbourhood, not an immutable target: intentional design changes may move it, but substantial movement should be understood, documented, and accepted rather than discovered accidentally in a later playthrough.
+
+Do not consider a balance-sensitive change verified merely because it compiles or one match looked reasonable. Temporary test hooks or editor scripts are acceptable for bulk simulation, but remove them after verification unless they are deliberately promoted into maintained regression tooling.
 
 ---
 
-## 13. Evidence to preserve
+## 13. Submitted evidence archive
 
-For dissertation/evidence folders, preserve:
+The following artefacts remain useful historical records of the completed MSc submission. Do not falsify or misrepresent them, but they no longer constrain runtime development:
 
 - final Statistical Model repeated summary text file;
 - final ABM repeated summary text file;
@@ -393,7 +422,7 @@ The latest Manager Mode concept has evolved substantially beyond the original co
 - dark navy/green UI concept influenced by the uploaded `gameui.pdf` design;
 - substitutions under active development in a newer Claude chat.
 
-This should be described as a **prototype extension** or **game-facing demonstration**, not as the controlled evaluation tool.
+This was described in the submission as a **prototype extension** or **game-facing demonstration**. Post-submission, it is the starting point for the actual game.
 
 ---
 
@@ -401,7 +430,7 @@ This should be described as a **prototype extension** or **game-facing demonstra
 
 Use this prompt when starting a new Claude/AI coding chat:
 
-> You are helping with Thomas Bernards' MSc Games Programming Major Project: a Unity/C# football simulation comparing a Statistical Model and Agent-Based Model for realism/scalability trade-offs. Read `PROJECT_CONTEXT_FOR_AI.md` first. Preserve the separation between Research Mode and Manager Mode. Do not modify Research Mode or evaluation metrics unless explicitly asked. Work in small, testable changes. After every task, summarise files created/modified, how to test, and whether Research Mode is affected. Current focus: [insert exact task].
+> You are helping develop TFM, a Unity/C# football-management game that grew out of Thomas Bernards' completed MSc simulation project. Read `PROJECT_CONTEXT_FOR_AI.md` first. The submitted research prototype is preserved on `unity6-ai-prototype`; development on `main` has no protected files or dissertation-era architecture restrictions. Improve any subsystem needed for the game, preserve unrelated user work, test proportionately, and summarise files changed and verification performed. Current focus: [insert exact task].
 
 ---
 
