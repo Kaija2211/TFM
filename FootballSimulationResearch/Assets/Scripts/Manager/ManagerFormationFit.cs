@@ -56,6 +56,8 @@ namespace Manager
                 Age = original.Age,
                 Height = original.Height,
                 WeakFoot = original.WeakFoot,
+                AttributeSchemaVersion = PlayerAttributeModel.CurrentSchemaVersion,
+                Archetype = original.Archetype,
 
                 Finishing = original.Finishing * fit,
                 Passing = original.Passing * fit,
@@ -82,7 +84,27 @@ namespace Manager
                 Aerial = original.Aerial * fit,
 
                 Goalkeeping = original.Goalkeeping * fit,
-                Reflexes = original.Reflexes * fit
+                Reflexes = original.Reflexes * fit,
+
+                FirstTouch = original.FirstTouch * fit,
+                Technique = original.Technique * fit,
+                Corners = original.Corners * fit,
+                Penalties = original.Penalties * fit,
+                Anticipation = original.Anticipation * fit,
+                Decisions = original.Decisions * fit,
+                Vision = original.Vision * fit,
+                DefensivePositioning = original.DefensivePositioning * fit,
+                WorkRate = original.WorkRate * fit,
+                Aggression = original.Aggression * fit,
+                Acceleration = original.Acceleration * fit,
+                Agility = original.Agility * fit,
+                Balance = original.Balance * fit,
+                JumpingReach = original.JumpingReach * fit,
+                Handling = original.Handling * fit,
+                OneOnOnes = original.OneOnOnes * fit,
+                AerialCommand = original.AerialCommand * fit,
+                Distribution = original.Distribution * fit,
+                GoalkeeperPositioning = original.GoalkeeperPositioning * fit
             };
 
             return clone;

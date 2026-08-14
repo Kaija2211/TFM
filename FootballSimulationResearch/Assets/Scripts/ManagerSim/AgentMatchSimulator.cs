@@ -158,9 +158,9 @@ namespace Manager
             float rawHomeAttackChance = expectedHomeGoals / totalExpectedGoals;
 
             float homeAttackChance = Mathf.Clamp(
-                Mathf.Lerp(0.52f, rawHomeAttackChance, 0.45f),
-                0.35f,
-                0.65f
+                rawHomeAttackChance,
+                0.25f,
+                0.75f
             );
 
 
@@ -196,8 +196,8 @@ namespace Manager
 
                 adjustedHomeAttackChance = Mathf.Clamp(
                     adjustedHomeAttackChance,
-                    0.30f,
-                    0.70f
+                    0.25f,
+                    0.75f
                 );
 
                 bool homeAttacks = Random.value < adjustedHomeAttackChance;
@@ -281,9 +281,9 @@ namespace Manager
             float rawHomeAttackChance = expectedHomeGoals / totalExpectedGoals;
 
             float homeAttackChance = Mathf.Clamp(
-                Mathf.Lerp(0.52f, rawHomeAttackChance, 0.45f),
-                0.35f,
-                0.65f
+                rawHomeAttackChance,
+                0.25f,
+                0.75f
             );
 
             for (int minute = Mathf.Max(1, startMinute); minute <= 90; minute++)
@@ -317,8 +317,8 @@ namespace Manager
 
                 adjustedHomeAttackChance = Mathf.Clamp(
                     adjustedHomeAttackChance,
-                    0.30f,
-                    0.70f
+                    0.25f,
+                    0.75f
                 );
 
                 bool homeAttacks = Random.value < adjustedHomeAttackChance;
@@ -488,7 +488,7 @@ namespace Manager
                 // Richer v2 attributes create more pronounced specialists than the flat
                 // legacy profiles. Recalibrated intercept keeps the same player-v-player
                 // differential while restoring league scoring to its historical band.
-                0.111f + (goalQuality - saveQuality) / 220f,
+                0.480f + (goalQuality - saveQuality) / 220f,
                 0.08f,
                 0.63f
             );
@@ -504,7 +504,7 @@ namespace Manager
             // P(goal | shot) = onTargetChance * (unconditionalGoalChance / onTargetChance)
             // = unconditionalGoalChance - while the 0.85 ceiling still leaves room for a
             // save even on a near-certain on-target effort.
-            float goalChance = Mathf.Clamp(unconditionalGoalChance / onTargetChance, 0.08f, 0.85f);
+            float goalChance = Mathf.Clamp(unconditionalGoalChance / onTargetChance, 0.08f, 0.95f);
 
             if (Random.value < goalChance)
             {

@@ -10,6 +10,17 @@ namespace Manager
     // resolver would double-count the same player attributes again.
     public static class ManagerPlayerDerivedStrength
     {
+        public sealed class MatchupPrediction
+        {
+            public float ExpectedHomeGoals;
+            public float ExpectedAwayGoals;
+        }
+
+        private const float HomeGoalBase = 1.32f;
+        private const float AwayGoalBase = 1.08f;
+        private const float NeutralAttackDefenceOffset = 5.5f;
+        private const float MatchupScale = 16f;
+
         public sealed class Profile
         {
             public float Control;
@@ -82,6 +93,33 @@ namespace Manager
                 Goalkeeping = DivideOrZero(goalkeeping, goalkeepingWeight),
                 Depth = CalculateDepth(team.Bench)
             };
+        }
+
+        public static MatchupPrediction PredictMatchup(Profile home, Profile away)
+        {
+            if (home == null) throw new ArgumentNullException(nameof(home));
+            if (away == null) throw new ArgumentNullException(nameof(away));
+
+            float homeEdge = GetAttackIndex(home) - GetResistanceIndex(away) + NeutralAttackDefenceOffset;
+            float awayEdge = GetAttackIndex(away) - GetResistanceIndex(home) + NeutralAttackDefenceOffset;
+
+            return new MatchupPrediction
+            {
+                ExpectedHomeGoals = HomeGoalBase * ExpClamped(homeEdge / MatchupScale),
+                ExpectedAwayGoals = AwayGoalBase * ExpClamped(awayEdge / MatchupScale)
+            };
+        }
+
+        private static float GetAttackIndex(Profile profile) =>
+            profile.Control * 0.20f + profile.ChanceCreation * 0.35f + profile.GoalThreat * 0.45f;
+
+        private static float GetResistanceIndex(Profile profile) =>
+            profile.DefensiveResistance * 0.72f + profile.Goalkeeping * 0.28f;
+
+        private static float ExpClamped(float exponent)
+        {
+            exponent = exponent < -0.65f ? -0.65f : exponent > 0.65f ? 0.65f : exponent;
+            return (float)Math.Exp(exponent);
         }
 
         private static float GetControlScore(PlayerAgent player) => WeightedAverage(

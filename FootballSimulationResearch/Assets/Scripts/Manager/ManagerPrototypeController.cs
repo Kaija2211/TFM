@@ -7606,9 +7606,32 @@ namespace Manager
             AgentTeam homeTeamAgent = GetOrCreateAgentTeam(currentFixture.HomeTeam);
             AgentTeam awayTeamAgent = GetOrCreateAgentTeam(currentFixture.AwayTeam);
 
+            Func<PlayerAgent, float> homeConditionLookup = currentFixture.HomeTeam == managedTeamName
+                ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p)) : null;
+            Func<PlayerAgent, float> awayConditionLookup = currentFixture.AwayTeam == managedTeamName
+                ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p)) : null;
+            AgentTeam adjustedHome = ManagerFormationFit.BuildFitAdjustedTeam(homeTeamAgent,
+                squadGenerator.GetStartingPositions(homeTeamAgent.Formation), homeConditionLookup);
+            AgentTeam adjustedAway = ManagerFormationFit.BuildFitAdjustedTeam(awayTeamAgent,
+                squadGenerator.GetStartingPositions(awayTeamAgent.Formation), awayConditionLookup);
+            ManagerPlayerDerivedStrength.MatchupPrediction livePrediction = ManagerPlayerDerivedStrength.PredictMatchup(
+                ManagerPlayerDerivedStrength.Calculate(adjustedHome, squadGenerator.GetStartingPositions(adjustedHome.Formation)),
+                ManagerPlayerDerivedStrength.Calculate(adjustedAway, squadGenerator.GetStartingPositions(adjustedAway.Formation)));
+
+            lastRawExpectedHomeGoals = livePrediction.ExpectedHomeGoals;
+            lastRawExpectedAwayGoals = livePrediction.ExpectedAwayGoals;
+            float liveExpectedHomeGoals = livePrediction.ExpectedHomeGoals;
+            float liveExpectedAwayGoals = livePrediction.ExpectedAwayGoals;
+            if (currentFixture.HomeTeam == managedTeamName)
+                ManagerMentalityModifier.Apply(selectedMentality, ref liveExpectedHomeGoals, ref liveExpectedAwayGoals);
+            else if (currentFixture.AwayTeam == managedTeamName)
+                ManagerMentalityModifier.Apply(selectedMentality, ref liveExpectedAwayGoals, ref liveExpectedHomeGoals);
+            lastExpectedHomeGoals = liveExpectedHomeGoals;
+            lastExpectedAwayGoals = liveExpectedAwayGoals;
+
             AgentMatchSimulator.AgentMatchResult tail = matchSimulator.SimulateFromMinute(
-                homeTeamAgent,
-                awayTeamAgent,
+                adjustedHome,
+                adjustedAway,
                 lastExpectedHomeGoals,
                 lastExpectedAwayGoals,
                 currentMatchMinute + 1,
@@ -10710,7 +10733,12 @@ namespace Manager
                 ApplyMatchdayAcademyProgression();
             }
 
-            StatisticalModel.ExpectedGoalsPrediction prediction = statisticalModel.PredictExpectedGoals(fixture);
+            ManagerPlayerDerivedStrength.Profile homeProfile = ManagerPlayerDerivedStrength.Calculate(
+                fitAdjustedHomeTeam, squadGenerator.GetStartingPositions(fitAdjustedHomeTeam.Formation));
+            ManagerPlayerDerivedStrength.Profile awayProfile = ManagerPlayerDerivedStrength.Calculate(
+                fitAdjustedAwayTeam, squadGenerator.GetStartingPositions(fitAdjustedAwayTeam.Formation));
+            ManagerPlayerDerivedStrength.MatchupPrediction prediction =
+                ManagerPlayerDerivedStrength.PredictMatchup(homeProfile, awayProfile);
 
             // Kept before the mentality modifier touches anything - see
             // ApplyLiveMentalityChangeIfMatchInProgress, which needs this exact

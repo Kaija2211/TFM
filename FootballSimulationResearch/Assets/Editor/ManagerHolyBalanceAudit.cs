@@ -14,12 +14,12 @@ using UnityEngine;
 // here is produced by real PlayerAgent attributes and AgentMatchSimulator events.
 public static class ManagerHolyBalanceAudit
 {
-    private const int Worlds = 10;
-    private const int SeasonsPerWorld = 20;
+    // Keep 200 audited seasons, but spread them across more independently generated
+    // squads so one unusually favourable world is not counted twenty times in title
+    // concentration and table-shape metrics.
+    private const int Worlds = 20;
+    private const int SeasonsPerWorld = 10;
     private const int Seed = 221104;
-    private const float HomeGoalBase = 1.45f;
-    private const float AwayGoalBase = 1.20f;
-    private const float RatingToLogStrength = 0.24f;
 
     private sealed class TableRow
     {
@@ -44,8 +44,6 @@ public static class ManagerHolyBalanceAudit
             .ToList();
         if (clubs.Count != 20) throw new InvalidDataException($"Expected 20 latest English top-flight profiles, found {clubs.Count}.");
 
-        float leagueMean = clubs.Average(profile => (float)profile.FirstTeamOverall);
-        float maxPositiveDelta = clubs.Max(profile => (float)profile.FirstTeamOverall - leagueMean);
         List<float> goalsPerGame = new();
         List<float> championPoints = new();
         List<float> bottomPoints = new();
@@ -84,18 +82,15 @@ public static class ManagerHolyBalanceAudit
                     foreach (ClubWorldGenerationProfileRecord away in clubs)
                     {
                         if (home.ClubId == away.ClubId) continue;
-                        float homeDelta = ShapeQualityDelta((float)home.FirstTeamOverall - leagueMean, maxPositiveDelta);
-                        float awayDelta = ShapeQualityDelta((float)away.FirstTeamOverall - leagueMean, maxPositiveDelta);
-                        float homeAttack = Mathf.Exp(homeDelta * RatingToLogStrength);
-                        float homeDefence = Mathf.Exp(-homeDelta * RatingToLogStrength);
-                        float awayAttack = Mathf.Exp(awayDelta * RatingToLogStrength);
-                        float awayDefence = Mathf.Exp(-awayDelta * RatingToLogStrength);
                         AgentTeam homeAdjusted = ManagerFormationFit.BuildFitAdjustedTeam(teams[home.ClubName], generator.GetStartingPositions(teams[home.ClubName].Formation));
                         AgentTeam awayAdjusted = ManagerFormationFit.BuildFitAdjustedTeam(teams[away.ClubName], generator.GetStartingPositions(teams[away.ClubName].Formation));
+                        ManagerPlayerDerivedStrength.MatchupPrediction prediction = ManagerPlayerDerivedStrength.PredictMatchup(
+                            ManagerPlayerDerivedStrength.Calculate(homeAdjusted, generator.GetStartingPositions(homeAdjusted.Formation)),
+                            ManagerPlayerDerivedStrength.Calculate(awayAdjusted, generator.GetStartingPositions(awayAdjusted.Formation)));
                         Manager.AgentMatchSimulator.AgentMatchResult result = simulator.SimulateMatch(
                             homeAdjusted, awayAdjusted,
-                            HomeGoalBase * homeAttack * awayDefence,
-                            AwayGoalBase * awayAttack * homeDefence);
+                            prediction.ExpectedHomeGoals,
+                            prediction.ExpectedAwayGoals);
 
                         TableRow homeRow = table[home.ClubName];
                         TableRow awayRow = table[away.ClubName];
@@ -221,10 +216,4 @@ public static class ManagerHolyBalanceAudit
         return Mathf.Lerp(ordered[lower], ordered[upper], position - lower);
     }
 
-    private static float ShapeQualityDelta(float delta, float maxPositiveDelta)
-    {
-        return delta > 0f && maxPositiveDelta > 0f
-            ? Mathf.Sqrt(delta / maxPositiveDelta) * maxPositiveDelta
-            : delta;
-    }
 }
