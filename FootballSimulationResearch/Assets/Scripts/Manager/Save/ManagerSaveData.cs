@@ -296,9 +296,17 @@ namespace Manager.Save
     }
 
     [Serializable]
+    public class ManagerTacticsSaveData
+    {
+        public WidthSetting Width = WidthSetting.Balanced;
+        public DefensiveDepthSetting DefensiveDepth = DefensiveDepthSetting.Balanced;
+        public TempoSetting Tempo = TempoSetting.Balanced;
+    }
+
+    [Serializable]
     public class ManagerSaveData
     {
-        public int SaveVersion = 3;
+        public int SaveVersion = 4;
         // False for every pre-world-generation save because missing JSON boolean
         // fields deserialize to false. New careers opt in explicitly, preserving the
         // legacy squad/strength bootstrap for existing saves.
@@ -331,6 +339,10 @@ namespace Manager.Save
         public AgentTeamSaveData ManagedSquad;
         public List<PlayerAgentSaveData> ManagedReservePool = new();
         public ManagerSquadRolesSaveData ManagedRoles;
+        // HasManagedTactics distinguishes legacy saves (where JsonUtility supplies an
+        // empty/default DTO) from an intentional Narrow/Deep/Slow setup.
+        public bool HasManagedTactics;
+        public ManagerTacticsSaveData ManagedTactics;
         public float ManagedBudget;
         public float ManagedTotalTransferSpend;
         public float ManagedTotalTransferIncome;

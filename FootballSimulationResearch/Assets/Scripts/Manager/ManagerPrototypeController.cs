@@ -1804,6 +1804,9 @@ namespace Manager
             injuredPlayersTracked.Clear();
             nextMatchOnlyOverrideActive = false;
             nextMatchOverrideDefaultStartingEleven = null;
+            tacticalSliders.Width = WidthSetting.Balanced;
+            tacticalSliders.DefensiveDepth = DefensiveDepthSetting.Balanced;
+            tacticalSliders.Tempo = TempoSetting.Balanced;
 
             squadsByTeamName.Clear();
             squadRolesByTeamName.Clear();
@@ -2945,6 +2948,13 @@ namespace Manager
                 ManagedBudget = budget,
                 ManagedTotalTransferSpend = finance.GetTotalTransferSpend(managedTeamName),
                 ManagedTotalTransferIncome = finance.GetTotalTransferIncome(managedTeamName),
+                HasManagedTactics = true,
+                ManagedTactics = new ManagerTacticsSaveData
+                {
+                    Width = tacticalSliders.Width,
+                    DefensiveDepth = tacticalSliders.DefensiveDepth,
+                    Tempo = tacticalSliders.Tempo
+                },
                 ManagedRoles = new ManagerSquadRolesSaveData
                 {
                     CaptainId = roles.Captain?.PlayerId,
@@ -3093,6 +3103,19 @@ namespace Manager
             injuredPlayersTracked.Clear();
             nextMatchOnlyOverrideActive = false;
             nextMatchOverrideDefaultStartingEleven = null;
+
+            if (data.HasManagedTactics && data.ManagedTactics != null)
+            {
+                tacticalSliders.Width = data.ManagedTactics.Width;
+                tacticalSliders.DefensiveDepth = data.ManagedTactics.DefensiveDepth;
+                tacticalSliders.Tempo = data.ManagedTactics.Tempo;
+            }
+            else
+            {
+                tacticalSliders.Width = WidthSetting.Balanced;
+                tacticalSliders.DefensiveDepth = DefensiveDepthSetting.Balanced;
+                tacticalSliders.Tempo = TempoSetting.Balanced;
+            }
 
             foreach (LeagueTableEntrySaveData entry in data.TableEntries)
             {
