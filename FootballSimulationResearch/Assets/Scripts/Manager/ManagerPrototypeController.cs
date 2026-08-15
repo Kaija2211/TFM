@@ -299,6 +299,8 @@ namespace Manager
         private readonly HashSet<int> simulatedMatchdays = new();
 
         private OpenFootballMatch currentFixture;
+        private OpenFootballMatch activeMatchFixture;
+        private bool hasActiveMatchFixture;
         private bool skipToResultsRequested;
 
         private bool matchdayPrepChromeBuilt;
@@ -7778,12 +7780,13 @@ namespace Manager
                 return;
             }
 
-            AgentTeam homeTeamAgent = GetOrCreateAgentTeam(currentFixture.HomeTeam);
-            AgentTeam awayTeamAgent = GetOrCreateAgentTeam(currentFixture.AwayTeam);
+            OpenFootballMatch fixture = hasActiveMatchFixture ? activeMatchFixture : currentFixture;
+            AgentTeam homeTeamAgent = GetOrCreateAgentTeam(fixture.HomeTeam);
+            AgentTeam awayTeamAgent = GetOrCreateAgentTeam(fixture.AwayTeam);
 
-            Func<PlayerAgent, float> homeConditionLookup = currentFixture.HomeTeam == managedTeamName
+            Func<PlayerAgent, float> homeConditionLookup = fixture.HomeTeam == managedTeamName
                 ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p)) : null;
-            Func<PlayerAgent, float> awayConditionLookup = currentFixture.AwayTeam == managedTeamName
+            Func<PlayerAgent, float> awayConditionLookup = fixture.AwayTeam == managedTeamName
                 ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p)) : null;
             AgentTeam adjustedHome = ManagerFormationFit.BuildFitAdjustedTeam(homeTeamAgent,
                 squadGenerator.GetStartingPositions(homeTeamAgent.Formation), homeConditionLookup);
@@ -7797,9 +7800,9 @@ namespace Manager
             lastRawExpectedAwayGoals = livePrediction.ExpectedAwayGoals;
             float liveExpectedHomeGoals = livePrediction.ExpectedHomeGoals;
             float liveExpectedAwayGoals = livePrediction.ExpectedAwayGoals;
-            if (currentFixture.HomeTeam == managedTeamName)
+            if (fixture.HomeTeam == managedTeamName)
                 ManagerMentalityModifier.Apply(selectedMentality, ref liveExpectedHomeGoals, ref liveExpectedAwayGoals);
-            else if (currentFixture.AwayTeam == managedTeamName)
+            else if (fixture.AwayTeam == managedTeamName)
                 ManagerMentalityModifier.Apply(selectedMentality, ref liveExpectedAwayGoals, ref liveExpectedHomeGoals);
             lastExpectedHomeGoals = liveExpectedHomeGoals;
             lastExpectedAwayGoals = liveExpectedAwayGoals;
@@ -10374,7 +10377,7 @@ namespace Manager
             // Real two-team comparison (green/red split at the home team's actual share),
             // not just a single-color fill - managed-team-relative like the rest of this
             // session's coloring work, not simply home=green/away=red.
-            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
             Color homeColor = managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger;
             Color awayColor = managedIsHome ? ManagerUITheme.Danger : ManagerUITheme.Accent;
             ManagerUITheme.BuildSplitBar(barRect, homeSharePct, homeColor, awayColor, 6f);
@@ -10465,7 +10468,7 @@ namespace Manager
             // simply home=green/away=red.
             int total = homeValue + awayValue;
             float homeSharePct = total > 0 ? homeValue / (float)total : 0.5f;
-            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
             Color homeColor = managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger;
             Color awayColor = managedIsHome ? ManagerUITheme.Danger : ManagerUITheme.Accent;
             ManagerUITheme.BuildSplitBar(barsRect, homeSharePct, homeColor, awayColor, 6f);
@@ -10575,7 +10578,9 @@ namespace Manager
             // kick off on the stale value and only take effect from the match after.
             selectedMentality = ManagerMentality.Balanced;
 
-            AgentMatchSimulator.AgentMatchResult result = SimulateFixture(currentFixture);
+            activeMatchFixture = currentFixture;
+            hasActiveMatchFixture = true;
+            AgentMatchSimulator.AgentMatchResult result = SimulateFixture(activeMatchFixture);
 
             lastSimulatedResult = result;
 
@@ -10593,8 +10598,8 @@ namespace Manager
             matchPaused = false;
             Time.timeScale = 1f;
 
-            if (matchHomeNameLabel != null) { matchHomeNameLabel.text = currentFixture.HomeTeam.ToUpperInvariant(); matchHomeNameLabel.fontSize = 24; }
-            if (matchAwayNameLabel != null) { matchAwayNameLabel.text = currentFixture.AwayTeam.ToUpperInvariant(); matchAwayNameLabel.fontSize = 24; }
+            if (matchHomeNameLabel != null) { matchHomeNameLabel.text = activeMatchFixture.HomeTeam.ToUpperInvariant(); matchHomeNameLabel.fontSize = 24; }
+            if (matchAwayNameLabel != null) { matchAwayNameLabel.text = activeMatchFixture.AwayTeam.ToUpperInvariant(); matchAwayNameLabel.fontSize = 24; }
             // scoreText.fontSize isn't reset by ResetMatchStatsPanelToLiveLayout below (that
             // only touches the stats panel's position/size) - without resetting it here too,
             // matchday 2+ would inherit the full-time-sized 56pt score from the previous
@@ -11650,6 +11655,8 @@ namespace Manager
                 }
             }
 
+            EnsureMatchResultMatchesEvents(result);
+
             // Match is resolved - any further mentality clicks should only affect the
             // *next* match again, not trigger a resimulation against a finished match.
             isMatchCurrentlyLive = false;
@@ -11854,7 +11861,7 @@ namespace Manager
             // home/away - same `currentFixture.HomeTeam == managedTeamName` check used
             // elsewhere (e.g. OnConfirmTeamClicked, matchStatsBarsContainer's possession
             // math) so it stays correct on the (roughly half the time) away fixtures too.
-            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
             string homeTeamName = matchHomeNameLabel != null ? matchHomeNameLabel.text : "";
             string awayTeamName = matchAwayNameLabel != null ? matchAwayNameLabel.text : "";
             string homeHex = ColorUtility.ToHtmlStringRGB(managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger);
@@ -11898,7 +11905,7 @@ namespace Manager
             // same above(home)/below(away) split as the marker itself.
             const float markerOffset = 26f;
             const float labelOffset = 54f;
-            bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
+            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
 
             foreach (AgentMatchSimulator.AgentMatchEvent evt in result.Events)
             {
@@ -11944,7 +11951,7 @@ namespace Manager
         public void OnFullTimeContinueClicked()
         {
             RestorePreMatchTeamSheet();
-            ApplyFixtureResult(currentFixture, lastSimulatedResult);
+            ApplyFixtureResult(hasActiveMatchFixture ? activeMatchFixture : currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
             ResolveMatchdayInboxTicks();
@@ -11961,6 +11968,7 @@ namespace Manager
             if (matchEventsPanel != null) matchEventsPanel.SetActive(false);
 
             ShowSeasonHub();
+            hasActiveMatchFixture = false;
         }
 
         private void CapturePreMatchTeamSheet()
@@ -12003,8 +12011,9 @@ namespace Manager
                 matchEventsChromeBuilt = true;
             }
 
-            if (matchEventsHomeNameLabel != null) matchEventsHomeNameLabel.text = currentFixture.HomeTeam.ToUpperInvariant();
-            if (matchEventsAwayNameLabel != null) matchEventsAwayNameLabel.text = currentFixture.AwayTeam.ToUpperInvariant();
+            OpenFootballMatch displayedFixture = hasActiveMatchFixture ? activeMatchFixture : currentFixture;
+            if (matchEventsHomeNameLabel != null) matchEventsHomeNameLabel.text = displayedFixture.HomeTeam.ToUpperInvariant();
+            if (matchEventsAwayNameLabel != null) matchEventsAwayNameLabel.text = displayedFixture.AwayTeam.ToUpperInvariant();
             if (matchEventsScoreText != null && lastSimulatedResult != null)
             {
                 matchEventsScoreText.text = $"{lastSimulatedResult.HomeGoals} - {lastSimulatedResult.AwayGoals}";
@@ -12274,6 +12283,17 @@ namespace Manager
                 worldGenerationService = null;
                 Debug.LogError($"World generation data failed to load; using legacy bootstrap. {exception.Message}");
             }
+        }
+
+        private static void EnsureMatchResultMatchesEvents(AgentMatchSimulator.AgentMatchResult result)
+        {
+            int homeGoalsFromEvents = result.Events.Count(evt => evt.IsGoal && evt.HomeTeamScored);
+            int awayGoalsFromEvents = result.Events.Count(evt => evt.IsGoal && !evt.HomeTeamScored);
+            if (result.HomeGoals == homeGoalsFromEvents && result.AwayGoals == awayGoalsFromEvents) return;
+
+            Debug.LogWarning($"Match score/event mismatch corrected: {result.HomeGoals}-{result.AwayGoals} became {homeGoalsFromEvents}-{awayGoalsFromEvents}.");
+            result.HomeGoals = homeGoalsFromEvents;
+            result.AwayGoals = awayGoalsFromEvents;
         }
 
         private bool TryGetWorldTarget(string teamName, out SquadQualityTarget target)
