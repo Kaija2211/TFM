@@ -87,6 +87,9 @@ public static class ManagerHolyBalanceAudit
                         ManagerPlayerDerivedStrength.MatchupPrediction prediction = ManagerPlayerDerivedStrength.PredictMatchup(
                             ManagerPlayerDerivedStrength.Calculate(homeAdjusted, generator.GetStartingPositions(homeAdjusted.Formation)),
                             ManagerPlayerDerivedStrength.Calculate(awayAdjusted, generator.GetStartingPositions(awayAdjusted.Formation)));
+                        simulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
+                            homeAdjusted.TeamName, homeAdjusted.Formation, null,
+                            awayAdjusted.TeamName, awayAdjusted.Formation, null);
                         Manager.AgentMatchSimulator.AgentMatchResult result = simulator.SimulateMatch(
                             homeAdjusted, awayAdjusted,
                             prediction.ExpectedHomeGoals,

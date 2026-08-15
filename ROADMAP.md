@@ -40,13 +40,13 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 
 ## 4. Formation and tactical-shape overhaul
 
-- Model pitch zones, width, compactness and line height.
-- Model wing and central overloads, transition space and defensive coverage.
-- Make formation-versus-formation interactions emerge from occupied zones.
+- [x] Model initial pitch-zone occupancy, width and line-height transforms.
+- [x] Model bounded wing/central overload routes, transition space and defensive coverage.
+- [x] Make formation-versus-formation route interactions emerge from occupied zones.
 - Make player roles and tactical sliders interact with relevant attributes.
 - Explain tactical advantages and vulnerabilities clearly to the manager.
 - Add opponent-aware AI tactical adaptation.
-- Require tactical-sensitivity and holy-balance audits before acceptance.
+- [x] Require tactical-sensitivity and holy-balance audits for the first interaction slice.
 
 ## 5. Intelligent AI clubs
 
@@ -116,7 +116,7 @@ Leading pillars:
 
 ## Immediate continuation order
 
-1. Build the tactical-zone and formation-interaction model.
+1. Extend tactical shape into player roles, readable feedback and opponent-aware AI adaptation.
 2. Add AI squad evaluation, rotation and recruitment.
 3. Add contracts, player interest and richer transfer negotiations.
 4. Hold the TFM identity and manager-skill-system design session.

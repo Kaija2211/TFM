@@ -7947,6 +7947,10 @@ namespace Manager
             lastExpectedHomeGoals = liveExpectedHomeGoals;
             lastExpectedAwayGoals = liveExpectedAwayGoals;
 
+            matchSimulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
+                homeTeamAgent.TeamName, homeTeamAgent.Formation, homeTeamAgent.TeamName == managedTeamName ? tacticalSliders : null,
+                awayTeamAgent.TeamName, awayTeamAgent.Formation, awayTeamAgent.TeamName == managedTeamName ? tacticalSliders : null);
+
             AgentMatchSimulator.AgentMatchResult tail = matchSimulator.SimulateFromMinute(
                 adjustedHome,
                 adjustedAway,
@@ -11344,6 +11348,9 @@ namespace Manager
 
             matchSimulator.ManagedTeamName = managedTeamName;
             matchSimulator.ManagedTeamTacticalSliders = tacticalSliders;
+            matchSimulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
+                homeTeam.TeamName, homeTeam.Formation, homeTeam.TeamName == managedTeamName ? tacticalSliders : null,
+                awayTeam.TeamName, awayTeam.Formation, awayTeam.TeamName == managedTeamName ? tacticalSliders : null);
 
             // Fresh match, fresh substitution clock - see AgentMatchSimulator.
             // ClearSubstitutions' own comment. SimulateFixture runs exactly once per

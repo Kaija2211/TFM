@@ -36,6 +36,8 @@ Priority labels:
 
 - [ ] **Make formation-versus-formation shape matter.** Current formation influence is primarily player-to-slot fit; it does not model tactical interactions such as overloading the wings against a 3-4-3.
 
+First slice complete: formation pins now produce bounded lane occupancy and route modifiers for crosses, through balls, dribbles, long shots, set pieces and counters. Tactical-sensitivity tests pass, and the 76,000-match holy-balance audit remained stable at 2.697 goals per game. Player-role interaction, manager-facing explanations and opponent-aware AI adaptation remain outstanding.
+
 Planning must cover at least:
 
 - width and central compactness;

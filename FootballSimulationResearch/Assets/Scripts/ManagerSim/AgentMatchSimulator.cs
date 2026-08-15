@@ -675,9 +675,24 @@ namespace Manager
         // never gets slider settings at all.
         public ManagerTacticalSliders ManagedTeamTacticalSliders;
         public string ManagedTeamName;
+        public ManagerTacticalShape.Matchup TacticalShapeMatchup;
 
         private Dictionary<ChanceType, float> BuildChanceTypeBias(string attackingTeamName, string defendingTeamName)
         {
+            ManagerTacticalShape.RouteEffect shapeEffect = TacticalShapeMatchup?.GetAttackEffect(attackingTeamName);
+            if (shapeEffect != null)
+            {
+                return new Dictionary<ChanceType, float>
+                {
+                    [ChanceType.ThroughBall] = shapeEffect.ThroughBall,
+                    [ChanceType.Cross] = shapeEffect.Cross,
+                    [ChanceType.Dribble] = shapeEffect.Dribble,
+                    [ChanceType.LongShot] = shapeEffect.LongShot,
+                    [ChanceType.SetPiece] = shapeEffect.SetPiece,
+                    [ChanceType.CounterAttack] = shapeEffect.CounterAttack
+                };
+            }
+
             if (ManagedTeamTacticalSliders == null || ManagedTeamName == null)
             {
                 return null;
