@@ -142,6 +142,10 @@ namespace Manager
         private Button viewMatchEventsButton;
         private List<AgentMatchSimulator.AgentMatchEvent> lastMatchEvents;
         private List<GameObject> matchFullTimeOnlyElements;
+        private GameObject halfTimePanel;
+        private TextMeshProUGUI halfTimeScoreLabel;
+        private TextMeshProUGUI halfTimeStatsLabel;
+        private bool waitingAtHalfTime;
 
         private bool matchEventsChromeBuilt;
         private GameObject matchEventsPanel;
@@ -418,13 +422,17 @@ namespace Manager
         // gets a focus-stats picker instead of the generic "NOT ON YOUR SQUAD" notice.
         private bool inspectIsAcademyProspect;
 
-        // --- Substitutions: pre-match subs happen on the Tactics Board (drag a bench
-        // card onto a pin - see OnBenchPlayerDroppedOnPin). Mid-match subs now reuse the
-        // exact same drag-drop path via "Make Changes" (see
-        // OnOpenTacticsBoardDuringMatchClicked) - uncapped, matching pre-match behaviour,
-        // no separate off-then-on picker flow or per-match sub limit anymore. ---
+        private const int MaxSubsPerMatch = 5;
         private bool tacticsBoardOpenedMidMatch;
         private readonly List<(string offName, string offPosition, string onName, string onPosition, int minute)> matchSubsLog = new();
+        private Formation midMatchDraftFormation;
+        private List<PlayerAgent> midMatchDraftStartingEleven;
+        private List<PlayerAgent> midMatchDraftBench;
+        private List<PlayerAgent> midMatchDraftReserves;
+        private Formation preMatchFormation;
+        private List<PlayerAgent> preMatchStartingEleven;
+        private List<PlayerAgent> preMatchBench;
+        private List<PlayerAgent> preMatchReserves;
 
 
         // Real football doesn't let a substituted-off player return - tracks who's
@@ -6219,6 +6227,11 @@ namespace Manager
 
         public void OnTacticsBoardBackClicked()
         {
+            if (tacticsBoardOpenedMidMatch && !TryCommitMidMatchTacticsDraft())
+            {
+                return;
+            }
+
             if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
             CloseTacticsBoardFormationDropdown();
             CleanupStrayDragGhosts();
@@ -7177,7 +7190,9 @@ namespace Manager
             }
 
             List<PlayerPosition> newSlots = squadGenerator.GetStartingPositions(formation);
-            List<PlayerAgent> pool = new List<PlayerAgent>(team.Players);
+            List<PlayerAgent> pool = tacticsBoardOpenedMidMatch
+                ? team.StartingEleven.Concat(team.Bench).ToList()
+                : new List<PlayerAgent>(team.Players);
             List<PlayerAgent> newStartingEleven = new List<PlayerAgent>();
 
             foreach (PlayerPosition slot in newSlots)
@@ -7524,30 +7539,6 @@ namespace Manager
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
             bool applied = team.SubstitutePlayer(pinPlayer, benchPlayer);
 
-            // Only log/show as a "Subs Made" entry - and only resimulate the rest of the
-            // match - when this swap happens via the mid-match "Make Changes" flow;
-            // pre-match team-sheet edits on this same board (reached via the Hub's Squad
-            // button) aren't match events and have no match in progress to resimulate.
-            if (applied && tacticsBoardOpenedMidMatch)
-            {
-                matchSubsLog.Add((pinPlayer.Name, pinPlayer.PrimaryPosition.ToString(), benchPlayer.Name, benchPlayer.PrimaryPosition.ToString(), currentMatchMinute));
-                RefreshMatchSubsMadeList();
-                playersSubbedOffThisMatch.Add(pinPlayer);
-
-                // Fresh legs, fresh fatigue clock - see AgentMatchSimulator.
-                // GetFatigueMultiplier's own comment on why this was missing before.
-                matchSimulator.RegisterSubstitution(benchPlayer, currentMatchMinute);
-                TriggerMidMatchResimulation();
-
-                // Live ratings (session 10) - the incoming sub starts at the same
-                // baseline everyone kicks off at (EnsureTracked no-ops if somehow already
-                // tracked). The grid itself still only shows the current 11, so
-                // RefreshMatchRatingsGrid picks up the swap immediately rather than
-                // waiting for this player's first rated event.
-                matchRatings.EnsureTracked(benchPlayer.Name);
-                RefreshMatchRatingsGrid();
-            }
-
             RefreshTacticsBoardUI();
         }
 
@@ -7726,11 +7717,6 @@ namespace Manager
 
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
             bool applied = team.SwapStartingPositions(draggedPlayer, targetPlayer);
-
-            if (applied && tacticsBoardOpenedMidMatch)
-            {
-                TriggerMidMatchResimulation();
-            }
 
             RefreshTacticsBoardUI();
         }
@@ -10196,9 +10182,120 @@ namespace Manager
             if (matchdayPanel != null) matchdayPanel.SetActive(false);
             if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(true);
 
-            tacticsBoardOpenedMidMatch = true;
+            BeginMidMatchTacticsDraft();
 
             RefreshTacticsBoardUI();
+        }
+
+        private void ShowHalfTimePanel(int homeShots, int awayShots, int homeShotsOnTarget, int awayShotsOnTarget, int homeAttackEvents, int awayAttackEvents)
+        {
+            if (halfTimePanel == null)
+            {
+                halfTimePanel = new GameObject("HalfTimePanel", typeof(RectTransform), typeof(Image));
+                halfTimePanel.transform.SetParent(matchdayPanel.transform, false);
+                RectTransform panelRect = halfTimePanel.GetComponent<RectTransform>();
+                panelRect.anchorMin = Vector2.zero;
+                panelRect.anchorMax = Vector2.one;
+                panelRect.offsetMin = Vector2.zero;
+                panelRect.offsetMax = Vector2.zero;
+                halfTimePanel.GetComponent<Image>().color = ManagerUITheme.Background;
+
+                GameObject title = new GameObject("Title", typeof(RectTransform));
+                title.transform.SetParent(halfTimePanel.transform, false);
+                ManagerUITheme.SetPointAnchor(title.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -90f), new Vector2(500f, 44f));
+                ManagerUITheme.BuildLabel(title.transform, "HALF TIME", 26, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+
+                GameObject score = new GameObject("Score", typeof(RectTransform));
+                score.transform.SetParent(halfTimePanel.transform, false);
+                ManagerUITheme.SetPointAnchor(score.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -155f), new Vector2(500f, 70f));
+                halfTimeScoreLabel = ManagerUITheme.BuildLabel(score.transform, "0 - 0", 52, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+
+                GameObject stats = new GameObject("Stats", typeof(RectTransform));
+                stats.transform.SetParent(halfTimePanel.transform, false);
+                ManagerUITheme.SetPointAnchor(stats.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0f, 20f), new Vector2(680f, 260f));
+                halfTimeStatsLabel = ManagerUITheme.BuildLabel(stats.transform, string.Empty, 18, ManagerUITheme.TextBody, TextAlignmentOptions.Center);
+
+                Button changes = ManagerUITheme.BuildButton(halfTimePanel.transform, "MAKE CHANGES", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 14);
+                ManagerUITheme.SetPointAnchor(changes.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(-120f, 80f), new Vector2(210f, 48f));
+                changes.onClick.AddListener(OnOpenTacticsBoardDuringMatchClicked);
+
+                Button resume = ManagerUITheme.BuildButton(halfTimePanel.transform, "START SECOND HALF", ManagerUITheme.Accent, Color.white, 14);
+                ManagerUITheme.SetPointAnchor(resume.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(120f, 80f), new Vector2(210f, 48f));
+                resume.onClick.AddListener(OnResumeFromHalfTimeClicked);
+            }
+
+            int totalAttacks = Mathf.Max(1, homeAttackEvents + awayAttackEvents);
+            int homePossession = Mathf.RoundToInt(homeAttackEvents * 100f / totalAttacks);
+            halfTimeScoreLabel.text = $"{liveHomeGoalsSoFar} - {liveAwayGoalsSoFar}";
+            halfTimeStatsLabel.text =
+                $"POSSESSION      {homePossession}%     {100 - homePossession}%\n\n" +
+                $"CHANCES CREATED      {homeAttackEvents}     {awayAttackEvents}\n\n" +
+                $"SHOTS      {homeShots}     {awayShots}\n\n" +
+                $"SHOTS ON TARGET      {homeShotsOnTarget}     {awayShotsOnTarget}";
+            halfTimePanel.SetActive(true);
+            halfTimePanel.transform.SetAsLastSibling();
+            waitingAtHalfTime = true;
+            matchPaused = true;
+            Time.timeScale = 0f;
+        }
+
+        private void OnResumeFromHalfTimeClicked()
+        {
+            waitingAtHalfTime = false;
+            matchPaused = false;
+            Time.timeScale = 1f;
+            if (halfTimePanel != null) halfTimePanel.SetActive(false);
+            if (pauseButton != null) ManagerUITheme.NormalizeButtonLabel(pauseButton, "PAUSE", ManagerUITheme.TextBody, 12);
+        }
+
+        private void BeginMidMatchTacticsDraft()
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            midMatchDraftFormation = team.Formation;
+            midMatchDraftStartingEleven = new List<PlayerAgent>(team.StartingEleven);
+            midMatchDraftBench = new List<PlayerAgent>(team.Bench);
+            midMatchDraftReserves = new List<PlayerAgent>(team.Reserves);
+            tacticsBoardOpenedMidMatch = true;
+        }
+
+        private bool TryCommitMidMatchTacticsDraft()
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            if (midMatchDraftStartingEleven == null) return true;
+
+            List<PlayerAgent> incoming = team.StartingEleven.Where(player => !midMatchDraftStartingEleven.Contains(player)).ToList();
+            List<PlayerAgent> outgoing = midMatchDraftStartingEleven.Where(player => !team.StartingEleven.Contains(player)).ToList();
+            int remainingSubs = MaxSubsPerMatch - matchSubsLog.Count;
+            if (incoming.Count > remainingSubs || incoming.Count != outgoing.Count)
+            {
+                ShowTacticsBoardWarning($"You can make {Mathf.Max(0, remainingSubs)} more substitution{(remainingSubs == 1 ? "" : "s")}");
+                return false;
+            }
+
+            bool changed = team.Formation != midMatchDraftFormation
+                || !team.StartingEleven.SequenceEqual(midMatchDraftStartingEleven);
+
+            for (int i = 0; i < incoming.Count; i++)
+            {
+                PlayerAgent playerOn = incoming[i];
+                PlayerAgent playerOff = outgoing[i];
+                matchSubsLog.Add((playerOff.Name, playerOff.PrimaryPosition.ToString(), playerOn.Name, playerOn.PrimaryPosition.ToString(), currentMatchMinute));
+                playersSubbedOffThisMatch.Add(playerOff);
+                matchSimulator.RegisterSubstitution(playerOn, currentMatchMinute);
+                matchRatings.EnsureTracked(playerOn.Name);
+            }
+
+            if (changed)
+            {
+                TriggerMidMatchResimulation();
+                RefreshMatchSubsMadeList();
+                RefreshMatchRatingsGrid();
+            }
+
+            midMatchDraftStartingEleven = null;
+            midMatchDraftBench = null;
+            midMatchDraftReserves = null;
+            return true;
         }
 
         // Single proportional bar showing the home team's share of total shots (no
@@ -11390,6 +11487,9 @@ namespace Manager
         {
             skipToResultsRequested = false;
             tacticsBoardOpenedMidMatch = false;
+            waitingAtHalfTime = false;
+            if (halfTimePanel != null) halfTimePanel.SetActive(false);
+            CapturePreMatchTeamSheet();
             currentMatchMinute = 0;
             liveHomeGoalsSoFar = 0;
             liveAwayGoalsSoFar = 0;
@@ -11538,6 +11638,15 @@ namespace Manager
                     );
 
                     RefreshMatchRatingsGrid();
+                }
+
+                if (minute == 45 && !skipToResultsRequested)
+                {
+                    ShowHalfTimePanel(homeShots, awayShots, homeShotsOnTarget, awayShotsOnTarget, homeAttackEvents, awayAttackEvents);
+                    while (waitingAtHalfTime)
+                    {
+                        yield return null;
+                    }
                 }
             }
 
@@ -11834,6 +11943,7 @@ namespace Manager
 
         public void OnFullTimeContinueClicked()
         {
+            RestorePreMatchTeamSheet();
             ApplyFixtureResult(currentFixture, lastSimulatedResult);
 
             currentFixtureIndex++;
@@ -11851,6 +11961,34 @@ namespace Manager
             if (matchEventsPanel != null) matchEventsPanel.SetActive(false);
 
             ShowSeasonHub();
+        }
+
+        private void CapturePreMatchTeamSheet()
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            preMatchFormation = team.Formation;
+            preMatchStartingEleven = new List<PlayerAgent>(team.StartingEleven);
+            preMatchBench = new List<PlayerAgent>(team.Bench);
+            preMatchReserves = new List<PlayerAgent>(team.Reserves);
+        }
+
+        private void RestorePreMatchTeamSheet()
+        {
+            if (preMatchStartingEleven == null) return;
+
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            team.Formation = preMatchFormation;
+            team.StartingEleven = new List<PlayerAgent>(preMatchStartingEleven);
+            team.Bench = new List<PlayerAgent>(preMatchBench);
+            team.Reserves = new List<PlayerAgent>(preMatchReserves);
+            foreach (PlayerAgent player in team.Players)
+            {
+                player.IsStartingEleven = team.StartingEleven.Contains(player);
+            }
+
+            preMatchStartingEleven = null;
+            preMatchBench = null;
+            preMatchReserves = null;
         }
 
         // --- Full-Time Summary -> Match Events (new screen, no Editor-placed panel to
