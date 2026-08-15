@@ -7665,7 +7665,8 @@ namespace Manager
                     // multiplying it by 1000 and adding Overall (0-99) keeps fit tier
                     // strictly dominant while letting Overall break ties within a tier.
                     float fit = candidate.GetPositionFit(slot);
-                    float score = fit * 1000f + candidate.GetOverallRating();
+                    float conditionAdjustedOverall = candidate.GetOverallRating() * roles.GetConditionMultiplier(candidate);
+                    float score = fit * 1000f + conditionAdjustedOverall;
                     if (score > bestScore)
                     {
                         bestScore = score;
@@ -8370,6 +8371,7 @@ namespace Manager
 
         public void OnInspectBackClicked()
         {
+            CloseMatchdaySquadSwapDialog();
             if (playerInspectPanel != null) playerInspectPanel.SetActive(false);
 
             switch (playerInspectReturnTarget)
@@ -8398,6 +8400,75 @@ namespace Manager
         }
 
         private readonly List<GameObject> spawnedInspectElements = new();
+        private GameObject matchdaySquadSwapDialog;
+
+        private void ShowMatchdaySquadSwapDialog(PlayerAgent selectedPlayer)
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            bool selectedIsBench = team.Bench.Contains(selectedPlayer);
+            List<PlayerAgent> options = selectedIsBench
+                ? new List<PlayerAgent>(team.Reserves)
+                : new List<PlayerAgent>(team.Bench);
+            if (options.Count == 0) return;
+
+            if (matchdaySquadSwapDialog != null) Destroy(matchdaySquadSwapDialog);
+
+            Transform root = titlePanel.transform.parent;
+            matchdaySquadSwapDialog = new GameObject("MatchdaySquadSwapDialog", typeof(RectTransform), typeof(Image));
+            matchdaySquadSwapDialog.transform.SetParent(root, false);
+            RectTransform backdropRect = matchdaySquadSwapDialog.GetComponent<RectTransform>();
+            backdropRect.anchorMin = Vector2.zero;
+            backdropRect.anchorMax = Vector2.one;
+            backdropRect.offsetMin = Vector2.zero;
+            backdropRect.offsetMax = Vector2.zero;
+            matchdaySquadSwapDialog.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.78f);
+
+            GameObject card = new GameObject("Card", typeof(RectTransform), typeof(Image));
+            card.transform.SetParent(matchdaySquadSwapDialog.transform, false);
+            ManagerUITheme.SetPointAnchor(card.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(620f, 660f));
+            card.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            GameObject title = new GameObject("Title", typeof(RectTransform));
+            title.transform.SetParent(card.transform, false);
+            ManagerUITheme.SetPointAnchor(title.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -30f), new Vector2(560f, 34f));
+            ManagerUITheme.BuildLabel(title.transform,
+                selectedIsBench ? $"REPLACE {selectedPlayer.Name.ToUpperInvariant()}" : $"SELECT {selectedPlayer.Name.ToUpperInvariant()} AS SUBSTITUTE",
+                20, ManagerUITheme.TextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            float top = 82f;
+            foreach (PlayerAgent option in options)
+            {
+                PlayerAgent captured = option;
+                string label = $"{option.Name}  ·  {option.PrimaryPosition}  ·  OVR {GetDisplayRating(option.GetOverallRating())}  ·  {roles.GetCondition(option):F0}%";
+                Button optionButton = ManagerUITheme.BuildButton(card.transform, label, ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+                ManagerUITheme.SetPointAnchor(optionButton.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -top), new Vector2(540f, 42f));
+                optionButton.onClick.AddListener(() => OnMatchdaySquadSwapSelected(selectedPlayer, captured));
+                top += 48f;
+            }
+
+            Button cancel = ManagerUITheme.BuildButton(card.transform, "CANCEL", ManagerUITheme.CardNeutral, ManagerUITheme.TextMuted, 13);
+            ManagerUITheme.SetPointAnchor(cancel.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(0f, 24f), new Vector2(180f, 42f));
+            cancel.onClick.AddListener(CloseMatchdaySquadSwapDialog);
+        }
+
+        private void OnMatchdaySquadSwapSelected(PlayerAgent selectedPlayer, PlayerAgent option)
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            PlayerAgent benchPlayer = team.Bench.Contains(selectedPlayer) ? selectedPlayer : option;
+            PlayerAgent reservePlayer = team.Reserves.Contains(selectedPlayer) ? selectedPlayer : option;
+            if (team.SwapBenchAndReserve(benchPlayer, reservePlayer))
+            {
+                CloseMatchdaySquadSwapDialog();
+                RefreshPlayerInspectUI();
+            }
+        }
+
+        private void CloseMatchdaySquadSwapDialog()
+        {
+            if (matchdaySquadSwapDialog != null) Destroy(matchdaySquadSwapDialog);
+            matchdaySquadSwapDialog = null;
+        }
 
         // Rebuilt in full each time (unlike Title/Team Select, which build once) since the
         // content changes per player. Only uses PlayerAgent fields that actually exist -
@@ -8679,6 +8750,15 @@ namespace Manager
                 Button loanButton = ManagerUITheme.BuildButton(rolesBand.transform, "LOAN OUT", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
                 ManagerUITheme.SetPointAnchor(loanButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-16f, 0f), new Vector2(130f, 40f));
                 loanButton.onClick.AddListener(() => OnLoanOutClicked(player));
+
+                AgentTeam ownTeam = GetOrCreateAgentTeam(managedTeamName);
+                if (!ownTeam.StartingEleven.Contains(player))
+                {
+                    string selectionLabel = ownTeam.Bench.Contains(player) ? "CHANGE SUBSTITUTE" : "SELECT AS SUBSTITUTE";
+                    Button selectionButton = ManagerUITheme.BuildButton(rolesBand.transform, selectionLabel, ManagerUITheme.CardNeutral, ManagerUITheme.Accent, 12);
+                    ManagerUITheme.SetPointAnchor(selectionButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-235f, 0f), new Vector2(190f, 40f));
+                    selectionButton.onClick.AddListener(() => ShowMatchdaySquadSwapDialog(player));
+                }
             }
             else if (inspectIsAcademyProspect)
             {

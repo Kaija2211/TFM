@@ -64,6 +64,19 @@ namespace Sim
             return true;
         }
 
+        public bool SwapBenchAndReserve(PlayerAgent benchPlayer, PlayerAgent reservePlayer)
+        {
+            int benchIndex = Bench.IndexOf(benchPlayer);
+            int reserveIndex = Reserves.IndexOf(reservePlayer);
+            if (benchIndex < 0 || reserveIndex < 0) return false;
+
+            Bench[benchIndex] = reservePlayer;
+            Reserves[reserveIndex] = benchPlayer;
+            benchPlayer.IsStartingEleven = false;
+            reservePlayer.IsStartingEleven = false;
+            return true;
+        }
+
         public bool RemovePlayer(PlayerAgent player)
         {
             bool removed = StartingEleven.Remove(player);
