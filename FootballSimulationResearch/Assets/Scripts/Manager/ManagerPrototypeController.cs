@@ -7948,8 +7948,8 @@ namespace Manager
             lastExpectedAwayGoals = liveExpectedAwayGoals;
 
             matchSimulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
-                homeTeamAgent.TeamName, homeTeamAgent.Formation, homeTeamAgent.TeamName == managedTeamName ? tacticalSliders : null,
-                awayTeamAgent.TeamName, awayTeamAgent.Formation, awayTeamAgent.TeamName == managedTeamName ? tacticalSliders : null,
+                homeTeamAgent.TeamName, homeTeamAgent.Formation, ResolveFixtureTactics(homeTeamAgent, awayTeamAgent, true),
+                awayTeamAgent.TeamName, awayTeamAgent.Formation, ResolveFixtureTactics(awayTeamAgent, homeTeamAgent, false),
                 homeTeamAgent, homeTeamAgent.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null,
                 awayTeamAgent, awayTeamAgent.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null);
 
@@ -9617,10 +9617,12 @@ namespace Manager
             string opponentName = managedIsHome ? currentFixture.AwayTeam : currentFixture.HomeTeam;
             AgentTeam opponentTeam = GetOrCreateAgentTeam(opponentName);
             AgentTeam managedTeam = GetOrCreateAgentTeam(managedTeamName);
+            ManagerTacticalSliders opponentTactics = ManagerAiTacticalPlanner.Choose(
+                opponentName, opponentTeam.Formation, managedTeamName, managedTeam.Formation, !managedIsHome);
             ManagerTacticalShape.Matchup tacticalRead = managedIsHome
                 ? ManagerTacticalShape.BuildMatchup(managedTeamName, managedTeam.Formation, tacticalSliders,
-                    opponentName, opponentTeam.Formation, null, managedTeam, GetOrCreateSquadRoles(managedTeamName), opponentTeam, null)
-                : ManagerTacticalShape.BuildMatchup(opponentName, opponentTeam.Formation, null,
+                    opponentName, opponentTeam.Formation, opponentTactics, managedTeam, GetOrCreateSquadRoles(managedTeamName), opponentTeam, null)
+                : ManagerTacticalShape.BuildMatchup(opponentName, opponentTeam.Formation, opponentTactics,
                     managedTeamName, managedTeam.Formation, tacticalSliders, opponentTeam, null, managedTeam, GetOrCreateSquadRoles(managedTeamName));
 
             if (matchdayPrepTitleLabel != null)
@@ -11357,8 +11359,8 @@ namespace Manager
             matchSimulator.ManagedTeamName = managedTeamName;
             matchSimulator.ManagedTeamTacticalSliders = tacticalSliders;
             matchSimulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
-                homeTeam.TeamName, homeTeam.Formation, homeTeam.TeamName == managedTeamName ? tacticalSliders : null,
-                awayTeam.TeamName, awayTeam.Formation, awayTeam.TeamName == managedTeamName ? tacticalSliders : null,
+                homeTeam.TeamName, homeTeam.Formation, ResolveFixtureTactics(homeTeam, awayTeam, true),
+                awayTeam.TeamName, awayTeam.Formation, ResolveFixtureTactics(awayTeam, homeTeam, false),
                 homeTeam, homeTeam.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null,
                 awayTeam, awayTeam.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null);
 
@@ -11369,6 +11371,13 @@ namespace Manager
             matchSimulator.ClearSubstitutions();
 
             return matchSimulator.SimulateMatch(fitAdjustedHomeTeam, fitAdjustedAwayTeam, expectedHomeGoals, expectedAwayGoals);
+        }
+
+        private ManagerTacticalSliders ResolveFixtureTactics(AgentTeam team, AgentTeam opponent, bool isHome)
+        {
+            return team.TeamName == managedTeamName
+                ? tacticalSliders
+                : ManagerAiTacticalPlanner.Choose(team.TeamName, team.Formation, opponent.TeamName, opponent.Formation, isHome);
         }
 
         private void EnsureNoInjuredStarters(AgentTeam team, string teamName)

@@ -88,8 +88,10 @@ public static class ManagerHolyBalanceAudit
                             ManagerPlayerDerivedStrength.Calculate(homeAdjusted, generator.GetStartingPositions(homeAdjusted.Formation)),
                             ManagerPlayerDerivedStrength.Calculate(awayAdjusted, generator.GetStartingPositions(awayAdjusted.Formation)));
                         simulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
-                            homeAdjusted.TeamName, homeAdjusted.Formation, null,
-                            awayAdjusted.TeamName, awayAdjusted.Formation, null);
+                            homeAdjusted.TeamName, homeAdjusted.Formation,
+                            ManagerAiTacticalPlanner.Choose(homeAdjusted.TeamName, homeAdjusted.Formation, awayAdjusted.TeamName, awayAdjusted.Formation, true),
+                            awayAdjusted.TeamName, awayAdjusted.Formation,
+                            ManagerAiTacticalPlanner.Choose(awayAdjusted.TeamName, awayAdjusted.Formation, homeAdjusted.TeamName, homeAdjusted.Formation, false));
                         Manager.AgentMatchSimulator.AgentMatchResult result = simulator.SimulateMatch(
                             homeAdjusted, awayAdjusted,
                             prediction.ExpectedHomeGoals,

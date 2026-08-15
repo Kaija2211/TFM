@@ -15,6 +15,7 @@ public static class ManagerTacticalShapeAudit
         AuditWideOverload();
         AuditPlayerInstructions();
         AuditReadableInsight();
+        AuditAiPlanner();
         Debug.Log("Tactical shape sensitivity audit passed.");
     }
 
@@ -99,6 +100,14 @@ public static class ManagerTacticalShapeAudit
         for (int index = 0; index < TacticsBoardLayout.GetPins(formation).Count; index++)
             team.AddStarter(new PlayerAgent($"Player {index}", PlayerRole.Midfielder, PlayerPosition.CM));
         return team;
+    }
+
+    private static void AuditAiPlanner()
+    {
+        ManagerTacticalSliders first = ManagerAiTacticalPlanner.Choose("A", Formation.FourThreeThree, "B", Formation.ThreeFourThree, true);
+        ManagerTacticalSliders second = ManagerAiTacticalPlanner.Choose("A", Formation.FourThreeThree, "B", Formation.ThreeFourThree, true);
+        Require(first.Width == second.Width && first.DefensiveDepth == second.DefensiveDepth && first.Tempo == second.Tempo,
+            "AI tactical plan was not deterministic for the same matchup");
     }
 
     private static bool Approximately(float a, float b) => Mathf.Abs(a - b) < 0.0001f;

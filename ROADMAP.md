@@ -45,7 +45,7 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 - [x] Make formation-versus-formation route interactions emerge from occupied zones.
 - [x] Make per-player attack/defend instructions alter bounded tactical occupancy while route success uses relevant attributes.
 - [x] Explain the clearest tactical route advantage and vulnerability on Matchday Prep.
-- Add opponent-aware AI tactical adaptation.
+- [x] Add first-generation opponent-aware AI adaptation with one bounded matchup adjustment.
 - [x] Require tactical-sensitivity and holy-balance audits for the first interaction slice.
 
 ## 5. Intelligent AI clubs
