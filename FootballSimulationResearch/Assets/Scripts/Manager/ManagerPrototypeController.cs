@@ -4504,8 +4504,8 @@ namespace Manager
         private TMP_InputField transferMinAgeInput;
         private TMP_InputField transferMaxAgeInput;
         private Button transferPositionFilterButton;
+        private GameObject transferPositionDropdown;
         private Button transferClearFiltersButton;
-        private int transferPositionFilterIndex = -1;
 
         // Session 13 - looks up a player's current AI club purely by scanning
         // squadsByTeamName, rather than trusting transferMarketRowClubs (only ever
@@ -4543,6 +4543,7 @@ namespace Manager
 
         public void OnTransferMarketBackClicked()
         {
+            CloseTransferPositionDropdown();
             if (transferMarketPanel != null) transferMarketPanel.SetActive(false);
 
             ShowSeasonHub();
@@ -4618,14 +4619,17 @@ namespace Manager
             transferMinAgeInput = BuildTransferFilterInput(header.transform, ref filterX, filterTop, 120f, filterHeight, "Min age", numeric: true);
             transferMaxAgeInput = BuildTransferFilterInput(header.transform, ref filterX, filterTop, 120f, filterHeight, "Max age", numeric: true);
 
-            transferPositionFilterButton = ManagerUITheme.BuildButton(header.transform, "ANY POSITION", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
+            float positionFilterX = filterX;
+            transferPositionFilterButton = ManagerUITheme.BuildButton(header.transform, "ANY POSITION v", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
             ManagerUITheme.SetPointAnchor(transferPositionFilterButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(filterX, -filterTop), new Vector2(180f, filterHeight));
-            transferPositionFilterButton.onClick.AddListener(OnCycleTransferPositionFilter);
+            transferPositionFilterButton.onClick.AddListener(ToggleTransferPositionDropdown);
             filterX += 192f;
 
             transferClearFiltersButton = ManagerUITheme.BuildButton(header.transform, "CLEAR", ManagerUITheme.CardNeutral, ManagerUITheme.TextMuted, 12);
             ManagerUITheme.SetPointAnchor(transferClearFiltersButton.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(filterX, -filterTop), new Vector2(110f, filterHeight));
             transferClearFiltersButton.onClick.AddListener(OnClearTransferFilters);
+
+            BuildTransferPositionDropdown(header.transform, positionFilterX, filterTop + filterHeight + 4f);
 
             const float contentWidth = 1600f;
             const float sideMargin = (1920f - contentWidth) / 2f;
@@ -4737,29 +4741,66 @@ namespace Manager
             if (transferMarketShowingBuyTab) RefreshTransferMarketUI();
         }
 
-        private void OnCycleTransferPositionFilter()
+        private void BuildTransferPositionDropdown(Transform parent, float x, float top)
         {
             Array values = Enum.GetValues(typeof(PlayerPosition));
-            transferPositionFilterIndex++;
-            if (transferPositionFilterIndex >= values.Length) transferPositionFilterIndex = -1;
-            transferSearch.Position = transferPositionFilterIndex < 0
-                ? null
-                : (PlayerPosition?)values.GetValue(transferPositionFilterIndex);
-            string label = transferSearch.Position.HasValue ? transferSearch.Position.Value.ToString() : "ANY POSITION";
-            ManagerUITheme.NormalizeButtonLabel(transferPositionFilterButton, label, ManagerUITheme.TextBody, 12);
+            transferPositionDropdown = BuildEmptyDropdownScaffold(parent, values.Length + 1);
+            ManagerUITheme.SetPointAnchor(transferPositionDropdown.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(x, -top), new Vector2(180f, Mathf.Min(360f, (values.Length + 1) * 30f)));
+
+            Transform content = transferPositionDropdown.transform.Find("Viewport/Content");
+            AddTransferPositionOption(content, "ANY POSITION", null);
+            foreach (PlayerPosition position in values)
+            {
+                AddTransferPositionOption(content, position.ToString(), position);
+            }
+
+            transferPositionDropdown.SetActive(false);
+        }
+
+        private void AddTransferPositionOption(Transform content, string label, PlayerPosition? position)
+        {
+            Button option = ManagerUITheme.BuildButton(content, label, ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 12);
+            LayoutElement layout = option.gameObject.AddComponent<LayoutElement>();
+            layout.preferredHeight = 30f;
+            option.onClick.AddListener(() => SelectTransferPosition(position));
+        }
+
+        private void ToggleTransferPositionDropdown()
+        {
+            if (transferPositionDropdown == null) return;
+            transferPositionDropdown.SetActive(!transferPositionDropdown.activeSelf);
+            if (transferPositionDropdown.activeSelf)
+            {
+                transferPositionDropdown.transform.parent.SetAsLastSibling();
+                transferPositionDropdown.transform.SetAsLastSibling();
+                StartCoroutine(RecoverBlankLabelsNextFrame(transferPositionDropdown.transform));
+            }
+        }
+
+        private void SelectTransferPosition(PlayerPosition? position)
+        {
+            transferSearch.Position = position;
+            CloseTransferPositionDropdown();
+            string label = position.HasValue ? position.Value.ToString() : "ANY POSITION";
+            ManagerUITheme.NormalizeButtonLabel(transferPositionFilterButton, $"{label} v", ManagerUITheme.TextBody, 12);
             RefreshTransferMarketUI();
+        }
+
+        private void CloseTransferPositionDropdown()
+        {
+            if (transferPositionDropdown != null) transferPositionDropdown.SetActive(false);
         }
 
         private void OnClearTransferFilters()
         {
             transferSearch.Clear();
-            transferPositionFilterIndex = -1;
+            CloseTransferPositionDropdown();
             if (transferPlayerSearchInput != null) transferPlayerSearchInput.text = string.Empty;
             if (transferClubSearchInput != null) transferClubSearchInput.text = string.Empty;
             if (transferNationSearchInput != null) transferNationSearchInput.text = string.Empty;
             if (transferMinAgeInput != null) transferMinAgeInput.text = string.Empty;
             if (transferMaxAgeInput != null) transferMaxAgeInput.text = string.Empty;
-            ManagerUITheme.NormalizeButtonLabel(transferPositionFilterButton, "ANY POSITION", ManagerUITheme.TextBody, 12);
+            ManagerUITheme.NormalizeButtonLabel(transferPositionFilterButton, "ANY POSITION v", ManagerUITheme.TextBody, 12);
             RefreshTransferMarketUI();
         }
 
@@ -4823,6 +4864,7 @@ namespace Manager
             if (transferMinAgeInput != null) transferMinAgeInput.transform.parent.gameObject.SetActive(showSearch);
             if (transferMaxAgeInput != null) transferMaxAgeInput.transform.parent.gameObject.SetActive(showSearch);
             if (transferPositionFilterButton != null) transferPositionFilterButton.gameObject.SetActive(showSearch);
+            if (!showSearch) CloseTransferPositionDropdown();
             if (transferClearFiltersButton != null) transferClearFiltersButton.gameObject.SetActive(showSearch);
 
             transferMarketListView.Clear();
