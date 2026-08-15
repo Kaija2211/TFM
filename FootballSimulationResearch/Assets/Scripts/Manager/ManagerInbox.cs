@@ -98,6 +98,15 @@ namespace Manager
             if (message != null) message.IsRead = true;
         }
 
+        public void MarkAllReadAndCollapse()
+        {
+            foreach (InboxMessage message in messages)
+            {
+                message.IsRead = true;
+                message.IsExpanded = false;
+            }
+        }
+
         // Called once Sign/Walk Away has actually been actioned - clears the pending-
         // action flag so the message becomes a plain historical record from then on,
         // safe to persist through save/load like any other resolved message.

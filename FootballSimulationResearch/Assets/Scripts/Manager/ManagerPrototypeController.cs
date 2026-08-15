@@ -17,6 +17,7 @@ namespace Manager
     // cannot affect the research evaluation flow or the Statistical-vs-ABM metrics.
     public class ManagerPrototypeController : MonoBehaviour
     {
+        private const float UiScrollSensitivity = 70f;
         [Header("Season Data")]
         [SerializeField] private TextAsset seasonFile;
         [SerializeField] private TextAsset[] trainingSeasonFiles;
@@ -3461,7 +3462,7 @@ namespace Manager
             scrollRect.horizontal = false;
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
-            scrollRect.scrollSensitivity = 25f;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             StartCoroutine(RecoverBlankLabelsNextFrame(saveBrowserPanel.transform));
         }
@@ -3790,7 +3791,7 @@ namespace Manager
             // project's 1920x1080-reference-resolution lists (backlog item, session 12,
             // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
             // correct direction) while moving content a comfortable amount per wheel notch.
-            scrollRect.scrollSensitivity = 25f;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             GameObject scrollbarObj = new GameObject("ScoutingScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
             scrollbarObj.transform.SetParent(scoutingPanel.transform, false);
@@ -4669,7 +4670,7 @@ namespace Manager
             // project's 1920x1080-reference-resolution lists (backlog item, session 12,
             // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
             // correct direction) while moving content a comfortable amount per wheel notch.
-            scrollRect.scrollSensitivity = 25f;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             GameObject scrollbarObj = new GameObject("TransferScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
             scrollbarObj.transform.SetParent(transferMarketPanel.transform, false);
@@ -5489,6 +5490,7 @@ namespace Manager
 
         public void OnInboxBackClicked()
         {
+            inbox.MarkAllReadAndCollapse();
             if (inboxPanel != null) inboxPanel.SetActive(false);
 
             ShowSeasonHub();
@@ -5567,7 +5569,7 @@ namespace Manager
             scrollRect.horizontal = false;
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
-            scrollRect.scrollSensitivity = 25f;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             StartCoroutine(RecoverBlankLabelsNextFrame(inboxPanel.transform));
         }
@@ -5880,7 +5882,7 @@ namespace Manager
             // project's 1920x1080-reference-resolution lists (backlog item, session 12,
             // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
             // correct direction) while moving content a comfortable amount per wheel notch.
-            scrollRect.scrollSensitivity = 25f;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             StartCoroutine(RecoverBlankLabelsNextFrame(trophyRoomPanel.transform));
         }
@@ -6500,6 +6502,7 @@ namespace Manager
             scrollRect.viewport = viewportRect;
             scrollRect.content = tacticsBoardBenchContent;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             // Slim scrollbar in the 16px gap to the right of the card column - the bench
             // rail itself is already a working vertical ScrollRect (drag or mouse-wheel
@@ -7123,6 +7126,7 @@ namespace Manager
             scrollRect.viewport = viewportRect;
             scrollRect.content = contentRect;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             dropdownPanel.SetActive(false);
             return dropdownPanel;
@@ -7966,7 +7970,7 @@ namespace Manager
             // project's 1920x1080-reference-resolution lists (backlog item, session 12,
             // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
             // correct direction) while moving content a comfortable amount per wheel notch.
-            scrollRect.scrollSensitivity = 25f;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             GameObject scrollbarObj = new GameObject("SquadScrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
             scrollbarObj.transform.SetParent(squadBrowsePanel.transform, false);
@@ -12187,7 +12191,7 @@ namespace Manager
             // project's 1920x1080-reference-resolution lists (backlog item, session 12,
             // Thomas: "list scrolling feels terribly slow"). 25 keeps the same sign (same
             // correct direction) while moving content a comfortable amount per wheel notch.
-            scrollRect.scrollSensitivity = 25f;
+            scrollRect.scrollSensitivity = UiScrollSensitivity;
 
             // Slim vertical scrollbar in the 16px gap freed up above - see the comment
             // on scrollViewRect.offsetMax.
