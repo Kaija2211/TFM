@@ -50,6 +50,7 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 
 ## 5. Intelligent AI clubs
 
+- [x] Partition the Manager Unity coordinator by screen/system responsibility before adding further AI complexity.
 - Evaluate positional depth, squad quality and age profile.
 - Identify needs and search for tactically appropriate targets.
 - Replace sold, injured, declining and retiring players.
