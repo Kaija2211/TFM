@@ -138,6 +138,24 @@ Planning must cover at least:
 
 Recommended delivery slices: knowledge model and senior assignments; variable scout department; tactical/profile briefs; youth integration; AI use; staff hiring/budgets and long-career tuning.
 
+### Epic — Save-specific narrative and media engine (post-alpha)
+
+- [ ] **Make each generated football world remember and narrate its own history.** Produce tailored news, Inbox messages, match reports, headlines, interviews and retrospective stories from verified career facts. This is deliberately outside the first England alpha and must never become a dependency for simulation, progression, saving or basic accessibility.
+
+Architecture must remain offline-first:
+
+- ship a polished template/composable-text narrator in the base game with negligible hardware requirements;
+- treat hosted LLM generation as an explicit opt-in enhanced-narrative mode, with clear disclosure of transmitted save facts;
+- consider an optional separately downloaded small local-model pack later, never bundled into the base install or required by minimum specifications;
+- generate asynchronously outside live match playback, batch related outputs, cache completed stories permanently and cap local worker CPU/memory use;
+- fall back immediately to the offline narrator on timeout, invalid output, lost connectivity or unsupported hardware;
+- pass only structured, approved world facts and require structured responses so prose cannot invent scores, players, transfers, injuries or records;
+- support player-controlled frequency such as Off/Templates Only, Key Stories, Weekly and Extensive;
+- let rare generated relationships, partnerships, rivalries, academy generations and club legends feed stories once those underlying systems exist;
+- include privacy, moderation, age-rating, localisation, save portability, provider-cost and API-key/service-shutdown planning before implementation.
+
+The product promise is not “an LLM inside a football game”; it is that the player's unique generated world remembers what happened and talks about it.
+
 ### Epic — Player-derived club strength and world generation
 
 - [ ] **Replace persistent historical club-strength ratings with strength derived from the players on the pitch.** The current architecture begins with trained team attack/defence values, generates players from those values, and continues using team-level values in match simulation. This makes player quality partly a presentation of pre-existing club strength rather than its true cause. Redesign the system so transfers, development, decline, injuries, selection, and tactical fit naturally change a club’s strength immediately.

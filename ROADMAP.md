@@ -82,6 +82,7 @@ Leading pillars:
 - A grounded manager identity/skill system covering coaching, tactical teaching, recruitment networks, relationships, youth development and delegation—with trade-offs rather than flat arcade bonuses.
 - Generated stars, club histories and discoveries create careers personal to the player.
 - Fewer chores and more consequential decisions than Football Manager.
+- Post-alpha candidate: an offline-first narrative/media engine, with optional enhanced generation, that turns verified save events and emergent relationships into unique career history.
 
 ## 8. Activate the football pyramid and wider world
 
