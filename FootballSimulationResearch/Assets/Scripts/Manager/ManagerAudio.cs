@@ -10,6 +10,8 @@ namespace Manager
     // enough here - no DontDestroyOnLoad/persistent-singleton machinery needed.
     public class ManagerAudio : MonoBehaviour
     {
+        private const string MusicVolumePreferenceKey = "TFM.MusicVolume";
+        private const float DefaultMusicVolume = 0.35f;
         private static ManagerAudio instance;
 
         private AudioSource musicSource;
@@ -39,7 +41,7 @@ namespace Manager
             musicSource.playOnAwake = false;
             // Background level, not competing with the click SFX or any future voice/
             // commentary - deliberately quiet ambience rather than a foreground track.
-            musicSource.volume = 0.35f;
+            musicSource.volume = Mathf.Clamp01(PlayerPrefs.GetFloat(MusicVolumePreferenceKey, DefaultMusicVolume));
 
             // Deliberately NOT started here - Thomas wanted the studio splash to play in
             // silence, with music only starting once Title actually appears. See
@@ -99,6 +101,29 @@ namespace Manager
         public static bool IsMusicEnabled()
         {
             return instance == null || instance.musicSource == null || !instance.musicSource.mute;
+        }
+
+        public static void SetMusicVolume(float volume)
+        {
+            float clamped = Mathf.Clamp01(volume);
+            PlayerPrefs.SetFloat(MusicVolumePreferenceKey, clamped);
+            PlayerPrefs.Save();
+
+            if (instance != null && instance.musicSource != null)
+            {
+                instance.musicSource.mute = false;
+                instance.musicSource.volume = clamped;
+            }
+        }
+
+        public static float GetMusicVolume()
+        {
+            if (instance != null && instance.musicSource != null)
+            {
+                return instance.musicSource.volume;
+            }
+
+            return Mathf.Clamp01(PlayerPrefs.GetFloat(MusicVolumePreferenceKey, DefaultMusicVolume));
         }
     }
 }

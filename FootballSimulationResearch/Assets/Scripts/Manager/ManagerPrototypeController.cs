@@ -1159,19 +1159,87 @@ namespace Manager
             contentRect.anchoredPosition = new Vector2(0f, -150f);
             spawnedSettingsRows.Add(content);
 
-            int musicIndex = ManagerAudio.IsMusicEnabled() ? 0 : 1;
-            BuildSliderRow(content.transform, "MUSIC", 0f, new[] { "ON", "OFF" }, musicIndex,
-                index => { ManagerAudio.SetMusicEnabled(index == 0); RefreshSettingsUI(); });
+            BuildMusicVolumeSlider(content.transform, 0f);
 
             // Falls back to x1 (not index 0/slowest) if the current value somehow isn't an
             // exact match for any option - the exact bug just fixed above, guarded against
             // recurring the same way if this field is ever hand-edited again.
             int speedIndexRaw = System.Array.IndexOf(MatchSpeedSecondsOptions, matchReplayDurationSeconds);
             int speedIndex = speedIndexRaw >= 0 ? speedIndexRaw : MatchSpeedDefaultIndex;
-            BuildSliderRow(content.transform, "MATCH SPEED", 90f, MatchSpeedLabels, speedIndex,
+            BuildSliderRow(content.transform, "MATCH SPEED", 110f, MatchSpeedLabels, speedIndex,
                 index => { matchReplayDurationSeconds = MatchSpeedSecondsOptions[index]; RefreshSettingsUI(); });
 
             StartCoroutine(RecoverBlankLabelsNextFrame(settingsPanel.transform));
+        }
+
+        private void BuildMusicVolumeSlider(Transform parent, float top)
+        {
+            GameObject labelObj = new GameObject("MusicVolumeLabel", typeof(RectTransform));
+            labelObj.transform.SetParent(parent, false);
+            ManagerUITheme.AnchorTopStretch(labelObj, top, 24f, 0f);
+            ManagerUITheme.BuildLabel(labelObj.transform, "MUSIC VOLUME", 16, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            GameObject valueObj = new GameObject("MusicVolumeValue", typeof(RectTransform));
+            valueObj.transform.SetParent(labelObj.transform, false);
+            RectTransform valueRect = valueObj.GetComponent<RectTransform>();
+            valueRect.anchorMin = new Vector2(1f, 0f);
+            valueRect.anchorMax = new Vector2(1f, 1f);
+            valueRect.pivot = new Vector2(1f, 0.5f);
+            valueRect.anchoredPosition = Vector2.zero;
+            valueRect.sizeDelta = new Vector2(100f, 0f);
+            TextMeshProUGUI valueLabel = ManagerUITheme.BuildLabel(valueObj.transform, string.Empty, 15, ManagerUITheme.TextBody, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
+
+            GameObject sliderObj = new GameObject("MusicVolumeSlider", typeof(RectTransform), typeof(Image), typeof(Slider));
+            sliderObj.transform.SetParent(parent, false);
+            ManagerUITheme.AnchorTopStretch(sliderObj, top + 38f, 34f, 0f);
+            sliderObj.GetComponent<Image>().color = ManagerUITheme.CardNeutralAlt;
+
+            GameObject fillArea = new GameObject("FillArea", typeof(RectTransform));
+            fillArea.transform.SetParent(sliderObj.transform, false);
+            RectTransform fillAreaRect = fillArea.GetComponent<RectTransform>();
+            fillAreaRect.anchorMin = Vector2.zero;
+            fillAreaRect.anchorMax = Vector2.one;
+            fillAreaRect.offsetMin = new Vector2(6f, 8f);
+            fillAreaRect.offsetMax = new Vector2(-6f, -8f);
+
+            GameObject fillObj = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+            fillObj.transform.SetParent(fillArea.transform, false);
+            RectTransform fillRect = fillObj.GetComponent<RectTransform>();
+            fillRect.anchorMin = Vector2.zero;
+            fillRect.anchorMax = Vector2.one;
+            fillRect.offsetMin = Vector2.zero;
+            fillRect.offsetMax = Vector2.zero;
+            fillObj.GetComponent<Image>().color = ManagerUITheme.Accent;
+
+            GameObject handleArea = new GameObject("HandleArea", typeof(RectTransform));
+            handleArea.transform.SetParent(sliderObj.transform, false);
+            RectTransform handleAreaRect = handleArea.GetComponent<RectTransform>();
+            handleAreaRect.anchorMin = Vector2.zero;
+            handleAreaRect.anchorMax = Vector2.one;
+            handleAreaRect.offsetMin = new Vector2(8f, 0f);
+            handleAreaRect.offsetMax = new Vector2(-8f, 0f);
+
+            GameObject handleObj = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handleObj.transform.SetParent(handleArea.transform, false);
+            RectTransform handleRect = handleObj.GetComponent<RectTransform>();
+            handleRect.sizeDelta = new Vector2(22f, 34f);
+            handleObj.GetComponent<Image>().color = ManagerUITheme.TextPrimary;
+
+            Slider slider = sliderObj.GetComponent<Slider>();
+            slider.minValue = 0f;
+            slider.maxValue = 1f;
+            slider.wholeNumbers = false;
+            slider.fillRect = fillRect;
+            slider.handleRect = handleRect;
+            slider.targetGraphic = handleObj.GetComponent<Image>();
+            slider.direction = Slider.Direction.LeftToRight;
+            slider.value = ManagerAudio.GetMusicVolume();
+            valueLabel.text = $"{Mathf.RoundToInt(slider.value * 100f)}%";
+            slider.onValueChanged.AddListener(value =>
+            {
+                ManagerAudio.SetMusicVolume(value);
+                if (valueLabel != null) valueLabel.text = $"{Mathf.RoundToInt(value * 100f)}%";
+            });
         }
 
         // See BuildTitleScreenContent's call site - recovers a label that came out of
