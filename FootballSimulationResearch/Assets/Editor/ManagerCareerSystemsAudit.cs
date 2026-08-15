@@ -77,10 +77,13 @@ public static class ManagerCareerSystemsAudit
 
         ManagerAcademy academy = new ManagerAcademy();
         List<PlayerAgent> slots = academy.GetOrCreateAcademyPool(generator, 1f, 1f);
-        PlayerAgent prospect = slots[0];
-        Require(academy.ReleaseProspect(prospect), "academy slot could not be emptied");
-        Require(academy.PlaceProspectInSlot(0, prospect), "prospect could not be placed in an empty academy slot");
+        PlayerAgent releasedProspect = slots[0];
+        Require(academy.ReleaseProspect(releasedProspect), "academy slot could not be emptied");
+        Require(scouting.DiscoveredProspects.Count > 0, "no live discovery remained for the academy intake test");
+        PlayerAgent prospect = scouting.DiscoveredProspects[0];
+        Require(scouting.TryClaimProspectToAcademy(prospect, academy, 0), "prospect could not be claimed into an empty academy slot");
         Require(academy.GetFullAcademySlots()[0] == prospect, "academy intake did not retain the selected prospect");
+        Require(!scouting.DiscoveredProspects.Contains(prospect), "claimed prospect remained in the scouting list");
     }
 
     private static void AuditInboxExitState()

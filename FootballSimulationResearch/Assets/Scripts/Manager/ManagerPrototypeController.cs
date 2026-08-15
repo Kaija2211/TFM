@@ -1159,14 +1159,18 @@ namespace Manager
             contentRect.anchoredPosition = new Vector2(0f, -150f);
             spawnedSettingsRows.Add(content);
 
-            BuildMusicVolumeSlider(content.transform, 0f);
+            int musicIndex = ManagerAudio.IsMusicEnabled() ? 0 : 1;
+            BuildSliderRow(content.transform, "MUSIC", 0f, new[] { "ON", "OFF" }, musicIndex,
+                index => { ManagerAudio.SetMusicEnabled(index == 0); RefreshSettingsUI(); });
+
+            BuildMusicVolumeSlider(content.transform, 90f);
 
             // Falls back to x1 (not index 0/slowest) if the current value somehow isn't an
             // exact match for any option - the exact bug just fixed above, guarded against
             // recurring the same way if this field is ever hand-edited again.
             int speedIndexRaw = System.Array.IndexOf(MatchSpeedSecondsOptions, matchReplayDurationSeconds);
             int speedIndex = speedIndexRaw >= 0 ? speedIndexRaw : MatchSpeedDefaultIndex;
-            BuildSliderRow(content.transform, "MATCH SPEED", 110f, MatchSpeedLabels, speedIndex,
+            BuildSliderRow(content.transform, "MATCH SPEED", 200f, MatchSpeedLabels, speedIndex,
                 index => { matchReplayDurationSeconds = MatchSpeedSecondsOptions[index]; RefreshSettingsUI(); });
 
             StartCoroutine(RecoverBlankLabelsNextFrame(settingsPanel.transform));
@@ -4414,11 +4418,10 @@ namespace Manager
             bool slotEmpty = validSlot && academySlots[slotIndex] == null;
             bool wasDiscovered = scouting.DiscoveredProspects.Contains(prospect);
 
-            bool placed = academy.PlaceProspectInSlot(slotIndex, prospect);
+            bool placed = scouting.TryClaimProspectToAcademy(prospect, academy, slotIndex);
 
             if (placed)
             {
-                scouting.RemoveDiscoveredProspect(prospect);
                 Debug.Log($"Academy intake complete: brought in {prospect.Name} to academy slot {slotIndex}.");
             }
             else

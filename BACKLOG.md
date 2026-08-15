@@ -17,17 +17,17 @@ Priority labels:
 
 - [ ] **In-match substitutions and tactical changes persist after full time.** Mid-match changes mutate the real `AgentTeam` XI/formation. Snapshot the pre-match tactical state and restore it after the fixture, while preserving deliberately permanent pre-match changes.
 - [ ] **In-match changes are committed while they are still being edited.** Dragging a player off the pitch currently performs the substitution immediately, preventing the user from simply dragging them back and carrying on. Treat the mid-match Tactics Board as a reversible draft: snapshot the live XI/formation/tactics on entry; allow any number of drag/drop changes and reversals locally; and do not update the substitution log, subbed-off lockout, simulator state, or remaining match until the user leaves the board and resumes play. Cancelling/undoing the draft must restore the exact entry state. Only the final difference should count as official substitutions.
-- [ ] **Persist the complete tactical setup in saves.** Formation and XI already round-trip through `AgentTeamSaveData`, but tactical sliders and mentality do not. Define the intended saved tactical state and add version-tolerant save fields.
+- [x] **Persist the complete tactical setup in saves.** Formation/XI/bench and role assignments round-trip with the squad; Width, Defensive Depth and Tempo now use version-tolerant save-v4 fields. Match mentality remains deliberately match-scoped and resets to Balanced at kickoff.
 - [ ] **Full-time banner sometimes shows Matchday 1 / Liverpool v Bournemouth.** Investigate stale fixture/banner state separately from the score/events mismatch below. Reproduce across normal play, skip-to-results, in-match tactics changes, and save/load.
-- [ ] **Scout 2 accepts a mission brief but never returns youth prospects.** Scout 1 works; Scout 2’s UI allows position selection and displays an active brief, but repeated user testing produced no discoveries from that slot. Trace the UI slot index through `SetMissionBrief`, save/load restoration, and `ResolveMatchdayTick`. Add deterministic per-slot diagnostics or source-scout metadata so this can be proven rather than inferred from prospect positions.
+- [x] **Scout 2 accepts a mission brief but never returns youth prospects.** The daily-calendar implementation resolves both slots independently. The permanent Manager Career Systems audit assigns distinct briefs and proves both slots generate discoveries under a deterministic 500-day run.
 
 ### P1 — UX and quality-of-life
 
-- [ ] **Thomas's wishlist: use a real position dropdown in Transfer Search.** The current implementation cycles through positions one click at a time, which is cumbersome when reaching later options such as ST. Replace it with a fast, scrollable dropdown supporting `Any position` and direct selection; preserve the active filter when moving between transfer views.
-- [ ] **Increase mouse-wheel scrolling speed on every list/dropdown without a draggable scrollbar.** Most obvious in role-assignment dropdowns. Centralize scroll sensitivity rather than fixing individual screens ad hoc.
+- [x] **Thomas's wishlist: use a real position dropdown in Transfer Search.** Transfer Search now has a scrollable direct-selection dropdown with `Any position` plus every position.
+- [x] **Increase mouse-wheel scrolling speed on every list/dropdown without a draggable scrollbar.** Runtime scroll views now share a central 70px sensitivity, including role assignments and the matchday bench.
 - [ ] **Auto-pick must consider Condition.** Candidate score should combine ability, position fit, availability, and Condition so a tired star is not blindly selected over fit cover.
-- [ ] **Collapse expanded Inbox emails when leaving the Inbox.** Reopening should start from a clean collapsed list.
-- [ ] **Mark unread Inbox messages as read when pressing Back.** Define whether this means every currently listed message or only messages opened/visible during that visit; current request implies all unread messages in the Inbox.
+- [x] **Collapse expanded Inbox emails when leaving the Inbox.** Reopening starts from a clean collapsed list.
+- [x] **Mark unread Inbox messages as read when pressing Back.** Back marks every message in the Inbox read.
 - [ ] **Change 3-4-2-1 wing-back slots from LWB/RWB to LM/RM.** Update formation slot definitions and verify tactics-board labels, auto-pick, position fit, and AI-generated team compatibility.
 - [ ] **Audit chronically low generated attributes.** Leadership and physical attributes were specifically reported; sample large generated populations by position/age/team strength before changing distributions.
 - [ ] **Finish academy-player inspect note.** Original report was cut off after: “When looking at your academy player, …” Await Thomas’s missing detail.
@@ -150,14 +150,14 @@ Recommended research sequence: preserve the current eight-season model as a benc
 
 - [ ] **Match result/events mismatch.** One report showed a 0-1 result after two apparent live goals, followed by View Match Events showing 3-0 against the wrong opponent. Static review never reproduced it. May share stale-state causes with the full-time banner bug, but treat them as separate until proven otherwise.
 - [ ] **Guard `PickGoalkeeper` against an empty Starting XI.** Current sale rules make this difficult to reach, but the underlying unsafe index fallback still exists.
-- [ ] **Academy “Bring In Scouted Player” needs live verification.** Defensive slot validation/dropdown activation code exists after a reported failure, but the complete claim flow should be tested with a real discovery and empty slot.
+- [x] **Academy “Bring In Scouted Player” needs live verification.** Claiming is now one atomic scouting-to-academy operation and the permanent Manager Career Systems audit proves the discovery is placed and removed from the scouting list.
 
 ### P1 / UX and matchday
 
 - [ ] **Add a real half-time checkpoint.** Stop the replay after minute 45 and show a full-time-style summary containing the score and statistics accumulated only from the first half, with **Make Changes** and **Resume** actions. Do not reveal or process second-half events until Resume. Half-time tactical edits use the same reversible draft flow as other mid-match changes; on commit, preserve every first-half event/stat/result and regenerate only the remaining match from minute 46. Skip to Results must have a deliberate behaviour (recommended: bypass the checkpoint and complete the fixture).
 - [ ] **Decide and enforce the substitution rule.** Mid-match substitutions are currently uncapped. Decide between the real five-sub rule, competition-configurable rules, or an intentionally permissive system.
 - [ ] **Show secondary positions before transfer scouting.** Current inspect UI can display secondary positions, but the transfer browse/scouting-information policy still needs a deliberate implementation.
-- [ ] **Music volume slider.** Add a 0–100% slider with immediate audible feedback and persist the chosen level across sessions/saves. Keep it distinct from the existing mute toggle: muting should preserve the selected volume and unmuting should restore it rather than resetting to a fixed level.
+- [x] **Music volume slider.** Settings now has a persistent 0–100% slider alongside a separately persisted ON/OFF toggle; muting preserves the selected level.
 - [ ] **Player career statistics on Player Detail.** Matches, starts/minutes if tracked, goals, assists, and average rating; requires persistent per-player stat tracking first.
 - [ ] **Improve in-match team-name sizing/alignment.** Earlier build feedback requested larger names aligned more closely with the central score.
 - [ ] **Surface live Overall change more broadly.** The +1/-1 badge currently appears only on Player Detail and is easy to miss; consider Squad/Tactics rows.

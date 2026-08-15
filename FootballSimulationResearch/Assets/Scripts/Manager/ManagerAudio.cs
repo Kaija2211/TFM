@@ -11,6 +11,7 @@ namespace Manager
     public class ManagerAudio : MonoBehaviour
     {
         private const string MusicVolumePreferenceKey = "TFM.MusicVolume";
+        private const string MusicEnabledPreferenceKey = "TFM.MusicEnabled";
         private const float DefaultMusicVolume = 0.35f;
         private static ManagerAudio instance;
 
@@ -42,6 +43,7 @@ namespace Manager
             // Background level, not competing with the click SFX or any future voice/
             // commentary - deliberately quiet ambience rather than a foreground track.
             musicSource.volume = Mathf.Clamp01(PlayerPrefs.GetFloat(MusicVolumePreferenceKey, DefaultMusicVolume));
+            musicSource.mute = PlayerPrefs.GetInt(MusicEnabledPreferenceKey, 1) == 0;
 
             // Deliberately NOT started here - Thomas wanted the studio splash to play in
             // silence, with music only starting once Title actually appears. See
@@ -92,6 +94,8 @@ namespace Manager
         // mute.
         public static void SetMusicEnabled(bool enabled)
         {
+            PlayerPrefs.SetInt(MusicEnabledPreferenceKey, enabled ? 1 : 0);
+            PlayerPrefs.Save();
             if (instance != null && instance.musicSource != null)
             {
                 instance.musicSource.mute = !enabled;
@@ -111,7 +115,6 @@ namespace Manager
 
             if (instance != null && instance.musicSource != null)
             {
-                instance.musicSource.mute = false;
                 instance.musicSource.volume = clamped;
             }
         }

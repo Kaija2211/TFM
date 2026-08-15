@@ -60,7 +60,7 @@ This is the working contract for the upcoming visual-design pass. The current UI
 
 - Search starts blank; it does not dump every player in the world onto the user.
 - Current filters: player name, club, nationality, minimum/maximum age and exact primary/secondary position.
-- Position is temporary cycle-button scaffolding; redesign it as a dropdown.
+- Position is a direct-selection dropdown containing Any Position and every supported position.
 - Result rows need availability: Available, Negotiable, Key Player or Not for Sale.
 - Bids use a numeric input rather than preset amounts.
 - The architecture must leave room for shortlist state, scouted knowledge, player interest, value/wage and additional filters.
@@ -68,7 +68,7 @@ This is the working contract for the upcoming visual-design pass. The current UI
 ### Inbox and saves
 
 - Inbox items have read/unread and expanded/collapsed states.
-- Leaving Inbox should mark visible unread messages read and collapse open messages.
+- Leaving Inbox marks every unread message read and collapses all open messages.
 - Save browser needs clear load/delete actions; delete requires confirmation.
 
 ## Components Claude can define
@@ -85,13 +85,11 @@ This is the working contract for the upcoming visual-design pass. The current UI
 
 ## Known functional follow-ups outside the mockup pass
 
-- Full tactical-state save/load verification.
 - Automated assignment fallback when role holders leave the XI.
 - Formation-zone and overload model.
 - AI squad selection and recruitment intelligence.
 - Remaining transfer filters, contracts, wages and negotiations.
-- Faster scrolling implementation across all long lists.
-- Music-volume setting and persistence.
+- Visual treatment for the functional fast scrolling, music-volume slider and separate music toggle.
 
 ## Acceptance rule
 

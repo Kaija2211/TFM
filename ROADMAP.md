@@ -30,7 +30,7 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 
 - [x] Make in-match tactical edits reversible drafts until Resume is pressed.
 - [x] Restore the pre-match setup after temporary in-match changes.
-- Save the complete tactical setup.
+- [x] Save the complete tactical setup.
 - [x] Add the half-time statistics, Make Changes and Resume checkpoint.
 - [x] Decide and enforce the five-substitution rule.
 - [x] Bind fixture banners, results and Match Events to one active-match snapshot and validate score/event consistency.
@@ -60,7 +60,7 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 
 ## 6. Scouting, academy and player development
 
-- Verify both youth scouts under daily simulation.
+- [x] Verify both youth scouts under daily simulation.
 - Tune discovery and poaching pacing against calendar time.
 - Add training schedules and individual development plans.
 - Explain the causes of player growth and decline.
@@ -106,8 +106,8 @@ Leading pillars:
 ## 10. UI, accessibility and release preparation
 
 - Complete a desktop-first visual redesign.
-- Add proper dropdowns, filter chips and fast scrolling.
-- Add the music-volume slider and Inbox read/collapse improvements.
+- [x] Add a proper transfer-position dropdown and fast scrolling. Additional filter chips remain part of the transfer overhaul.
+- [x] Add the music-volume slider and Inbox read/collapse improvements.
 - Add save renaming.
 - Test resolutions, controller navigation and accessibility.
 - Profile careers containing thousands of generated players.
@@ -116,9 +116,8 @@ Leading pillars:
 
 ## Immediate continuation order
 
-1. Verify complete tactical save/load persistence.
-2. Build the tactical-zone and formation-interaction model.
-3. Add AI squad evaluation, rotation and recruitment.
-4. Add contracts, player interest and richer transfer negotiations.
-5. Hold the TFM identity and manager-skill-system design session.
-6. Activate the wider football pyramid.
+1. Build the tactical-zone and formation-interaction model.
+2. Add AI squad evaluation, rotation and recruitment.
+3. Add contracts, player interest and richer transfer negotiations.
+4. Hold the TFM identity and manager-skill-system design session.
+5. Activate the wider football pyramid.

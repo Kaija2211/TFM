@@ -230,6 +230,16 @@ namespace Manager
             return discoveredProspects.Remove(prospect);
         }
 
+        public bool TryClaimProspectToAcademy(PlayerAgent prospect, ManagerAcademy academy, int slotIndex)
+        {
+            if (prospect == null || academy == null || !discoveredProspects.Contains(prospect)) return false;
+            if (!academy.PlaceProspectInSlot(slotIndex, prospect)) return false;
+
+            discoveredMatchday.Remove(prospect);
+            discoveredProspects.Remove(prospect);
+            return true;
+        }
+
         // Same bell-curved headroom roll as before (see feedback_generation_bell_curve_
         // not_hard_range in memory) - a hidden discovery pool exists specifically to
         // occasionally contain a real future star, not just more of the same
