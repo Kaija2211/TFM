@@ -19,15 +19,14 @@ namespace Manager
     // session (see GetOrCreateAgentTeam), so direct PlayerAgent references here stay
     // valid across screens and substitutions exactly like squadsByTeamName itself.
     //
-    // Organizational/cosmetic only (session 16 - Thomas's explicit scope call: the
-    // mechanical hooks these used to have, and the pre-kickoff warning nagging about
-    // unassigned roles, were more headache for the manager than the feature was worth
-    // for this project's scope). Captain no longer feeds ManagerCaptaincyModifier
+    // Captain and set-piece assignments remain organizational for now. Per-player
+    // Attack/Balanced/Defensive instructions are mechanically active again after the
+    // dissertation scope ended: ManagerTacticalShape uses them as small, bounded shifts
+    // in each player's attacking/defensive occupancy. Captain no longer feeds ManagerCaptaincyModifier
     // (still exists, just unwired) and LeftCornerTaker/RightCornerTaker no longer feed
     // AgentMatchSimulator.CornerTakerNamesByTeamName (which is now never populated, so
     // corners always fall through to the normal weighted-random pick). All six fields
-    // are still stored and shown on the Tactics screen exactly as before - assigning
-    // them is flavor/roleplay now, not a performance decision.
+    // are still stored and shown on the Tactics screen exactly as before.
     public class ManagerSquadRoles
     {
         public PlayerAgent Captain;

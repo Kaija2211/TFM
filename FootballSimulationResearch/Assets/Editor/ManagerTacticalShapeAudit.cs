@@ -13,6 +13,8 @@ public static class ManagerTacticalShapeAudit
         AuditMirroring();
         AuditSliderSensitivity();
         AuditWideOverload();
+        AuditPlayerInstructions();
+        AuditReadableInsight();
         Debug.Log("Tactical shape sensitivity audit passed.");
     }
 
@@ -65,6 +67,38 @@ public static class ManagerTacticalShapeAudit
             "FourThreeThree", Formation.FourThreeThree, new ManagerTacticalSliders { Width = WidthSetting.Wide },
             "ThreeFourThree", Formation.ThreeFourThree, null);
         Require(matchup.HomeAttack.Cross > 1f, "4-3-3 wide pairing did not create a positive crossing route against 3-4-3");
+    }
+
+    private static void AuditPlayerInstructions()
+    {
+        AgentTeam team = BuildTeam("A", Formation.FourThreeThree);
+        ManagerSquadRoles roles = new();
+        ManagerTacticalShape.Matchup balanced = ManagerTacticalShape.BuildMatchup(
+            "A", team.Formation, null, "B", Formation.FourFourTwo, null, team, roles);
+        roles.SetRole(team.StartingEleven[9], AttackDefendRole.Attacking);
+        roles.SetRole(team.StartingEleven[10], AttackDefendRole.Attacking);
+        ManagerTacticalShape.Matchup instructed = ManagerTacticalShape.BuildMatchup(
+            "A", team.Formation, null, "B", Formation.FourFourTwo, null, team, roles);
+        Require(instructed.HomeAttack.Cross > balanced.HomeAttack.Cross ||
+            instructed.HomeAttack.Dribble > balanced.HomeAttack.Dribble,
+            "attacking wide-player instructions did not alter an attacking route");
+    }
+
+    private static void AuditReadableInsight()
+    {
+        ManagerTacticalShape.Matchup matchup = ManagerTacticalShape.BuildMatchup(
+            "A", Formation.FourThreeThree, new ManagerTacticalSliders { Width = WidthSetting.Wide },
+            "B", Formation.ThreeFourThree, null);
+        string insight = ManagerTacticalShape.DescribeForTeam(matchup, "A");
+        Require(insight.Contains("EDGE:") && insight.Contains("RISK:"), "matchup insight omitted edge or risk");
+    }
+
+    private static AgentTeam BuildTeam(string name, Formation formation)
+    {
+        AgentTeam team = new(name, formation);
+        for (int index = 0; index < TacticsBoardLayout.GetPins(formation).Count; index++)
+            team.AddStarter(new PlayerAgent($"Player {index}", PlayerRole.Midfielder, PlayerPosition.CM));
+        return team;
     }
 
     private static bool Approximately(float a, float b) => Mathf.Abs(a - b) < 0.0001f;

@@ -7949,7 +7949,9 @@ namespace Manager
 
             matchSimulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
                 homeTeamAgent.TeamName, homeTeamAgent.Formation, homeTeamAgent.TeamName == managedTeamName ? tacticalSliders : null,
-                awayTeamAgent.TeamName, awayTeamAgent.Formation, awayTeamAgent.TeamName == managedTeamName ? tacticalSliders : null);
+                awayTeamAgent.TeamName, awayTeamAgent.Formation, awayTeamAgent.TeamName == managedTeamName ? tacticalSliders : null,
+                homeTeamAgent, homeTeamAgent.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null,
+                awayTeamAgent, awayTeamAgent.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null);
 
             AgentMatchSimulator.AgentMatchResult tail = matchSimulator.SimulateFromMinute(
                 adjustedHome,
@@ -9503,9 +9505,9 @@ namespace Manager
             subtitleRect.anchorMin = new Vector2(0f, 1f);
             subtitleRect.anchorMax = new Vector2(1f, 1f);
             subtitleRect.pivot = new Vector2(0f, 1f);
-            subtitleRect.sizeDelta = new Vector2(-120f, 20f);
-            subtitleRect.anchoredPosition = new Vector2(60f, -58f);
-            ManagerUITheme.BuildLabel(subtitleObj.transform, "", 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            subtitleRect.sizeDelta = new Vector2(-120f, 34f);
+            subtitleRect.anchoredPosition = new Vector2(60f, -52f);
+            ManagerUITheme.BuildLabel(subtitleObj.transform, "", 12, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
             matchdayPrepSubtitleLabel = subtitleObj;
 
             ManagerUITheme.BuildAccentBand(matchdayPrepContentContainer, topBand: false, height: bandHeight);
@@ -9614,6 +9616,12 @@ namespace Manager
             bool managedIsHome = currentFixture.HomeTeam == managedTeamName;
             string opponentName = managedIsHome ? currentFixture.AwayTeam : currentFixture.HomeTeam;
             AgentTeam opponentTeam = GetOrCreateAgentTeam(opponentName);
+            AgentTeam managedTeam = GetOrCreateAgentTeam(managedTeamName);
+            ManagerTacticalShape.Matchup tacticalRead = managedIsHome
+                ? ManagerTacticalShape.BuildMatchup(managedTeamName, managedTeam.Formation, tacticalSliders,
+                    opponentName, opponentTeam.Formation, null, managedTeam, GetOrCreateSquadRoles(managedTeamName), opponentTeam, null)
+                : ManagerTacticalShape.BuildMatchup(opponentName, opponentTeam.Formation, null,
+                    managedTeamName, managedTeam.Formation, tacticalSliders, opponentTeam, null, managedTeam, GetOrCreateSquadRoles(managedTeamName));
 
             if (matchdayPrepTitleLabel != null)
             {
@@ -9631,7 +9639,8 @@ namespace Manager
                 TextMeshProUGUI subtitleTMP = matchdayPrepSubtitleLabel.GetComponentInChildren<TextMeshProUGUI>();
                 if (subtitleTMP != null)
                 {
-                    subtitleTMP.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {TacticsBoardLayout.FormatFormation(opponentTeam.Formation)}";
+                    subtitleTMP.text = $"Matchday {currentFixture.Matchday}   ·   Opponent Formation: {TacticsBoardLayout.FormatFormation(opponentTeam.Formation)}\n" +
+                        ManagerTacticalShape.DescribeForTeam(tacticalRead, managedTeamName);
                 }
             }
 
@@ -11338,8 +11347,7 @@ namespace Manager
                 ManagerMentalityModifier.Apply(selectedMentality, ref expectedAwayGoals, ref expectedHomeGoals);
             }
 
-            // Session 16 - squad roles (captain/vice/penalty/FK/corner takers) are
-            // cosmetic-only now (Thomas's explicit scope call), so neither the captaincy
+            // Captain/vice/set-piece assignments remain organizational, so neither the captaincy
             // expected-goals modifier nor the corner-taker name wiring runs anymore.
             // ManagerCaptaincyModifier/CornerTakerNamesByTeamName are left in place
             // (unused) rather than deleted, in case this gets revisited later.
@@ -11350,7 +11358,9 @@ namespace Manager
             matchSimulator.ManagedTeamTacticalSliders = tacticalSliders;
             matchSimulator.TacticalShapeMatchup = ManagerTacticalShape.BuildMatchup(
                 homeTeam.TeamName, homeTeam.Formation, homeTeam.TeamName == managedTeamName ? tacticalSliders : null,
-                awayTeam.TeamName, awayTeam.Formation, awayTeam.TeamName == managedTeamName ? tacticalSliders : null);
+                awayTeam.TeamName, awayTeam.Formation, awayTeam.TeamName == managedTeamName ? tacticalSliders : null,
+                homeTeam, homeTeam.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null,
+                awayTeam, awayTeam.TeamName == managedTeamName ? GetOrCreateSquadRoles(managedTeamName) : null);
 
             // Fresh match, fresh substitution clock - see AgentMatchSimulator.
             // ClearSubstitutions' own comment. SimulateFixture runs exactly once per

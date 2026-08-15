@@ -47,10 +47,12 @@ namespace Manager
         private const float MaximumRouteMultiplier = 1.18f;
 
         public static Matchup BuildMatchup(string homeTeamName, Formation homeFormation, ManagerTacticalSliders homeTactics,
-            string awayTeamName, Formation awayFormation, ManagerTacticalSliders awayTactics)
+            string awayTeamName, Formation awayFormation, ManagerTacticalSliders awayTactics,
+            AgentTeam homeTeam = null, ManagerSquadRoles homeRoles = null,
+            AgentTeam awayTeam = null, ManagerSquadRoles awayRoles = null)
         {
-            ShapeProfile home = BuildProfile(homeFormation, homeTactics);
-            ShapeProfile away = BuildProfile(awayFormation, awayTactics);
+            ShapeProfile home = BuildProfile(homeFormation, homeTactics, homeTeam, homeRoles);
+            ShapeProfile away = BuildProfile(awayFormation, awayTactics, awayTeam, awayRoles);
             return new Matchup
             {
                 HomeTeamName = homeTeamName,
@@ -60,7 +62,39 @@ namespace Manager
             };
         }
 
-        private static ShapeProfile BuildProfile(Formation formation, ManagerTacticalSliders tactics)
+        public static string DescribeForTeam(Matchup matchup, string teamName)
+        {
+            if (matchup == null) return "No tactical read available";
+            RouteEffect own = matchup.GetAttackEffect(teamName);
+            string opponentName = teamName == matchup.HomeTeamName ? matchup.AwayTeamName : matchup.HomeTeamName;
+            RouteEffect opponent = matchup.GetAttackEffect(opponentName);
+            if (own == null || opponent == null) return "No tactical read available";
+
+            (string name, float value) edge = StrongestRoute(own);
+            (string name, float value) risk = StrongestRoute(opponent);
+            string edgeText = edge.value >= 1.015f ? $"EDGE: {edge.name}" : "EDGE: EVEN SHAPE";
+            string riskText = risk.value >= 1.015f ? $"RISK: {risk.name}" : "RISK: NO CLEAR ROUTE";
+            return $"{edgeText}   ·   {riskText}";
+        }
+
+        private static (string, float) StrongestRoute(RouteEffect effect)
+        {
+            (string name, float value) best = ("THROUGH BALLS", effect.ThroughBall);
+            (string, float)[] routes =
+            {
+                ("CROSSES", effect.Cross), ("DRIBBLES", effect.Dribble),
+                ("LONG SHOTS", effect.LongShot), ("SET PIECES", effect.SetPiece),
+                ("COUNTERS", effect.CounterAttack)
+            };
+            foreach ((string name, float value) route in routes)
+            {
+                if (route.value > best.value) best = route;
+            }
+            return best;
+        }
+
+        private static ShapeProfile BuildProfile(Formation formation, ManagerTacticalSliders tactics,
+            AgentTeam team, ManagerSquadRoles roles)
         {
             tactics ??= new ManagerTacticalSliders();
             IReadOnlyList<Vector2> pins = TacticsBoardLayout.GetPins(formation);
@@ -72,6 +106,13 @@ namespace Manager
             {
                 float x = ApplyWidth(pins[index].x, tactics.Width);
                 float y = ApplyDefensiveDepth(pins[index].y, tactics.DefensiveDepth);
+                if (team != null && roles != null && index < team.StartingEleven.Count)
+                {
+                    AttackDefendRole instruction = roles.GetRole(team.StartingEleven[index]);
+                    if (instruction == AttackDefendRole.Attacking) y -= 0.035f;
+                    else if (instruction == AttackDefendRole.Defensive) y += 0.035f;
+                    y = Mathf.Clamp01(y);
+                }
                 float[] channels = GetChannelWeights(x);
                 float attackingWeight = Mathf.Lerp(0.35f, 1.20f, 1f - y);
                 float defensiveWeight = Mathf.Lerp(0.35f, 1.20f, y);

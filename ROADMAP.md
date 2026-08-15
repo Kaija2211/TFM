@@ -43,8 +43,8 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 - [x] Model initial pitch-zone occupancy, width and line-height transforms.
 - [x] Model bounded wing/central overload routes, transition space and defensive coverage.
 - [x] Make formation-versus-formation route interactions emerge from occupied zones.
-- Make player roles and tactical sliders interact with relevant attributes.
-- Explain tactical advantages and vulnerabilities clearly to the manager.
+- [x] Make per-player attack/defend instructions alter bounded tactical occupancy while route success uses relevant attributes.
+- [x] Explain the clearest tactical route advantage and vulnerability on Matchday Prep.
 - Add opponent-aware AI tactical adaptation.
 - [x] Require tactical-sensitivity and holy-balance audits for the first interaction slice.
 
