@@ -1,6 +1,6 @@
 # TFM Development Backlog
 
-Last reviewed: 2026-08-14
+Last reviewed: 2026-08-15
 
 This is the current post-v0.1 game-development backlog. It replaces scattered memory-only lists as the primary place to record unfinished work. Items should move to `DEVLOG.md` when completed rather than remaining here indefinitely.
 
@@ -111,6 +111,30 @@ Planning must cover at least:
 - save migration and deterministic multi-season market tests covering prices, squad health, transfer volume, positional demand, player movement, and financial inflation.
 
 Recommended delivery slices: searchable database and filters; scouting/knowledge and shortlist; availability and negotiation; transfer windows/contracts/loans; AI market participation; then long-career balancing.
+
+### Epic — Unified senior and youth scouting department
+
+- [ ] **Replace instant senior knowledge and the fixed two-youth-scout abstraction with a real scouting department.** Senior recruitment currently has no meaningful knowledge-gathering loop, while youth discovery assumes exactly two permanent scouts regardless of club, staff, reputation or budget. Build one coherent assignment system serving senior recruitment and youth discovery without turning scouting into repetitive busywork.
+
+Planning must cover at least:
+
+- a variable number of scouts determined by club resources, reputation, facilities, staff budget and later manager/staff decisions—not a universal fixed two;
+- scout identities with relevant strengths such as judging current ability, judging potential, tactical-profile recognition, region/country knowledge, adaptability, speed and youth specialism;
+- separate senior-player, youth-prospect, club/opposition and regional assignments using shared staff capacity;
+- specific recruitment briefs combining position/role, age, ability/potential floor, physical profile, preferred foot, height, value/wage range, availability and tactical needs;
+- profile instructions such as fast direct winger, high-crossing wing-back, aerial target forward, ball-playing centre-back, pressing midfielder or sweeper keeper, derived from real attributes rather than decorative tags;
+- manager-created templates tied to the active tactical vision, plus an automatic “find improvements for this tactic/squad weakness” brief;
+- gradual report knowledge: public identity/position facts first, then estimated ability/value/personality and finally higher-confidence attributes/potential as scouting continues;
+- uncertainty and scout disagreement without repeatedly rerolling the same report on every UI refresh;
+- country/competition knowledge, travel time, assignment duration, report cadence and diminishing returns from overlapping scouts;
+- discoverability of generated players without exposing the whole world database for free;
+- youth batches, academy intake and poaching deadlines integrated with the same calendar and staff capacity;
+- shortlists, follow-up scouting, recruitment meetings and Inbox delivery without flooding the player;
+- AI clubs using the same underlying briefs and knowledge rules when identifying targets;
+- wages/contracts or a simplified staff-budget model, hiring/releasing scouts and delegation options;
+- save persistence and deterministic audits covering assignment completion, report quality, scout workload, regional coverage, wonderkid discovery rate and senior-target relevance.
+
+Recommended delivery slices: knowledge model and senior assignments; variable scout department; tactical/profile briefs; youth integration; AI use; staff hiring/budgets and long-career tuning.
 
 ### Epic — Player-derived club strength and world generation
 
