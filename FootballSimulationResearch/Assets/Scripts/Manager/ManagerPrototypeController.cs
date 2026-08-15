@@ -465,6 +465,8 @@ namespace Manager
 
         private void Start()
         {
+            PurgeOrphanedRuntimePanels();
+
             weakFootStarSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/star-filled");
             footballIconSpriteAsset = Resources.Load<TMP_SpriteAsset>("Manager/football-icon");
             tfmLogoSprite = Resources.Load<Sprite>("Manager/tfm-logo");
@@ -553,6 +555,32 @@ namespace Manager
             }
 
             ShowSplashScreen();
+        }
+
+        // Code-built screens are intentionally not serialized. If Play Mode is stopped
+        // during an unusual Editor transition, however, an unsaved runtime panel can be
+        // left under the Canvas while this component's non-serialized reference resets
+        // to null. On the next run that orphan has no owner to hide it and can cover the
+        // splash/title while intercepting every click. Remove only our known generated
+        // panel names, and only direct siblings of the Inspector-authored title panel.
+        private void PurgeOrphanedRuntimePanels()
+        {
+            Transform canvasRoot = titlePanel != null ? titlePanel.transform.parent : transform.parent;
+            if (canvasRoot == null) return;
+
+            HashSet<string> generatedPanelNames = new()
+            {
+                "SplashPanel", "SettingsPanel", "EndOfSeasonPanel", "TacticsBoardPanel",
+                "TacticsScreenPanel", "SquadBrowsePanel", "ScoutingPanel", "TransferMarketPanel",
+                "InboxPanel", "TrophyRoomPanel", "SaveBrowserPanel", "HalfTimePanel",
+                "ConfirmDialogPanel", "BidDialogPanel", "MatchEventsPanel"
+            };
+
+            for (int index = canvasRoot.childCount - 1; index >= 0; index--)
+            {
+                GameObject child = canvasRoot.GetChild(index).gameObject;
+                if (generatedPanelNames.Contains(child.name)) DestroyImmediate(child);
+            }
         }
 
         // Recolors the already-placed Hub buttons/text to the reskinned palette using the
