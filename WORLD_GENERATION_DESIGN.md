@@ -59,6 +59,30 @@ Fresh Manager Mode careers use profile-based generation and record that choice i
 save schema v2. Older saves deserialize the missing flag as false and retain the
 legacy strength-based generation route. Research Mode remains unchanged.
 
+## Generated player identity
+
+The locally cloned `popular-names-by-country-dataset` is an approved future input for
+country-aware generated names. It is CC0 and provides romanised/localised forenames,
+gender, country, surname rank and frequency where available. The source currently has
+2,480 forename rows across 106 countries and 2,576 surname rows across 75 countries.
+
+It must not be treated as complete on its own. Some covered countries have only ten
+male forenames, surname coverage is narrower than forename coverage, and important
+football countries or talent regions are absent (including Sweden and several West
+African countries). Integration therefore requires:
+
+- an ISO country-code mapping shared with club and nationality data;
+- male-name filtering for the current men's competition scope;
+- weighted sampling when trustworthy rank/count data exists;
+- duplicate-name suppression within each generated club and sensible world-level caps;
+- Unicode-safe storage plus a deliberate localised-versus-romanised display policy;
+- a coverage audit and explicit fallback pools for every generated nationality;
+- bundled source attribution even though CC0 does not require it.
+
+The source repository remains external. When identity generation is implemented, a
+deterministic import step should produce a small, validated runtime asset rather than
+making Unity parse or depend directly on the cloned repository.
+
 ## Holy balance gates
 
 Major changes must check at least:
