@@ -1,6 +1,6 @@
 # TFM Development Roadmap
 
-Last updated: 2026-08-14
+Last updated: 2026-08-15
 
 This is the ordered post-v0.1 roadmap following completion of the day-by-day career calendar, 30-player club squads, generated-player transfer search, and initial transfer-availability system. `BACKLOG.md` remains the detailed issue register; this document records the intended delivery sequence.
 
@@ -19,21 +19,22 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 
 ## 2. Matchday squad management
 
-- Select the starting XI and nine-player matchday bench separately.
-- Move players between the matchday bench and wider reserves.
-- Make auto-pick consider Condition, injuries, quality and position fit.
+- [x] Select the starting XI and nine-player matchday bench separately.
+- [x] Move players between the matchday bench and wider reserves.
+- [x] Make auto-pick consider Condition, injuries, quality and position fit.
 - Automate captain, set-piece and role reassignment when necessary.
 - Make AI clubs select and rotate coherent matchday squads.
 - Model fixture congestion and recovery using actual calendar dates.
 
 ## 3. Match and tactics bug pass
 
-- Make in-match tactical edits reversible drafts until Resume is pressed.
-- Restore the pre-match setup after temporary in-match changes.
+- [x] Make in-match tactical edits reversible drafts until Resume is pressed.
+- [x] Restore the pre-match setup after temporary in-match changes.
 - Save the complete tactical setup.
-- Add the half-time statistics, Make Changes and Resume checkpoint.
-- Decide and enforce the five-substitution rule.
-- Fix stale fixture banners, event/result mismatches and scorer/provider duplication.
+- [x] Add the half-time statistics, Make Changes and Resume checkpoint.
+- [x] Decide and enforce the five-substitution rule.
+- [x] Bind fixture banners, results and Match Events to one active-match snapshot and validate score/event consistency.
+- [x] Prevent scorer/provider duplication in the manager match simulator by excluding the creator from shooter selection.
 - Relocate the substitutions panel and Make Changes button.
 - Improve tactical-board stamina colours and match-screen team-name sizing.
 
@@ -115,10 +116,9 @@ Leading pillars:
 
 ## Immediate continuation order
 
-1. Contracts, player interest and richer transfer negotiations.
-2. Proper matchday-squad selection.
-3. Substitution/tactics persistence fixes and half-time.
-4. Tactical-zone and formation-interaction design.
-5. AI squad evaluation and recruitment.
-6. TFM identity and manager-skill-system design session.
-7. Wider football-pyramid activation.
+1. Verify complete tactical save/load persistence.
+2. Build the tactical-zone and formation-interaction model.
+3. Add AI squad evaluation, rotation and recruitment.
+4. Add contracts, player interest and richer transfer negotiations.
+5. Hold the TFM identity and manager-skill-system design session.
+6. Activate the wider football pyramid.
