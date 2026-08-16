@@ -13,9 +13,9 @@ Priority labels:
 
 ## Current priority snapshot
 
-No known save-corruption or match-result P0 remains after the August 15 Sunderland regression pass. AI clubs now get real Condition/injury-aware matchday rotation and a positional depth/need evaluator (August 16); the next ordered work is:
+No known save-corruption or match-result P0 remains after the August 15 Sunderland regression pass. AI clubs now get real Condition/injury-aware matchday rotation, a positional depth/need evaluator and a read-only transfer-target search (August 16); the next ordered work is:
 
-1. AI need identification, target search and actual recruitment/replacement — the next slice of the same Intelligent AI Clubs epic, consuming `ManagerAiSquadDepthEvaluator`'s output.
+1. An AI-club finance/budget foundation, then actual recruitment (bids, contracts, squad changes) — AI clubs have no budget tracking at all today, so `ManagerAiTransferTargetSearch`'s targets can't yet be acted on.
 2. Structured match events and position-specific performance ratings, preserving the current holy-balance benchmark.
 3. Long-career squad-health safeguards (hoarding, churn, collapse).
 4. Contracts, player interest, shortlists and richer negotiations.
@@ -178,14 +178,16 @@ First slice shipped 2026-08-16: `ManagerAiSquadRotation` gives every AI club rea
 
 Second slice, same day: `ManagerAiSquadDepthEvaluator` scores each of a club's own formation-relevant positions (deliberately not all 14 canonical positions - some formations never field a wing-back slot, and judging every club against every position regardless of its own formation made an under-modelled, formation-irrelevant position dominate every club's "weakest position" result, caught by the evaluator's own statistical audit before shipping) on three explainable, independently-inspectable terms: missing-cover count, the best available option's quality against the club's own Starting-XI average (not the whole 30-man pool - bench/reserves are deliberately generated weaker, so comparing against the whole squad's average made the quality signal almost always zero, a second bug caught by the same audit), and a succession/age-cliff flag (best option 31+ with no comparable-quality backup). The resulting "weakest position" signal is real but genuinely small at the generated Premier League's compressed quality band (matches BACKLOG's own documented "not a gulf that makes most of the division noncompetitive" design intent) - the audit uses a large sample (400 squads) specifically because the top-tier-vs-bottom-tier effect size needed a stable measurement, not a knife-edge single-seed pass. Pure analysis, no side effects, not yet wired to any transfer/recruitment action.
 
-Transfer targeting, contracts, tactical adaptation and club personalities remain.
+Third slice, same day: `ManagerAiTransferTargetSearch` finds and ranks genuine upgrades for a club's weakest position (fed directly from `ManagerAiSquadDepthEvaluator`'s output) across every other generated club's squad - position fit (>=0.80, the same tier the rest of squad selection treats as usable), a hard "must actually be better than the current best option" filter (never recommends a lateral move or downgrade), and an age-aware suitability score favouring players with more prime years left at equal quality. Deliberately read-only: no budget check, no transaction, because **AI clubs have no finance/budget tracking of any kind today** - only the managed team's budget is ever spent or displayed (`ManagerPrototypeController.HubAndSeason.cs`'s `DeductManagedTeamWageBill`). Actually signing a target needs that foundation built first.
+
+Contracts, tactical adaptation and club personalities remain.
 
 Planning must cover at least:
 
 - [x] squad selection and rotation using ability, position fit, and Condition/injuries — first slice above. Form, suspensions, fixture congestion and development value remain (no suspension system, secondary competition calendar or AI player development exists yet);
 - tactical identity, opponent-aware formation/tactical adjustments, and sensible in-match substitutions;
 - [x] squad-depth analysis by role/position — second slice above (`ManagerAiSquadDepthEvaluator`). Versatile-player credit beyond the existing fit-tier adjacency and youth-readiness (promotion pipeline awareness) remain;
-- transfer target identification based on actual weaknesses, budget, age profile, potential, value, wages, and club stature;
+- [x] transfer target identification based on actual weaknesses and age profile — third slice above (`ManagerAiTransferTargetSearch`). Budget, value, wages and club stature all require the not-yet-built AI finance foundation;
 - rational bid, sale, loan, contract, and replacement decisions, including refusing structurally damaging sales;
 - planned succession for aging/declining players and goalkeepers;
 - youth promotion, loans, development minutes, and disposal of players who have no pathway;

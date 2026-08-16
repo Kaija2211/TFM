@@ -30,6 +30,22 @@ Working tree not yet committed (three batches today: AI rotation, Liverpool play
 
 ---
 
+## 2026-08-16 — AI transfer target search
+
+**Goal**
+Third slice of the Intelligent AI Clubs epic, same day as the depth evaluator: "Identify needs and search for tactically appropriate targets" (ROADMAP item 6). Consumes `ManagerAiSquadDepthEvaluator`'s weakest-position output directly.
+
+**What shipped**
+`ManagerAiTransferTargetSearch` (new plain C# service): given a needed position and a club's current best Overall there, searches a supplied pool of other clubs' full squads for genuine upgrades - position fit >=0.80 (the same "adjacent or better" tier the rest of squad selection treats as usable), a hard filter requiring the candidate to actually beat the club's current best (never recommends a lateral move or a downgrade), and an age-aware suitability score that prefers more prime years left at equal quality without letting age override a real quality gap. Deliberately read-only: no budget check, no transfer, no finance interaction at all. Confirmed via investigation while scoping this slice that **AI clubs have no finance/budget tracking of any kind today** - only the managed team's budget is ever spent or displayed. Actually signing a target is separate future work that needs that foundation built first, and deliberately doesn't touch the human's own transfer market or squad.
+
+**Verification**
+New `ManagerAiTransferTargetSearchAudit`: unit tests for upgrade-only filtering (a clearly-better, clearly-worse and exactly-equal candidate in the same pool - only the better one comes back), position-fit hard-filtering (a 95-rated striker never gets recommended as a centre-back target, however good), and age-aware ranking (two identical-Overall candidates, the younger one ranks first with a strictly higher score) - plus an integration pass wiring the depth evaluator's real output straight into the target search across all 20 generated Premier League clubs searching each other's full squads (19/20 clubs found at least one genuine upgrade for their weakest position; every returned target verified as an actual fit-and-quality improvement, no NaNs). All 9 audits (the existing eight plus this new one) pass with no regressions - first try on this one, no bugs caught this time, likely because the depth-evaluator work immediately beforehand had already worked out the sharp edges (formation-scoped positions, XI-average quality baseline) that this service reuses via its caller contract rather than re-deriving.
+
+**State at session end**
+Working tree not yet committed (today's fourth batch, after AI rotation, the Liverpool playtest fixes, and the depth evaluator - the first of those four is already committed). `ROADMAP.md`/`BACKLOG.md`/`MANAGER_CONTROLLER_ARCHITECTURE.md` updated. Next real step for this epic is building AI-club finance/budget tracking - without it, `ManagerAiTransferTargetSearch`'s output has nothing to act on.
+
+---
+
 ## 2026-08-16 — Liverpool playtest repair cycle
 
 **Goal**

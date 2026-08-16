@@ -4,7 +4,7 @@
 
 - Active branch: `main`.
 - The former MSc restrictions are retired; this is now the unrestricted game-development line.
-- The working tree contains three batches from today (AI squad rotation, a Liverpool-playtest repair cycle, an AI squad depth/need evaluator) and is intentionally uncommitted pending Thomas's instruction.
+- Four batches shipped today: AI squad rotation (committed separately by Thomas via GitHub Desktop as `3ed9046`), a Liverpool-playtest repair cycle, an AI squad depth/need evaluator, and an AI transfer target search. The latter three are still uncommitted, pending Thomas's instruction.
 - Unity may update `ProjectSettings/ProjectAuditorSettings.asset` when audits run; preserve it as user/Editor state unless deliberately changing auditor settings.
 
 ## Verified current baseline
@@ -17,22 +17,24 @@
 - Live senior/academy development, visible season deltas, independent youth scouts and varied report uncertainty.
 - Every AI-controlled club now has real Condition decay/recovery and injury risk (`ManagerMatchdayCondition`), and rotates its matchday XI for it (`ManagerAiSquadRotation`) - previously every AI club fielded the exact same static XI/bench forever with zero fitness awareness. The managed team's own Auto-Pick button was refactored onto a shared service (`ManagerSquadAutoPicker`) in the same pass, with no behavior change.
 - The game now saves on quit (not just via the Hub's "Exit to Title" button), the Academy sort/duplicate-list bug is fixed, Inbox/Save Browser reset scroll position on open, the Hub's Inbox button visibly highlights when unread, scouting-discovery Inbox messages are batched instead of one-per-prospect, and season-2 transfer bids give clear in-dialog failure feedback (plus an Inbox message when the annual wage bill is deducted).
-- **New this session:** `ManagerAiSquadDepthEvaluator` scores every AI club's own formation-relevant positions on missing-cover count, quality-vs-own-Starting-XI-average, and succession/age-cliff risk, identifying each club's weakest position. Pure analysis, not yet wired to any transfer/recruitment action - the foundation the next slice (need identification/target search) builds on.
+- `ManagerAiSquadDepthEvaluator` scores every AI club's own formation-relevant positions on missing-cover count, quality-vs-own-Starting-XI-average, and succession/age-cliff risk, identifying each club's weakest position.
+- **New this session:** `ManagerAiTransferTargetSearch` finds and ranks genuine upgrades (position fit, quality improvement, age-aware suitability) for a club's weakest position across the wider generated world, fed directly by the depth evaluator above. Read-only - no budget check, no transaction, since AI clubs have no finance/budget tracking of any kind yet.
 
 ## Verification status
 
 - `Assembly-CSharp` and `Assembly-CSharp-Editor`: compile with zero errors.
 - Existing runtime warnings only: unassigned `SimulationRunner.Config.token`; nullable `FootballClubRegistry.FoundedYear` skipped by Unity serialization.
-- Unity audits passed (8 total): Manager Career Systems, Leadership Distribution, World Generation Profile, Player Derived Strength, Tactical Shape, Manager Holy Balance (unchanged 2.55–2.95 band), AI Squad Rotation, and the new **AI Squad Depth Evaluator**.
+- Unity audits passed (9 total): Manager Career Systems, Leadership Distribution, World Generation Profile, Player Derived Strength, Tactical Shape, Manager Holy Balance (unchanged 2.55–2.95 band), AI Squad Rotation, AI Squad Depth Evaluator, and the new **AI Transfer Target Search**.
 - **Important, carried over from earlier today:** giving AI clubs genuine fatigue for the first time intentionally moves the *with-AI-rotation* goals/game figure down to roughly 2.3–2.5 (guarded at 2.15–2.60). The real shipped game's observed goals/game will now sit noticeably lower than the historic ~2.7–2.9 reference — see `PROJECT_CONTEXT_FOR_AI.md` §12 and DEVLOG.
-- **New:** the depth evaluator's "weakest position" signal is real but genuinely small at the generated Premier League's compressed quality band (matches the world-generation design's own intentional "not a gulf that makes most of the division noncompetitive" philosophy) - its statistical audit uses 400 samples specifically because the effect size needed a large, stable measurement rather than a knife-edge single-seed pass. Two real formula bugs (formation-irrelevant positions like RWB/LWB dominating as noise; comparing against the whole 30-man squad's average instead of the Starting XI's) were caught and fixed via this same audit before shipping - see DEVLOG.
-- Live in-Editor verification (playtest-fix batch): full click-through New Career → Liverpool → Hub → Scouting/Academy tab → repeated sort clicks (row count confirmed stable across a real frame boundary) → Inbox (unread badge colour confirmed) → Transfers screen. The depth evaluator itself is pure analysis with no UI wiring yet, so it was verified via its audit only, not a live playthrough.
+- The depth evaluator's "weakest position" signal is real but genuinely small at the generated Premier League's compressed quality band (intentional world-generation design, not a bug) - its audit uses 400 samples for a stable measurement. Two real formula bugs were caught and fixed in that work before shipping - see DEVLOG's first 2026-08-16 depth-evaluator entry.
+- The target search integration audit found 19/20 generated clubs had at least one genuine upgrade target available for their weakest position across the full 20-club world, with every returned target independently verified as an actual fit-and-quality improvement.
+- Live in-Editor verification (playtest-fix batch only): full click-through New Career → Liverpool → Hub → Scouting/Academy tab → repeated sort clicks (row count confirmed stable across a real frame boundary) → Inbox (unread badge colour confirmed) → Transfers screen. Both AI-club analysis services (depth evaluator, target search) are pure analysis with no UI wiring yet, so they were verified via their audits only.
 - A `TMP_SubMeshUI.UpdateMaterial` NullReferenceException recurred in a second, unrelated screen (Scouting, after first appearing in End-of-Season) during this session's rapid headless automation — same signature both times, both only via automated testing, not normal play; reads as a testing-harness timing artifact, flagged in BACKLOG rather than chased further this session.
 - Latest manual test (from Thomas): Sunderland career through November; no recurrence of stale fixture/result state. Record of 1W–1D–6L is evidence to monitor, not yet a balance defect.
 
 ## Immediate next sequence
 
-1. AI need identification and target search — the next slice of the Intelligent AI Clubs epic, consuming `ManagerAiSquadDepthEvaluator`'s weakest-position output. Actual recruitment (bids, budget checks, contracts) follows once targeting exists.
+1. **AI-club finance/budget foundation.** No AI club has any budget tracking today (only the managed team's is ever spent or displayed) - this blocks `ManagerAiTransferTargetSearch`'s output from being acted on and is the real prerequisite for actual AI recruitment (bids, contracts, squad changes).
 2. Structured match-event and position-specific performance-model design, retaining the current simulator as the holy-balance benchmark.
 3. Long-career squad-health safeguards (hoarding, churn, collapse).
 4. Contracts, player interest, shortlists and richer negotiations.
