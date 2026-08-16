@@ -7,6 +7,32 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-16 — AI transfer executor (transaction layer)
+
+**Goal**
+Fifth slice of the Intelligent AI Clubs epic, same day as the finance foundation: turn the season's earlier analytical work (depth evaluator, target search) and financial groundwork (budgets, wage bills) into the first AI-club action that actually completes a transfer. Before this, every AI-club service in the epic was read-only.
+
+**Three design decisions made under explicit trust ("Sure. I trust your decision making.")**
+- **AI-to-AI only.** The managed team is never a buyer, seller or target this slice - AI clubs can't yet compete with the human for a player. Whether they ever should is flagged as a real future design question, not answered silently here.
+- **A dedicated executor, not a reuse of `ManagerTransferNegotiation`.** The human's negotiation flow models depth-based accept/decline, escrow and a scout gate for a single human-initiated bid; AI-to-AI needs a symmetric, both-sides-computer-controlled decision (can afford it, is the seller left with cover) with no UI, dialog state or escrow concept at all. Sharing the class would have meant threading a "no human involved" flag through machinery built for the opposite case.
+- **Once per season rollover, not a daily/window-respecting cadence.** Matches the wage bill's own cadence already shipped this slice's prerequisite; a market that only ever moves at rollover is a deliberately simple first pass, with daily-tick realism flagged as a named future refinement rather than attempted here.
+
+**What shipped**
+`ManagerAiTransferExecutor` (new plain C# service): each AI club gets one attempt per season rollover. It reuses `ManagerAiSquadDepthEvaluator`'s own NeedScore for its weakest position as the "is this worth shopping for" gate, then walks `ManagerAiTransferTargetSearch`'s ranked target list until it finds one that's both affordable (`ManagerClubFinance.GetMarketValue`) and safe to sell (the selling club must retain at least one other adequately-fit - fit >=0.80 - player at that position afterward). Deliberately only ever sells bench/reserve depth, never a current starter: `AgentTeam.RemovePlayer` shrinks `StartingEleven` in place, and selling a starter would break the formation-slot index alignment `ChangeFormation`/`ManagerAiSquadRotation` both rely on. Wired into `ManagerPrototypeController.HubAndSeason.cs`'s `OnStartNewSeasonClicked` via a new `RunAiTransferWindow()`, right after the new wage-bill deduction and before the season table resets.
+
+**One real miscalibration caught by the audit itself, not guessed right first time**
+The shopping-need threshold started at an arbitrary round number (10). A full 20-club league pass at that value completed zero transfers - not because nothing needed fixing, but because the threshold itself was wrong. Cross-referenced against `ManagerAiSquadDepthEvaluator`'s own earlier empirical finding (real generated squads usually score NeedScore exactly 0, with only occasional small positive spikes, observed as low as ~1.28) and lowered to 0.5. Re-run: 1/20 clubs completed a transfer in the pass, matching how rarely a real generated squad actually has an actionable gap - this is the intended realistic rarity, not a bug to chase toward more activity.
+
+**Verification**
+New `ManagerAiTransferExecutorAudit`, six scenarios: no transfer fires when there's no genuine need; an affordable genuine upgrade completes end-to-end (player moves squads, both budgets adjust by the fee); an unaffordable-everywhere scenario correctly does nothing; a starter is never sold regardless of need; a sale that would leave the seller with no cover at that position is blocked; and a full 20-club league pass. All GK-based (not CB) for the "isolated weak position" trick, same lesson the depth evaluator and target search audits already learned - CB has real adjacency crossover from RB/LB/DM that quietly cushions any deliberately-weakened test scenario, GK has none. All 11 audits (ten existing plus this one) pass with no regressions.
+
+Live in-Editor verification: new Liverpool career, two consecutive "Start New Season" rollovers - both the wage-bill deduction and the new AI transfer window ran across all ~20 clubs with zero errors both times.
+
+**State at session end**
+Working tree not yet committed (today's sixth and final batch - AI rotation and the Liverpool playtest fixes are already committed by Thomas via GitHub Desktop; the depth evaluator, target search, finance foundation and this executor remain pending in one combined commit). `ROADMAP.md`/`BACKLOG.md`/`MANAGER_CONTROLLER_ARCHITECTURE.md` updated. AI clubs can now identify a need, find a target and complete a safe, affordable transfer - once per season, bench/reserve depth only, AI-to-AI only. Star-player sales, contracts, loans and a richer cadence remain the next layer of this epic.
+
+---
+
 ## 2026-08-16 — AI squad depth/need evaluator
 
 **Goal**

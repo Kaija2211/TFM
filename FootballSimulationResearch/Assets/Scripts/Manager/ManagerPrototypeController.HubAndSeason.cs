@@ -693,6 +693,7 @@ namespace Manager
             ReturnLoanedPlayersForNewSeason();
 
             DeductWageBillForAllClubs();
+            RunAiTransferWindow();
 
             playableTable.Reset();
             foreach (string teamName in availableTeamNames)
@@ -1015,6 +1016,36 @@ namespace Manager
             inbox.Add(InboxMessageType.WageBill, "Annual Wage Bill Paid",
                 $"The squad's annual wages of £{totalWage:F1}m have been deducted from the transfer budget. Remaining budget: £{finance.GetBudget(teamName):F1}m.",
                 careerCalendar.CurrentDayNumber);
+        }
+
+        // AI transaction layer (roadmap: the first AI-club work that actually
+        // completes a transfer, see ManagerAiTransferExecutor for the full reasoning).
+        // Deliberately once per club per season rollover rather than a continuous
+        // daily-window lottery - simpler, fully deterministic, and low-risk for a
+        // first slice; a real daily/window-respecting cadence is future work (see
+        // BACKLOG). Runs after DeductWageBillForAllClubs so each club is shopping
+        // with this season's post-wage budget, not last season's stale figure.
+        // AI-to-AI only - the managed team is never a buyer, seller, or target here.
+        private void RunAiTransferWindow()
+        {
+            List<string> aiTeamNames = squadsByTeamName.Keys.Where(name => name != managedTeamName).ToList();
+
+            foreach (string buyingTeamName in aiTeamNames)
+            {
+                AgentTeam buyingClub = squadsByTeamName[buyingTeamName];
+                List<AgentTeam> otherClubs = aiTeamNames
+                    .Where(name => name != buyingTeamName)
+                    .Select(name => squadsByTeamName[name])
+                    .ToList();
+
+                List<PlayerPosition> relevantPositions = squadGenerator.GetStartingPositions(buyingClub.Formation).Distinct().ToList();
+                ManagerAiTransferExecutor.TryExecuteTransfer(buyingClub, relevantPositions, otherClubs, finance);
+
+                // Result deliberately unobserved here - a completed AI-to-AI transfer
+                // is silent (no Inbox message, no UI), matching the same "the human is
+                // only told about their own club" principle already established for
+                // AI Condition/injuries and wages.
+            }
         }
 
         // --- Save / load (career-arc addition, session 8, Phase 5) - see
