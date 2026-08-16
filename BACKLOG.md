@@ -1,6 +1,6 @@
 # TFM Development Backlog
 
-Last reviewed: 2026-08-15
+Last reviewed: 2026-08-16
 
 This is the current post-v0.1 game-development backlog. It replaces scattered memory-only lists as the primary place to record unfinished work. Completed work is summarized in `DEVLOG.md`; checked regression items may remain inside a named playtest cluster temporarily so the report and its resolution stay traceable.
 
@@ -13,16 +13,16 @@ Priority labels:
 
 ## Current priority snapshot
 
-No known save-corruption or match-result P0 remains after the August 15 Sunderland regression pass. The next ordered work is:
+No known save-corruption or match-result P0 remains after the August 15 Sunderland regression pass. AI clubs now get real Condition/injury-aware matchday rotation (August 16); the next ordered work is:
 
-1. AI squad evaluation and coherent rotation across 30-player clubs.
+1. AI squad depth evaluation, need identification and recruitment/replacement — the next slice of the same Intelligent AI Clubs epic.
 2. Structured match events and position-specific performance ratings, preserving the current holy-balance benchmark.
-3. AI recruitment, replacement and long-career squad-health safeguards.
+3. Long-career squad-health safeguards (hoarding, churn, collapse).
 4. Contracts, player interest, shortlists and richer negotiations.
 5. Unified senior/youth scouting department.
 6. Narrow formations and named player roles, followed by holy-balance regression.
 
-Balance watch: Sunderland opened one manual career 1W–1D–6L. Keep collecting lower-club seasons and generated-world distributions; do not retune from that single save.
+Balance watch: Sunderland opened one manual career 1W–1D–6L. Keep collecting lower-club seasons and generated-world distributions; do not retune from that single save. Giving AI clubs genuine Condition/fatigue (they previously had none) intentionally moves goals/game below the un-rotated 2.55–2.95 holy-balance band — see `ManagerAiSquadRotationAudit`'s own 2.15–2.60 band and DEVLOG for the full reasoning; this is an understood, accepted consequence of the feature, not a regression to chase back to the old number.
 
 ## Newly reported after v0.1 testing
 
@@ -154,9 +154,11 @@ Leading reference design from Football Manager research: retain a database of re
 
 - [ ] **Make AI-controlled clubs manage themselves coherently across seasons.** Clubs should evaluate their own squad, make purposeful decisions, and adapt to events rather than acting as static player containers. This should be a transparent, deterministic decision system with club-specific priorities—not an external language model dependency.
 
+First slice shipped 2026-08-16: `ManagerAiSquadRotation` gives every AI club real Condition/injury-aware matchday selection (rests an injured or meaningfully fatigued starter for the best genuinely-better available cover, using the same fit-tier/Condition-adjusted-Overall scoring `ManagerSquadAutoPicker` gives the human's own Auto-Pick). Squad-depth evaluation, transfer targeting, contracts, tactical adaptation and club personalities remain.
+
 Planning must cover at least:
 
-- squad selection and rotation using ability, position fit, Condition, form, injuries, suspensions, fixture congestion, and development value;
+- [x] squad selection and rotation using ability, position fit, and Condition/injuries — first slice above. Form, suspensions, fixture congestion and development value remain (no suspension system, secondary competition calendar or AI player development exists yet);
 - tactical identity, opponent-aware formation/tactical adjustments, and sensible in-match substitutions;
 - squad-depth analysis by role/position, including versatile players and youth readiness;
 - transfer target identification based on actual weaknesses, budget, age profile, potential, value, wages, and club stature;

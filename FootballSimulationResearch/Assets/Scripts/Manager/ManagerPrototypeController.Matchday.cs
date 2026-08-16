@@ -1920,53 +1920,65 @@ namespace Manager
             AgentTeam homeTeam = GetOrCreateAgentTeam(fixture.HomeTeam);
             AgentTeam awayTeam = GetOrCreateAgentTeam(fixture.AwayTeam);
 
-            // Swap any still-injured starter for the best fit bench cover (or call up a
-            // reserve if the bench has none - see CallUpReservePlayer) before this match's
-            // XI is finalized. Managed team only - AI opponents have no injury tracking.
+            // Managed team: swap any still-injured starter for the best fit bench cover
+            // (or call up a reserve - see CallUpReservePlayer), preserving whatever XI
+            // the manager actually set. AI clubs: rest any injured or meaningfully
+            // fatigued starter for the best available cover (see ManagerAiSquadRotation,
+            // roadmap: "AI squad evaluation and coherent rotation") - previously an AI
+            // club's XI/bench never changed after initial squad generation, with zero
+            // awareness of Condition or injuries.
             if (fixture.HomeTeam == managedTeamName)
             {
                 EnsureNoInjuredStarters(homeTeam, fixture.HomeTeam);
             }
-            else if (fixture.AwayTeam == managedTeamName)
+            else
+            {
+                RotateAiSquad(homeTeam);
+            }
+
+            if (fixture.AwayTeam == managedTeamName)
             {
                 EnsureNoInjuredStarters(awayTeam, fixture.AwayTeam);
             }
+            else
+            {
+                RotateAiSquad(awayTeam);
+            }
 
             // Throwaway fit-adjusted clones, not the real squad data - see
-            // ManagerFormationFit. A no-op for AI teams (never touched by the user, so
-            // every starter is already a perfect fit for their slot, and conditionLookup
-            // stays null since AI teams have no Condition tracking); only matters once
-            // the managed team's XI has anyone out of position or under-conditioned.
+            // ManagerFormationFit. Now applies to every team, not just the managed one -
+            // AI clubs have real Condition tracking now (see RotateAiSquad/
+            // ApplyMatchdayConditionAndInjuries below), so a tired AI starter genuinely
+            // performs a little worse in this specific match on top of already being
+            // less likely to have been selected at all.
             // isAutoResolved (backlog item 10) - during a SIMULATE SEASON skip, lean on
             // team-strength alone rather than feeding possibly-stale, un-recoverable
             // Condition into this match's fit-adjusted strength - see
             // ApplyMatchdayConditionAndInjuries's own comment for the full reasoning.
-            Func<PlayerAgent, float> homeConditionLookup = (fixture.HomeTeam == managedTeamName && !isAutoResolved)
-                ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p))
+            Func<PlayerAgent, float> homeConditionLookup = !isAutoResolved
+                ? (p => GetOrCreateSquadRoles(fixture.HomeTeam).GetConditionMultiplier(p))
                 : null;
-            Func<PlayerAgent, float> awayConditionLookup = (fixture.AwayTeam == managedTeamName && !isAutoResolved)
-                ? (p => GetOrCreateSquadRoles(managedTeamName).GetConditionMultiplier(p))
+            Func<PlayerAgent, float> awayConditionLookup = !isAutoResolved
+                ? (p => GetOrCreateSquadRoles(fixture.AwayTeam).GetConditionMultiplier(p))
                 : null;
 
             AgentTeam fitAdjustedHomeTeam = ManagerFormationFit.BuildFitAdjustedTeam(homeTeam, squadGenerator.GetStartingPositions(homeTeam.Formation), homeConditionLookup);
             AgentTeam fitAdjustedAwayTeam = ManagerFormationFit.BuildFitAdjustedTeam(awayTeam, squadGenerator.GetStartingPositions(awayTeam.Formation), awayConditionLookup);
 
-            // Condition decay/recovery + injury rolls - managed team only (see
-            // ManagerSquadRoles). Snapshotting team.StartingEleven here, before
+            // Condition decay/recovery + injury rolls now run for every team (see
+            // ManagerSquadRoles/ManagerMatchdayCondition) - human-facing effects (Inbox
+            // messages, injuredPlayersTracked, development progression) stay gated to
+            // the managed team only. Snapshotting team.StartingEleven here, before
             // SimulateMatch/replay ever runs, captures exactly the pre-kickoff XI -
             // substitutions during replay mutate StartingEleven/Bench in place, so
             // capturing any later would blur "who actually started" with "who's on at
             // full-time." Subs who come on mid-match aren't counted as "played" for
             // fatigue purposes in this pass - a deliberate v1 simplification, not an
             // oversight (see HANDOFF).
-            if (fixture.HomeTeam == managedTeamName)
+            ApplyMatchdayConditionAndInjuries(homeTeam, isAutoResolved, applyHumanFacingEffects: fixture.HomeTeam == managedTeamName);
+            ApplyMatchdayConditionAndInjuries(awayTeam, isAutoResolved, applyHumanFacingEffects: fixture.AwayTeam == managedTeamName);
+            if (fixture.HomeTeam == managedTeamName || fixture.AwayTeam == managedTeamName)
             {
-                ApplyMatchdayConditionAndInjuries(homeTeam, isAutoResolved);
-                ApplyMatchdayAcademyProgression();
-            }
-            else if (fixture.AwayTeam == managedTeamName)
-            {
-                ApplyMatchdayConditionAndInjuries(awayTeam, isAutoResolved);
                 ApplyMatchdayAcademyProgression();
             }
 
@@ -2161,44 +2173,67 @@ namespace Manager
         // deliberately left alone too (see OnSimulateSeasonClicked's own comment on
         // why - they only ever affect development speed, never match performance, so
         // neutralizing them wouldn't touch the actual collapse symptom at all).
-        private void ApplyMatchdayConditionAndInjuries(AgentTeam team, bool isAutoResolved = false)
+        // applyHumanFacingEffects: Inbox injury messages, injuredPlayersTracked and
+        // development progression only ever apply to the managed team - the human
+        // should never be told about an AI club's injuries, and AI player development/
+        // aging is a later, not-yet-built stage of the Intelligent AI Clubs epic (see
+        // ManagerMatchdayCondition's own comment). AI clubs still get the underlying
+        // Condition decay/recovery and injury-risk roll itself, via the shared
+        // ManagerMatchdayCondition service, so their squads genuinely fatigue and pick
+        // up injuries for ManagerSquadAutoPicker to rotate around.
+        private void ApplyMatchdayConditionAndInjuries(AgentTeam team, bool isAutoResolved, bool applyHumanFacingEffects)
         {
-            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(team.TeamName);
+            Func<PlayerAgent, float> minutesPlayedLookup = applyHumanFacingEffects
+                ? (player => ComputeMinutesPlayed(player, team))
+                : (player => team.StartingEleven.Contains(player) ? 90f : 0f);
+
+            List<ManagerMatchdayCondition.InjuryEvent> newlyInjured = ManagerMatchdayCondition.ApplyPostMatch(
+                team, roles, minutesPlayedLookup, careerCalendar.CurrentDayNumber, isAutoResolved);
+
+            if (!applyHumanFacingEffects)
+            {
+                return;
+            }
+
+            foreach (ManagerMatchdayCondition.InjuryEvent injuryEvent in newlyInjured)
+            {
+                injuredPlayersTracked.Add(injuryEvent.Player);
+
+                // Playtest backlog item (session 14) - injury Inbox message. Recovery is
+                // handled separately (see ResolveMatchdayInboxTicks) since there's no
+                // single call site for "a player's return matchday just passed" - it's
+                // a threshold crossed silently by IsInjured, not a discrete event.
+                inbox.Add(InboxMessageType.Injury, $"Injury: {injuryEvent.Player.Name}",
+                    $"{injuryEvent.Player.Name} has picked up an injury and is expected to be out for approximately {injuryEvent.DurationWeeks} week{(injuryEvent.DurationWeeks == 1 ? "" : "s")}.",
+                    careerCalendar.CurrentDayNumber);
+            }
 
             List<PlayerAgent> fullSquad = new List<PlayerAgent>(team.StartingEleven);
             fullSquad.AddRange(team.Bench);
 
             foreach (PlayerAgent player in fullSquad)
             {
-                float minutesPlayed = ComputeMinutesPlayed(player, team);
-                bool played = minutesPlayed > 0f;
-                float preMatchCondition = roles.GetCondition(player);
-
-                if (!isAutoResolved)
-                {
-                    roles.ApplyPostMatchCondition(player, minutesPlayed, player.Age, player.Stamina);
-                }
-
-                if (played)
-                {
-                    roles.RecordAppearance(player);
-
-                    if (!isAutoResolved)
-                    {
-                        TryRollInjury(roles, player, preMatchCondition);
-                    }
-                }
-
                 // Per-matchday development tick (session 9 backlog item) - same hook
                 // Condition already uses, same played/not-played signal computed above.
                 // Whole squad, not just starters - a benched player still ticks (at the
                 // 0.7x floor rate), same as the old season-lump version's playing-time
-                // floor. Deliberately still the binary `played` flag here, not
-                // minutesPlayed - growth ticks were never the reported issue, only
-                // Condition was, so left unchanged to keep this fix minimal. Morale
-                // multiplier (session 10) rides along on this same call.
+                // floor. Morale multiplier (session 10) rides along on this same call.
+                bool played = minutesPlayedLookup(player) > 0f;
                 ManagerPlayerDevelopment.ApplyMatchdayProgression(player, played, roles.GetMoraleGrowthMultiplier(player));
             }
+        }
+
+        // AI-club matchday rotation (roadmap: "AI squad evaluation and coherent
+        // rotation across the full 30-player pool") - see ManagerAiSquadRotation for
+        // the full reasoning behind the threshold-based design (a full best-XI re-pick
+        // every match was tried first and caused visible thrashing, see that file's
+        // header comment).
+        private void RotateAiSquad(AgentTeam team)
+        {
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(team.TeamName);
+            List<PlayerPosition> slots = squadGenerator.GetStartingPositions(team.Formation);
+            ManagerAiSquadRotation.Rotate(team, roles, slots, careerCalendar.CurrentDayNumber);
         }
 
         // Academy growth moved off the once-a-season lump sum (session 16 - Thomas:
@@ -2253,40 +2288,6 @@ namespace Manager
             }
 
             return team.StartingEleven.Contains(player) ? matchLengthMinutes : 0f;
-        }
-
-        // Injury risk scales sharply as pre-match Condition drops - a manager who never
-        // rests a player is directly trading long-term injury risk for short-term
-        // selection convenience, which was the whole point of this system. Age adds a
-        // smaller, realistic aging-curve bump on top. Recovery duration is a rough bell
-        // curve (two averaged Random.Range rolls, same cheap-Gaussian-ish trick
-        // GenerateAge uses) - mostly short knocks, occasional longer absences, matching
-        // the "bell curve not hard range" preference used everywhere else stats/ages/
-        // heights are generated.
-        private void TryRollInjury(ManagerSquadRoles roles, PlayerAgent player, float preMatchCondition)
-        {
-            float fatigueRisk = Mathf.Clamp01((70f - preMatchCondition) / 70f);
-            float ageRisk = Mathf.Clamp01((player.Age - 30f) / 15f);
-
-            float injuryChance = 0.015f + (fatigueRisk * 0.09f) + (ageRisk * 0.02f);
-
-            if (UnityEngine.Random.value >= injuryChance)
-            {
-                return;
-            }
-
-            int durationWeeks = Mathf.Clamp(Mathf.RoundToInt((UnityEngine.Random.Range(1f, 6f) + UnityEngine.Random.Range(1f, 6f)) / 2f), 1, 8);
-            int durationDays = durationWeeks * 7;
-            roles.SetInjured(player, careerCalendar.CurrentDayNumber + durationDays);
-            injuredPlayersTracked.Add(player);
-
-            // Playtest backlog item (session 14) - injury Inbox message. Recovery is
-            // handled separately (see ResolveMatchdayInboxTicks) since there's no single
-            // call site for "a player's return matchday just passed" - it's a threshold
-            // crossed silently by IsInjured, not a discrete event like this roll is.
-            inbox.Add(InboxMessageType.Injury, $"Injury: {player.Name}",
-                $"{player.Name} has picked up an injury and is expected to be out for approximately {durationWeeks} week{(durationWeeks == 1 ? "" : "s")}.",
-                careerCalendar.CurrentDayNumber);
         }
 
         // Lets the running replay coroutine finish out its remaining minutes without

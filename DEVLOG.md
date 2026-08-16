@@ -7,6 +7,38 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-16 — AI squad Condition/injury tracking and matchday rotation
+
+**Goal**
+First slice of the Intelligent AI Clubs epic and ROADMAP's top "immediate continuation" item: AI-controlled clubs previously fielded the exact same static XI/bench forever, generated once and never touched again, with zero Condition or injury tracking at all. Give them the same fatigue/injury model the managed team already has, and rotate for it.
+
+**What shipped**
+- `ManagerSquadAutoPicker` (new) — the managed team's own Auto-Pick button (`OnAutoPickBestXIClicked`) extracted into a shared, reusable static service, behavior-preserving (verified the bench-rebuild priority order and the mid-match "reserves can never be smuggled onto the bench" guarantee both survived the extraction exactly).
+- `ManagerMatchdayCondition` (new) — post-match Condition decay/recovery and injury rolls extracted from the managed-team-only `ApplyMatchdayConditionAndInjuries`/`TryRollInjury`, separated from human-facing side effects (Inbox messages, `injuredPlayersTracked`) so it can run for any team without spamming the human about an AI club's physio room.
+- `ManagerAiSquadRotation` (new) — the actual AI selection policy. Deliberately *not* a full best-XI re-pick every match (see below for why); instead every starting slot is reconsidered every fixture, but a replacement only wins if it clears the incumbent's score by a small hysteresis margin, and an injured incumbent is always replaced unconditionally. `SimulateFixture` now calls this for every non-managed side, and the Condition lookup feeding `ManagerFormationFit` (previously gated to the managed team only) is generalized to every team.
+
+**Self-caught bugs (all found via the new audit before landing, not in later playtesting)**
+- A first version did a full `ManagerSquadAutoPicker` re-pick for AI clubs every match. The season-scale audit caught it thrashing the XI on ~100% of fixtures - every fresh player was still re-evaluated from scratch weekly, and `ApplyPostMatchCondition` has no stable equilibrium short of an actual rest, so someone was always marginally tired enough to trigger a swap.
+- A second, threshold-gated version ("only reconsider a starter once *their own* Condition drops below X") fixed the thrashing but introduced an asymmetric lockout: once rotated out for fatigue, a recovered, clearly-better bench player only ever returned once whoever replaced them *also* got tired - Overall/goals output ended up measurably worse than the thrashing version, not better.
+- `SubstitutePlayer` always sends the outgoing player to the named Bench (correct for a live in-match sub) - reused verbatim for a pre-match injury swap, this left an injured player sitting on the active matchday bench. Fixed by demoting them straight to Reserves when the swap was injury-driven.
+- The new scoring function didn't hard-block GK-vs-outfield mismatches the way `ManagerSquadAutoPicker.PickBestAvailableXI` already does (`GetPositionFit` has no real goalkeeping notion, so an outfield player could nominally "outscore" an unplayable incumbent). A second, related gap: `CallUpBestReserve` never filtered out injured reserves, so a formerly-injured starter sitting in the demoted-to-Reserves pool (see above) could be called back up - and even started - for an unrelated position before their injury actually expired. Both fixed with explicit position/injury gates mirroring the ones `ManagerSquadAutoPicker` and `EnsureNoInjuredStarters` already use.
+
+**A genuine, understood balance shift - not a bug**
+Every hysteresis-margin value tried (1, 3, 8) landed goals/game in the same 2.3-2.5 neighborhood, well below `ManagerHolyBalanceAudit`'s established 2.55-2.95 un-rotated band, regardless of how the rotation trigger itself was tuned. Conclusion: this is an intentional, structural consequence of AI clubs having real fatigue for the first time (both sides now average meaningfully below-peak Condition across a full season), not an artifact of this specific algorithm to keep chasing back to the old number. `ManagerAiSquadRotationAudit` now guards a new, wider, explicitly-documented 2.15-2.60 band for this scenario rather than the un-rotated one - per `PROJECT_CONTEXT_FOR_AI.md`'s own holy-balance rule, this is exactly the kind of movement that should be "understood, documented, and accepted rather than discovered accidentally in a later playthrough." The real shipped game's observed goals/game will now sit in this new neighborhood, not the old one - flagged explicitly rather than left for Thomas to notice unexplained in a future playtest.
+
+**Verification**
+- `ManagerAiSquadRotationAudit` (new): unit-level coverage for both `ManagerSquadAutoPicker` and `ManagerAiSquadRotation` (stability when fresh, response to heavy fatigue, unconditional injury replacement, no bench/reserve leaks), plus a 30-world x 2-season AI-vs-AI season-scale run against the real match simulator/tactical/formation-fit pipeline.
+- `ManagerCareerSystemsAudit`, `ManagerHolyBalanceAudit` (unchanged 2.55-2.95 band, since it deliberately doesn't exercise AI Condition), `ManagerLeadershipAudit`, `WorldGenerationProfileAudit`, `PlayerDerivedStrengthAudit` and `ManagerTacticalShapeAudit` all still pass - no regression in unrelated systems.
+- Live Play Mode: new career as Liverpool, full season simulated in-Editor with AI rotation live on every one of the 380 fixtures. Zero errors from any of the new code; final table result (Liverpool 3rd, plausible prize money/budget) confirmed sane.
+
+**Discovered, not fixed (out of scope for this session)**
+The live playtest surfaced a pre-existing `NullReferenceException` in `ShowEndOfSeasonPanel` (`TMP_SubMeshUI.UpdateMaterial` via `Image.OnDisable`/masking, unrelated to anything touched this session) when End of Season is reached by simulating an entire season immediately from a brand-new career, before any other screen has been visited. The panel still displayed correctly with real data despite the exception, so this reads as a lazy-initialization/TMP-material gotcha (same family as previously-documented TMP issues) rather than a game-breaking bug - flagged for a future session rather than expanded into.
+
+**State at session end**
+Working tree not yet committed (per multi-machine workflow, commit message to be supplied for GitHub Desktop). `ROADMAP.md`/`BACKLOG.md` updated to reflect this as the first shipped slice of the Intelligent AI Clubs epic; squad-depth evaluation and recruitment are the next slice.
+
+---
+
 ## 2026-08-15 — Sunderland playtest repair cycle and career-state hardening
 
 Thomas completed the first sustained lower-club playtest on the post-v0.1 world-generation build. The repair cycle shipped exact Player Detail return-state restoration; daily Continue behaviour; condition-aware, injury-safe auto-pick; reversible in-match substitution drafts; complete post-match restoration of formation, team sheet, player instructions and tactical sliders; an immutable active-fixture/result snapshot; and a real half-time checkpoint that resumes when changes are committed.

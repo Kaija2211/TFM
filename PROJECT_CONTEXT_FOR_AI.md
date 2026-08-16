@@ -387,6 +387,8 @@ For a significant balance-sensitive change, verification should normally include
 
 Historical Manager Mode checks have produced roughly **2.8–2.9 total goals per match** across full seasons, with plausible 20-team points and GD spreads. This is a reference neighbourhood, not an immutable target: intentional design changes may move it, but substantial movement should be understood, documented, and accepted rather than discovered accidentally in a later playthrough.
 
+**2026-08-16 update:** giving AI-controlled clubs real Condition/injury tracking and matchday rotation (`ManagerAiSquadRotation`, see `DEVLOG.md`) intentionally moved this figure down to roughly **2.3–2.5 goals per match** once AI fatigue is live — every rotation-algorithm tuning explored landed in the same neighbourhood, so this reads as a structural consequence of AI clubs having genuine fatigue for the first time, not an artifact of one specific implementation choice. Treat ~2.3–2.5 as the current reference neighbourhood for builds with AI rotation active; the older ~2.8–2.9 figure remains correct only for the un-rotated `ManagerHolyBalanceAudit` scenario (AI clubs permanently fresh), which still exists as a separate benchmark.
+
 Do not consider a balance-sensitive change verified merely because it compiles or one match looked reasonable. Temporary test hooks or editor scripts are acceptable for bulk simulation, but remove them after verification unless they are deliberately promoted into maintained regression tooling.
 
 ---

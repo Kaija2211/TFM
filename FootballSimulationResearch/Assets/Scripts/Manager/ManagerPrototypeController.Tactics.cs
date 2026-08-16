@@ -1556,101 +1556,20 @@ namespace Manager
             List<PlayerAgent> pool = tacticsBoardOpenedMidMatch
                 ? new List<PlayerAgent>(originalMatchdayOrder)
                 : new List<PlayerAgent>(team.Players);
-            pool.RemoveAll(p => roles.IsInjured(p, careerCalendar.CurrentDayNumber)
-                || (tacticsBoardOpenedMidMatch && playersSubbedOffThisMatch.Contains(p)));
+            pool.RemoveAll(p => tacticsBoardOpenedMidMatch && playersSubbedOffThisMatch.Contains(p));
 
-            List<PlayerAgent> bestXI = new List<PlayerAgent>();
-            foreach (PlayerPosition slot in slots)
-            {
-                PlayerAgent best = null;
-                float bestScore = float.MinValue;
-
-                foreach (PlayerAgent candidate in pool)
-                {
-                    if (bestXI.Contains(candidate))
-                    {
-                        continue;
-                    }
-
-                    // GetPositionFit alone doesn't hard-block a keeper from an outfield
-                    // slot or vice versa (it has no real notion of goalkeeping at all -
-                    // "GK deliberately has no entry" in its own AdjacentPositions table),
-                    // so that exact mismatch is guarded explicitly here instead.
-                    bool candidateIsGK = candidate.PrimaryPosition == PlayerPosition.GK;
-                    bool slotIsGK = slot == PlayerPosition.GK;
-                    if (candidateIsGK != slotIsGK)
-                    {
-                        continue;
-                    }
-
-                    // Fit alone isn't enough - two primary-position candidates for the
-                    // same slot both score a flat 1.00 fit, so comparing fit only picked
-                    // whoever happened to be first in `pool` (a weaker starter) over a
-                    // clearly better bench player at the same fit tier (real bug Thomas
-                    // caught live: an 87-rated bench CB lost a tie to an 84-rated starting
-                    // CB, so Auto-Pick visibly did nothing). Fit's four tiers (0.60/0.80/
-                    // 0.85/1.00) are categorical steps far apart from each other, so
-                    // multiplying it by 1000 and adding Overall (0-99) keeps fit tier
-                    // strictly dominant while letting Overall break ties within a tier.
-                    float fit = candidate.GetPositionFit(slot);
-                    float conditionAdjustedOverall = candidate.GetOverallRating() * roles.GetConditionMultiplier(candidate);
-                    float score = fit * 1000f + conditionAdjustedOverall;
-                    if (score > bestScore)
-                    {
-                        bestScore = score;
-                        best = candidate;
-                    }
-                }
-
-                if (best != null)
-                {
-                    bestXI.Add(best);
-                }
-            }
-
-            // Fallback for a genuinely short-handed squad (mass injuries etc.) - fill any
-            // remaining slot with whoever's left rather than leave a pin empty. Real
-            // football-manager UX: a weak/mismatched XI is still better than no XI.
-            if (bestXI.Count < slots.Count)
-            {
-                foreach (PlayerAgent candidate in pool)
-                {
-                    if (bestXI.Count >= slots.Count)
-                    {
-                        break;
-                    }
-
-                    if (!bestXI.Contains(candidate))
-                    {
-                        bestXI.Add(candidate);
-                    }
-                }
-            }
-
-            if (bestXI.Count < slots.Count)
+            // Shared with AI-club matchday rotation - see ManagerSquadAutoPicker. The
+            // mid-match "named XI/bench only, no reserves" restriction above is a
+            // human-UI-specific pool constraint applied before the call, not part of
+            // the shared algorithm itself.
+            bool applied = ManagerSquadAutoPicker.TryAutoPickAndApply(team, roles, slots, pool, careerCalendar.CurrentDayNumber);
+            if (!applied)
             {
                 ShowTacticsBoardWarning("Not enough available players to fill the XI");
                 RefreshTacticsBoardUI();
                 return;
             }
 
-            List<PlayerAgent> previousOrder = new List<PlayerAgent>(team.Bench);
-            previousOrder.AddRange(team.Reserves);
-            previousOrder.AddRange(team.StartingEleven);
-            team.ChangeFormation(team.Formation, bestXI);
-
-            // ChangeFormation preserves old list order but knows nothing about injuries;
-            // rebuild the named bench from healthy eligible players so an injured player
-            // cannot be reintroduced immediately after being excluded from the XI.
-            List<PlayerAgent> healthyRemainder = previousOrder
-                .Where(player => !bestXI.Contains(player)
-                    && !roles.IsInjured(player, careerCalendar.CurrentDayNumber)
-                    && (!tacticsBoardOpenedMidMatch || originalMatchdayOrder.Contains(player))
-                    && (!tacticsBoardOpenedMidMatch || !playersSubbedOffThisMatch.Contains(player)))
-                .Distinct()
-                .ToList();
-            team.Bench = healthyRemainder.Take(9).ToList();
-            team.Reserves = team.Players.Where(player => !bestXI.Contains(player) && !team.Bench.Contains(player)).ToList();
             RefreshTacticsBoardUI();
         }
 
