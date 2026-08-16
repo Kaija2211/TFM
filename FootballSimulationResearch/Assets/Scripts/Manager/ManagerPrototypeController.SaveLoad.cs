@@ -496,6 +496,7 @@ namespace Manager
         private bool saveBrowserChromeBuilt;
         private GameObject saveBrowserPanel;
         private RectTransform saveBrowserContentContainer;
+        private ScrollRect saveBrowserScrollRect;
         private readonly List<GameObject> spawnedSaveBrowserRows = new();
 
         public void OnOpenLoadCareerBrowserClicked()
@@ -510,6 +511,11 @@ namespace Manager
             if (saveBrowserPanel != null) saveBrowserPanel.SetActive(true);
 
             RefreshSaveBrowserUI();
+
+            // Same fix as the Inbox screen's identical latent bug (2026-08-16 playtest) -
+            // the ScrollRect is only ever built once, so a later reopen otherwise resumes
+            // at whatever offset the player last scrolled to instead of the top.
+            if (saveBrowserScrollRect != null) saveBrowserScrollRect.verticalNormalizedPosition = 1f;
         }
 
         public void OnSaveBrowserBackClicked()
@@ -593,6 +599,7 @@ namespace Manager
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
             scrollRect.scrollSensitivity = UiScrollSensitivity;
+            saveBrowserScrollRect = scrollRect;
 
             StartCoroutine(RecoverBlankLabelsNextFrame(saveBrowserPanel.transform));
         }

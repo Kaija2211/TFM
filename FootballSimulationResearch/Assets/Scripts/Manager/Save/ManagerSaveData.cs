@@ -267,7 +267,7 @@ namespace Manager.Save
         ScoutingReport, BidAccepted, BidDeclined, TransferOffer,
         WelcomeCareer, SeasonExpectations, RecruitmentTeaser,
         PostMatchReaction, FormStreak, MidSeasonReview, EndOfSeason,
-        LowStamina, Injury, Recovery, Retirement
+        LowStamina, Injury, Recovery, Retirement, WageBill
     }
 
     [Serializable]

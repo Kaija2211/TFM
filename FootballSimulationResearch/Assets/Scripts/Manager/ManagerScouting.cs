@@ -132,6 +132,14 @@ namespace Manager
                 // own briefed positions (so a batch can span more than one position).
                 int batchSize = Random.Range(2, 4);
 
+                // Playtest report (2026-08-16): a "Simulate Season" skip can guarantee
+                // several of these hits per active slot (MaximumActiveMissionDroughtDays),
+                // and one Inbox message PER prospect in the batch compounded into dozens
+                // of unread entries after a multi-month skip. Same discoveries, same
+                // batch size, same cadence - just one combined Inbox entry per hit
+                // instead of 2-3, so the Inbox stays readable without hiding anything.
+                List<string> batchLines = new List<string>(batchSize);
+
                 for (int i = 0; i < batchSize; i++)
                 {
                     PlayerPosition position = positions[Random.Range(0, positions.Count)];
@@ -140,12 +148,14 @@ namespace Manager
                     discoveredProspects.Add(prospect);
                     discoveredMatchday[prospect] = currentDayNumber;
 
-                    inbox.Add(InboxMessageType.ScoutingReport, $"Scout Find: {prospect.Name}",
-                        $"One of your scouts has found {prospect.Name} ({prospect.PrimaryPosition}, age {prospect.Age}) while searching for a {position}. " +
-                        $"True Overall {Mathf.RoundToInt(prospect.GetOverallRating())}, Potential {GetDisplayPotential(prospect)}. " +
-                        $"Bring them into an empty Academy slot within {DaysUntilPoached} days or another club may snap them up.",
-                        currentDayNumber);
+                    batchLines.Add($"{prospect.Name} ({prospect.PrimaryPosition}, age {prospect.Age}) - " +
+                        $"found searching for a {position}, True Overall {Mathf.RoundToInt(prospect.GetOverallRating())}, Potential {GetDisplayPotential(prospect)}.");
                 }
+
+                string title = batchLines.Count == 1 ? "Scout Find: 1 New Prospect" : $"Scout Find: {batchLines.Count} New Prospects";
+                string body = "One of your scouts has found:\n" + string.Join("\n", batchLines) +
+                    $"\nBring them into an empty Academy slot within {DaysUntilPoached} days or another club may snap them up.";
+                inbox.Add(InboxMessageType.ScoutingReport, title, body, currentDayNumber);
             }
 
             List<PlayerAgent> poached = new List<PlayerAgent>();

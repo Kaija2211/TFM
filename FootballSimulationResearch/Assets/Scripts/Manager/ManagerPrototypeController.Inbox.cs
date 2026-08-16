@@ -24,6 +24,7 @@ namespace Manager
         private bool inboxChromeBuilt;
         private GameObject inboxPanel;
         private RectTransform inboxContentContainer;
+        private ScrollRect inboxScrollRect;
         private readonly List<GameObject> spawnedInboxRows = new();
 
         public void OnOpenInboxClicked()
@@ -38,6 +39,13 @@ namespace Manager
             if (inboxPanel != null) inboxPanel.SetActive(true);
 
             RefreshInboxUI();
+
+            // Playtest report (2026-08-16): the ScrollRect only ever gets built once
+            // (BuildInboxChrome is guarded by inboxChromeBuilt) and nothing repositioned
+            // it on later opens, so scrolling down, leaving and coming back resumed at
+            // the old offset instead of the newest messages at the top. 1 = top for a
+            // top-pivoted content container (see BuildInboxChrome).
+            if (inboxScrollRect != null) inboxScrollRect.verticalNormalizedPosition = 1f;
         }
 
         public void OnInboxBackClicked()
@@ -122,6 +130,7 @@ namespace Manager
             scrollRect.vertical = true;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
             scrollRect.scrollSensitivity = UiScrollSensitivity;
+            inboxScrollRect = scrollRect;
 
             StartCoroutine(RecoverBlankLabelsNextFrame(inboxPanel.transform));
         }

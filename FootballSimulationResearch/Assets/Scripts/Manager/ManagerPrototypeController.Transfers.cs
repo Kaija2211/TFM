@@ -1005,14 +1005,19 @@ namespace Manager
             if (transferNegotiation.TryPlaceBid(target, amount, bidDialogSourceTeam, careerCalendar.CurrentDayNumber, finance, managedTeamName))
             {
                 SetTransferMarketStatus($"Bid of £{amount:F1}m submitted for {target.Name} - response expected in {ManagerTransferNegotiation.BidResponseDays} days.");
-            }
-            else
-            {
-                SetTransferMarketStatus($"Couldn't submit that bid for {target.Name} - check your budget or your {ManagerTransferNegotiation.MaxConcurrentBids}-bid pending limit.");
+                CloseBidDialog();
+                RefreshTransferMarketUI();
+                return;
             }
 
-            CloseBidDialog();
-            RefreshTransferMarketUI();
+            // Playtest report (2026-08-16, "I don't seem to be able to bid"): a budget/
+            // pending-cap failure here used to close the dialog and only write a small
+            // background status label behind it, unlike the invalid-amount/window-closed
+            // checks above which keep the dialog open with a clearly visible inline
+            // message. A silent post-season wage-bill deduction (DeductManagedTeamWageBill)
+            // can push the budget to zero without any visible cause, so this failure needs
+            // to be at least as loud as the other two - same fix shape, dialog stays open.
+            SetBidDialogStatus($"Couldn't submit that bid - check your budget (£{finance.GetBudget(managedTeamName):F1}m available) or your {ManagerTransferNegotiation.MaxConcurrentBids}-bid pending limit.");
         }
 
         private void SetBidDialogStatus(string message)

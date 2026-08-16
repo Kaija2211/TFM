@@ -614,7 +614,12 @@ namespace Manager
                 academySortDescending = true;
             }
 
-            RefreshAcademyUI();
+            // RefreshAcademyUI alone never clears scoutingListView first (only
+            // RefreshScoutingUI does, right before dispatching to either tab) - calling
+            // it directly here appended a second, freshly-sorted row set on top of the
+            // previous one on every sort click instead of replacing it. Matches
+            // OnScoutingColumnHeaderClicked's own fix shape for the World Scouting tab.
+            RefreshScoutingUI();
         }
 
         // Column indices match AcademyColumnHeaders. Potential sorts by the same fuzzy-

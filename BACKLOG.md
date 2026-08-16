@@ -13,9 +13,9 @@ Priority labels:
 
 ## Current priority snapshot
 
-No known save-corruption or match-result P0 remains after the August 15 Sunderland regression pass. AI clubs now get real Condition/injury-aware matchday rotation (August 16); the next ordered work is:
+No known save-corruption or match-result P0 remains after the August 15 Sunderland regression pass. AI clubs now get real Condition/injury-aware matchday rotation and a positional depth/need evaluator (August 16); the next ordered work is:
 
-1. AI squad depth evaluation, need identification and recruitment/replacement — the next slice of the same Intelligent AI Clubs epic.
+1. AI need identification, target search and actual recruitment/replacement — the next slice of the same Intelligent AI Clubs epic, consuming `ManagerAiSquadDepthEvaluator`'s output.
 2. Structured match events and position-specific performance ratings, preserving the current holy-balance benchmark.
 3. Long-career squad-health safeguards (hoarding, churn, collapse).
 4. Contracts, player interest, shortlists and richer negotiations.
@@ -89,6 +89,26 @@ Balance watch: Sunderland opened one manual career 1W–1D–6L. Keep collecting
 - [x] **Clarify positional-fit tiers in UI and mechanics.** Primary and listed secondary positions now carry full fit, adjacent families carry a 0.80 modifier and unrelated assignments 0.60. The pitch-slot selector communicates the tier directly and the Manager Career Systems audit locks the values.
 - [ ] **Add genuinely narrow shapes/roles where structurally appropriate.** Formation width must arise from pins plus the Width instruction; assess narrow 4-2-3-1/diamond variants instead of assuming every nominal 4-2-3-1 is wide.
 
+### 2026-08-16 Liverpool playtest (Thomas, reported after a full-season sim)
+
+#### P0 — Confirmed behavioural bugs
+
+- [x] **Can't bid on a player in season 2.** Root cause was two-layered: `DeductManagedTeamWageBill` (only ever fires from season 2's rollover onward, never shown anywhere in the UI including the End-of-Season screen) can silently drive the unclamped budget to zero/negative, and a `TryPlaceBid` failure closed the bid dialog with only a small background status label instead of staying open with an inline message like the other two validation failures. Fixed the feedback path (`OnConfirmBidClicked` now keeps the dialog open with `SetBidDialogStatus` on any failure, showing the actual remaining budget) and added an Inbox message (`InboxMessageType.WageBill`) when the wage bill is deducted so the budget change is no longer a silent mystery. The underlying wage-bill economics (whether it should be clamped, or balanced differently) are unaudited and deliberately untouched — flagged below.
+- [x] **Chosen academy players' stats don't persist across a game close/reopen.** Not a save-format bug — every academy-development field already round-trips correctly. The real cause: `OnExitToTitleClicked` was the *only* save call site in the entire project, so closing the game any other way (window close, Alt+F4, task kill) silently discarded everything since the last explicit "Exit to Title" click. Added `OnApplicationQuit` as a safety-net save, guarded by a new `careerLoadedThisSession` flag (set in `ShowSeasonHub`, cleared after the explicit Exit-to-Title save) so a quit from Splash/Title/Team Select/Save Browser correctly saves nothing. This is a general fix, not academy-specific — it protects any unsaved session progress, not just academy development.
+- [x] **Music volume/on-off doesn't persist across a game close/reopen.** Already fixed as of `e17473c` (both now use `PlayerPrefs` with an immediate `Save()` and a correct read-before-UI order in `ManagerAudio.SetUpAudio`) - the playtest build likely predated that commit. Verified against current `HEAD`, no remaining gap.
+
+#### P1 — UX and quality-of-life
+
+- [x] **No prominent notification when a player gets injured.** The Inbox message already existed; the only unread cue was a plain "(N)" text change on the Hub's Inbox button with no colour difference. The button now turns Warning-amber whenever anything's unread, reverting to normal once it's all read.
+- [x] **Academy sort (position/age/Overall/etc.) duplicates the list instead of sorting it in place.** `OnAcademyColumnHeaderClicked` called `RefreshAcademyUI()` directly, which never clears the shared list view - unlike `RefreshScoutingUI()` (the World Scouting tab's own working sort path), which clears before dispatching to either tab. Fixed by routing the Academy sort handler through `RefreshScoutingUI()` too. Live-verified: row count stays constant across repeated sort clicks instead of growing.
+- [x] **Inbox doesn't reset scroll position when re-entered.** The `ScrollRect` was only ever built once and never repositioned on a later open. Now stored as a field and reset to the top on every `OnOpenInboxClicked`. The identical latent bug existed in the Save Browser (same code-built-panel pattern, confirmed via investigation) and was fixed there too.
+- [x] **89 unopened Inbox messages after simming the rest of a season from February.** Root cause: `ManagerScouting.ResolveDailyTick`'s guaranteed-discovery drought mechanic (up to every 10 days per active mission slot) sent one Inbox message *per prospect* in each 2-3-player batch, and fires once per calendar day advanced during a "Simulate Season" skip - the only message source in the file without explicit flood-avoidance treatment (every other type is gated: post-match reactions, form streaks, low-stamina warnings, etc.). Fixed by combining each batch into one Inbox message listing every prospect found, instead of one message per prospect - same discoveries, same cadence, same underlying scouting mechanic (untouched, still passes the 500-day discovery-rate/balance audit), roughly 2-3x fewer Inbox entries.
+
+#### Follow-ups surfaced, not yet actioned
+
+- [ ] **Audit the annual wage bill against club income.** `DeductManagedTeamWageBill`'s cost (roughly quadratic in squad Overall) can plausibly exceed a season's prize money/board boost for a competitive squad, and the budget is deliberately unclamped. Now visible via an Inbox message rather than silent, but the underlying balance (should budget ever go negative? should wages scale differently by club tier?) hasn't been reviewed - sample real numbers across several club tiers before changing the formula.
+- [ ] **`ShowEndOfSeasonPanel`/`ShowScouting`'s `TMP_SubMeshUI.UpdateMaterial` NullReferenceException recurred in a second, unrelated screen** during this session's live verification (see HANDOFF.md), always on a `GameObject.SetActive(false)` disabling a masked TMP element. Same exact failure signature in two unrelated systems suggests a general Unity/TMP timing quirk (possibly specific to rapid programmatic panel toggling without normal frame pacing) rather than two coincidental bugs - worth a root-cause pass if it's ever reproduced through normal play rather than automated testing.
+
 ### Epic — Tactical shape and matchups
 
 - [x] **Make formation-versus-formation shape matter — first systemic slice.** Formation pins, tactical sliders and player instructions generate bounded lane occupancy, route advantages, transition exposure, pre-match feedback and opponent-aware AI adjustment. Named roles, narrow formations, richer feedback and in-match AI adaptation remain follow-up work.
@@ -154,13 +174,17 @@ Leading reference design from Football Manager research: retain a database of re
 
 - [ ] **Make AI-controlled clubs manage themselves coherently across seasons.** Clubs should evaluate their own squad, make purposeful decisions, and adapt to events rather than acting as static player containers. This should be a transparent, deterministic decision system with club-specific priorities—not an external language model dependency.
 
-First slice shipped 2026-08-16: `ManagerAiSquadRotation` gives every AI club real Condition/injury-aware matchday selection (rests an injured or meaningfully fatigued starter for the best genuinely-better available cover, using the same fit-tier/Condition-adjusted-Overall scoring `ManagerSquadAutoPicker` gives the human's own Auto-Pick). Squad-depth evaluation, transfer targeting, contracts, tactical adaptation and club personalities remain.
+First slice shipped 2026-08-16: `ManagerAiSquadRotation` gives every AI club real Condition/injury-aware matchday selection (rests an injured or meaningfully fatigued starter for the best genuinely-better available cover, using the same fit-tier/Condition-adjusted-Overall scoring `ManagerSquadAutoPicker` gives the human's own Auto-Pick).
+
+Second slice, same day: `ManagerAiSquadDepthEvaluator` scores each of a club's own formation-relevant positions (deliberately not all 14 canonical positions - some formations never field a wing-back slot, and judging every club against every position regardless of its own formation made an under-modelled, formation-irrelevant position dominate every club's "weakest position" result, caught by the evaluator's own statistical audit before shipping) on three explainable, independently-inspectable terms: missing-cover count, the best available option's quality against the club's own Starting-XI average (not the whole 30-man pool - bench/reserves are deliberately generated weaker, so comparing against the whole squad's average made the quality signal almost always zero, a second bug caught by the same audit), and a succession/age-cliff flag (best option 31+ with no comparable-quality backup). The resulting "weakest position" signal is real but genuinely small at the generated Premier League's compressed quality band (matches BACKLOG's own documented "not a gulf that makes most of the division noncompetitive" design intent) - the audit uses a large sample (400 squads) specifically because the top-tier-vs-bottom-tier effect size needed a stable measurement, not a knife-edge single-seed pass. Pure analysis, no side effects, not yet wired to any transfer/recruitment action.
+
+Transfer targeting, contracts, tactical adaptation and club personalities remain.
 
 Planning must cover at least:
 
 - [x] squad selection and rotation using ability, position fit, and Condition/injuries — first slice above. Form, suspensions, fixture congestion and development value remain (no suspension system, secondary competition calendar or AI player development exists yet);
 - tactical identity, opponent-aware formation/tactical adjustments, and sensible in-match substitutions;
-- squad-depth analysis by role/position, including versatile players and youth readiness;
+- [x] squad-depth analysis by role/position — second slice above (`ManagerAiSquadDepthEvaluator`). Versatile-player credit beyond the existing fit-tier adjacency and youth-readiness (promotion pipeline awareness) remain;
 - transfer target identification based on actual weaknesses, budget, age profile, potential, value, wages, and club stature;
 - rational bid, sale, loan, contract, and replacement decisions, including refusing structurally damaging sales;
 - planned succession for aging/declining players and goalkeepers;

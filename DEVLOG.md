@@ -7,6 +7,57 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-16 — AI squad depth/need evaluator
+
+**Goal**
+Second slice of the Intelligent AI Clubs epic, continuing straight on from the same day's rotation work: "Evaluate positional depth, squad quality and age profile" (ROADMAP item 6). A pure analytical foundation - no transfer-market wiring yet - that the next slice (need identification/target search/actual recruitment) will consume.
+
+**What shipped**
+`ManagerAiSquadDepthEvaluator` (new plain C# service) scores each position on three independently-readable terms rather than one opaque formula: a missing-cover penalty (0-1 adequate options is a real gap, 2+ is treated as sufficient), a quality penalty (how far the best available option falls below the club's own Starting-XI average), and a succession penalty (best option 31+ with no comparable-quality backup). Deliberately conservative and bounded rather than chasing perfect optimisation, matching the epic's own "readable evidence for debugging why an AI club made each major decision" goal.
+
+**Two real formula bugs self-caught via the new audit, both before shipping**
+- First version judged every club against all 14 canonical `PlayerPosition` values. Since only some formations ever field a wing-back slot (RWB/LWB), and RWB/LWB's own adjacency relationships are the narrowest in the table, those positions had almost no real generated cover for ANY club regardless of squad quality - making them dominate "weakest position" for nearly every club as noise, not signal. Fixed by scoping evaluation to the club's own formation's actual starting positions (`AgentSquadGenerator.GetStartingPositions`), passed in by the caller rather than hardcoded inside the service.
+- Second version compared a position's best option against the *whole 30-man squad's* average Overall. Since `AgentSquadGenerator` deliberately generates bench/reserves at lower `SquadQualityTarget` tiers than the Starting XI, the whole-squad average is systematically dragged down - meaning a position's best (usually XI-tier, thanks to adjacency crossover) option almost always beat it, making the quality-penalty term structurally near-zero for every position on every club, confirmed directly: even a deliberately weak generated club (Wolves-tier) showed zero positional weakness under this version. Fixed by comparing against the Starting Eleven's own average instead - a fair, same-tier comparison.
+
+**A genuine, small effect size - not chased further**
+Even after both fixes, the measured NeedScore gap between the generated league's strongest and weakest clubs is real but small (confirmed stable across a 400-squad sample after an initial 100-squad pass looked borderline). This matches BACKLOG's own documented world-generation design intent - the Premier League's squad quality is deliberately compressed to stay competitive ("not a gulf that makes most of the division noncompetitive"), so most generated top-flight clubs genuinely don't have severe positional gaps by this formula's own honest standard. Read this as the formula correctly being conservative (a good recruitment-driving signal shouldn't manufacture phantom weaknesses to justify AI transfer activity) rather than as a sign it needs to be made more aggressive.
+
+**Verification**
+New `ManagerAiSquadDepthEvaluatorAudit`: three unit-level scenarios (thin ageing goalkeeper cover, a deliberately balanced/deep squad, an old best-CB with adjacency-crossover cover close enough in quality to almost mask a genuine succession gap - the exact scenario that caught the first version's test-design flaw, not a service bug, since RB/LB/DM are legitimately adjacent cover for CB too) plus the 400-squad statistical pass described above. All 8 audits (existing six, both new ones from today) pass with no regressions.
+
+**State at session end**
+Working tree not yet committed (three batches today: AI rotation, Liverpool playtest fixes, this depth evaluator). `ROADMAP.md`/`BACKLOG.md`/`MANAGER_CONTROLLER_ARCHITECTURE.md` updated. Next: need identification/target search, the natural consumer of this evaluator's output.
+
+---
+
+## 2026-08-16 — Liverpool playtest repair cycle
+
+**Goal**
+Thomas shared seven bugs from a playtest session played the day before, covering persistence, Inbox UX and a season-2 transfer blocker. Investigated all seven (three parallel research passes) and fixed six; one (music persistence) turned out to already be fixed by an earlier commit the playtest build predated.
+
+### Can't bid on a player in season 2
+Two-layered bug, not a calendar/window-math issue (checked and confirmed sound). `DeductManagedTeamWageBill` only ever fires from the season 1→2 rollover onward and can silently drive the unclamped budget to zero or negative - it was never shown anywhere in the UI, not even on the End-of-Season screen the player sees moments before triggering it. On top of that, a budget/pending-cap bid failure closed the dialog and wrote only a small background status label, unlike the other two validation failures (invalid amount, window closed) which keep the dialog open with a clear inline message. Fixed both: bid failures now always keep the dialog open with the actual remaining budget shown, and the wage bill now sends an Inbox message when deducted. The wage-bill economics themselves (is an unclamped negative budget the right design?) are flagged in BACKLOG as unaudited, not touched here.
+
+### Academy player stats "don't persist"
+Not a save-format bug - every field `ManagerPlayerDevelopment` touches already round-trips through the save DTO correctly, traced and confirmed field-by-field. The real cause was structural: `OnExitToTitleClicked` was the *only* place `ManagerSaveService.Save` was ever called in the entire project. Closing the game any other way (window close, Alt+F4, task kill) silently discarded everything since the last explicit "Exit to Title" click - not just academy development, anything. Added `OnApplicationQuit` as a safety-net save, gated by a new `careerLoadedThisSession` flag set the moment `ShowSeasonHub` first runs (covers both a brand-new career and a loaded one) and cleared right after the explicit Exit-to-Title save, so a quit from Splash/Title/Team Select/Save Browser correctly saves nothing.
+
+### Academy sort duplicates the list
+`OnAcademyColumnHeaderClicked` called `RefreshAcademyUI()` directly, which never clears the shared grid view - unlike `RefreshScoutingUI()` (the working World Scouting tab's own sort path), which clears before dispatching to either tab. One-line fix: route the Academy sort handler through `RefreshScoutingUI()` too, matching `OnScoutingColumnHeaderClicked`'s existing shape. Live-verified across a real frame boundary (a synchronous multi-click headless test initially looked identical to the bug, since Unity's `Destroy()` is deferred to end-of-frame - had to split the clicks across separate calls to get a valid read): row count held steady instead of growing on repeated sort clicks.
+
+### Inbox scroll position, injury notification, mail volume
+Three related Inbox UX gaps, all confirmed via investigation:
+- The Inbox's `ScrollRect` was only ever built once and never repositioned on a later open - now stored as a field and reset to the top every time the Inbox opens. The identical latent bug existed in the Save Browser (same code-built-panel pattern) and got the same fix.
+- The only unread-mail cue anywhere was a plain "INBOX (N)" text change with no colour difference - easy to miss. The Hub's Inbox button now turns Warning-amber whenever anything's unread.
+- The 89-unread report traced to `ManagerScouting.ResolveDailyTick`'s guaranteed-discovery mechanic sending one Inbox message *per prospect* in each 2-3-player batch, firing once per calendar day advanced - the only message source in the file without the explicit flood-avoidance treatment every other type already has (post-match reactions, form streaks, low-stamina warnings all have documented rate limits). Fixed by combining each batch into one message listing every prospect found - same discoveries, same cadence, same underlying scouting mechanic (still passes its 500-day discovery-rate audit unchanged), ~2-3x fewer Inbox entries.
+
+### Verification
+`ManagerCareerSystemsAudit` (specifically re-run after the scouting-message change, since it counts messages by content match and the batching could plausibly have changed that count), `ManagerHolyBalanceAudit`, `ManagerAiSquadRotationAudit` and the remaining three audits all still pass. Live in-Editor: full click-through from Title through a new Liverpool career to the Hub, Scouting/Academy tab switch and repeated sort clicks (row count verified stable across a real frame boundary), Inbox open/unread-badge-colour check, Transfers screen open. A `TMP_SubMeshUI.UpdateMaterial` NullReferenceException (first seen in the previous session's End-of-Season panel test) recurred identically in the Scouting screen's own panel-disable path - same failure signature in two unrelated screens, both only ever triggered through this session's rapid headless automation rather than normal play, which points toward a general Unity/TMP timing artifact of that testing method rather than two separate real bugs. Flagged in BACKLOG for a proper root-cause pass if it's ever reproduced through normal play.
+
+### State at session end
+Working tree not yet committed. `BACKLOG.md` updated with full root-cause writeups for all seven reports.
+
+---
+
 ## 2026-08-16 — AI squad Condition/injury tracking and matchday rotation
 
 **Goal**

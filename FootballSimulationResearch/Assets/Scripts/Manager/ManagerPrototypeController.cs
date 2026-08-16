@@ -19,6 +19,16 @@ namespace Manager
     {
         private const float UiScrollSensitivity = 70f;
         private const float UiCompactDropdownScrollSensitivity = 12f;
+
+        // Playtest report (2026-08-16): the ONLY save call site anywhere in the project
+        // was OnExitToTitleClicked - closing the game any other way (window close,
+        // Alt+F4, task kill) silently discarded everything since the last explicit
+        // "Exit to Title" click, which is what actually explained the reported "academy
+        // player stats don't persist" bug (not a save-format gap - see OnApplicationQuit
+        // below). Set true the first time ShowSeasonHub runs, whether from a brand-new
+        // career or a loaded one - false the whole time on Splash/Title/Team Select/Save
+        // Browser, so a quit from there correctly saves nothing.
+        private bool careerLoadedThisSession;
         [Header("Season Data")]
         [SerializeField] private TextAsset seasonFile;
         [SerializeField] private TextAsset[] trainingSeasonFiles;
@@ -469,6 +479,22 @@ namespace Manager
         // e.g. during OnSimulateMatchClicked's own setup for the *next* match).
         private bool isMatchCurrentlyLive;
 
+        // Playtest report (2026-08-16): closing the game any way other than the Hub's
+        // "Exit to Title" button (which is the only other save call site) previously
+        // lost everything since the last explicit save - a Windows standalone build has
+        // no other quit signal to hook, so this is the safety net. Guarded by
+        // careerLoadedThisSession so a quit from Splash/Title/Team Select/Save Browser
+        // (before any career state exists in memory) doesn't write a stale/default save.
+        private void OnApplicationQuit()
+        {
+            if (!careerLoadedThisSession)
+            {
+                return;
+            }
+
+            ManagerSaveService.Save(BuildSaveData());
+        }
+
         private void Start()
         {
             PurgeOrphanedRuntimePanels();
@@ -684,6 +710,10 @@ namespace Manager
             // screen's own SAVE button, same era). Only reachable from the Hub, which
             // means a career is always genuinely in progress here - no guard needed.
             ManagerSaveService.Save(BuildSaveData());
+
+            // Already saved just above - a later quit from Title/Team Select shouldn't
+            // redundantly re-save this same career via OnApplicationQuit's own guard.
+            careerLoadedThisSession = false;
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
 

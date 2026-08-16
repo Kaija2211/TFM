@@ -70,7 +70,7 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 
 - [x] Partition the Manager Unity coordinator by screen/system responsibility before adding further AI complexity.
 - [x] Give every AI club real Condition/injury tracking and rotate for it. AI clubs previously fielded the exact same static XI/bench forever with zero fitness awareness; `ManagerAiSquadRotation` now rests an injured or meaningfully fatigued starter for the best genuinely-better-scoring available cover (bench, then a called-up reserve), using the same fit-tier/Condition-adjusted-Overall scoring the human's own Auto-Pick uses. Explicit fixture-congestion modeling (midweek cup fixtures) remains inapplicable until a secondary competition calendar exists.
-- Evaluate positional depth, squad quality and age profile.
+- [x] Evaluate positional depth, squad quality and age profile. `ManagerAiSquadDepthEvaluator` scores each of a club's own formation-relevant positions on three explainable terms (missing-cover count, best-option quality against the club's own Starting-XI average, and a succession/age-cliff flag) and identifies the weakest one. Pure analysis, not yet wired to any transfer action - the foundation the next item (need identification/target search) builds on.
 - Identify needs and search for tactically appropriate targets.
 - Replace sold, injured, declining and retiring players.
 - Develop youth, arrange loans and manage contracts, budgets and wages.
@@ -138,7 +138,7 @@ Leading pillars:
 
 ## Immediate continuation order
 
-1. [x] Give AI clubs real Condition/injury-aware matchday rotation on top of the completed 30-player club squads. Positional-depth evaluation, need identification and recruitment remain the next slice of the same Intelligent AI Clubs epic.
+1. [x] Give AI clubs real Condition/injury-aware matchday rotation on top of the completed 30-player club squads, and a positional depth/need evaluator (`ManagerAiSquadDepthEvaluator`) to build recruitment on top of. Need identification/target search and actual recruitment remain the next slice of the same Intelligent AI Clubs epic.
 2. Design and implement the structured match-event/performance-model slice while preserving the current holy-balance benchmark.
 3. Let AI clubs identify needs, recruit replacements and protect genuine depth using trustworthy performance evidence.
 4. Add contracts, player interest, shortlists and richer transfer negotiations.

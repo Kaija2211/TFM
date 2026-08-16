@@ -20,7 +20,7 @@
 
 ## Boundary rule
 
-Partial files are a navigation and merge-conflict improvement, not permission to keep growing the controller indefinitely. New reusable football logic should live in focused classes and be called by the relevant partial. Examples include `ManagerAiTacticalPlanner`, `ManagerTacticalShape`, `ManagerPlayerDerivedStrength`, `ManagerSquadAutoPicker` (shared best-XI selection, used by the managed team's Auto-Pick button), `ManagerMatchdayCondition` (shared Condition decay/injury-risk simulation, no human-facing side effects), and `ManagerAiSquadRotation` (the AI-club matchday selection policy built on both of those).
+Partial files are a navigation and merge-conflict improvement, not permission to keep growing the controller indefinitely. New reusable football logic should live in focused classes and be called by the relevant partial. Examples include `ManagerAiTacticalPlanner`, `ManagerTacticalShape`, `ManagerPlayerDerivedStrength`, `ManagerSquadAutoPicker` (shared best-XI selection, used by the managed team's Auto-Pick button), `ManagerMatchdayCondition` (shared Condition decay/injury-risk simulation, no human-facing side effects), `ManagerAiSquadRotation` (the AI-club matchday selection policy built on both of those), and `ManagerAiSquadDepthEvaluator` (pure positional depth/quality/succession analysis, not yet wired to any transfer action - see DEVLOG's 2026-08-16 entry).
 
 Code belongs in a controller partial only when it directly coordinates Unity views, navigation, or the career lifecycle. Rules that can be evaluated without a scene object should be plain C# services with deterministic editor audits.
 
@@ -34,4 +34,4 @@ Future structural work should proceed one responsibility at a time:
 4. Run the Manager Career Systems audit and any relevant specialist audit.
 5. Run the holy-balance audit whenever football outcomes, selection, development or squad quality may change.
 
-The next intended extraction is a shared AI squad depth/need evaluator, building on `ManagerAiSquadRotation`'s Condition/injury-aware selection to drive recruitment and replacement decisions.
+The next intended extraction is an AI need-identification/target-search service, consuming `ManagerAiSquadDepthEvaluator`'s weakest-position output (and, eventually, actual recruitment/bid decisions built on top of that).

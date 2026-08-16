@@ -95,6 +95,11 @@ namespace Manager
             if (seasonHubPanel != null) seasonHubPanel.SetActive(true);
             if (matchdayPanel != null) matchdayPanel.SetActive(false);
 
+            // Reached from both a brand-new career and a loaded one - the common signal
+            // that real career state now exists in memory and is safe to save on quit
+            // (see OnApplicationQuit).
+            careerLoadedThisSession = true;
+
             RefreshHubUI();
         }
 
@@ -373,12 +378,22 @@ namespace Manager
             }
 
             // Unread badge (session 13) - "INBOX (2)" style, same NormalizeButtonLabel
-            // convention every other Hub button's label goes through.
+            // convention every other Hub button's label goes through. Playtest report
+            // (2026-08-16, "no way of knowing an injury happened unless you go into
+            // Make Changes"): the "(N)" count alone was easy to miss since it's just a
+            // label-text change with no colour difference from every other Hub button -
+            // the button itself now stands out (Warning amber) whenever anything's
+            // unread, reverting to the normal Hub-button colour once it's all read.
             if (inboxButton != null)
             {
                 int unread = inbox.UnreadCount;
                 string inboxLabel = unread > 0 ? $"INBOX ({unread})" : "INBOX";
                 ManagerUITheme.NormalizeButtonLabel(inboxButton, inboxLabel, ManagerUITheme.TextBody, 17);
+
+                if (inboxButton.TryGetComponent(out Image inboxButtonImage))
+                {
+                    inboxButtonImage.color = unread > 0 ? ManagerUITheme.Warning : ManagerUITheme.CardNeutral;
+                }
             }
 
             bool hasNextFixture = currentFixtureIndex < managedTeamFixtures.Count;
@@ -969,6 +984,16 @@ namespace Manager
             StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
             finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
             finance.AdjustBudget(managedTeamName, -totalWage);
+
+            // Playtest report (2026-08-16, "can't bid on a player in season 2") - this
+            // deduction was previously invisible everywhere (not shown on the End-of-
+            // Season screen, no Inbox message), so a wage bill big enough to zero out
+            // the budget looked like bidding itself was broken. finance.AdjustBudget is
+            // deliberately unclamped (a real overspend consequence, not a bug to hide),
+            // but the player needs to be told it happened.
+            inbox.Add(InboxMessageType.WageBill, "Annual Wage Bill Paid",
+                $"The squad's annual wages of £{totalWage:F1}m have been deducted from the transfer budget. Remaining budget: £{finance.GetBudget(managedTeamName):F1}m.",
+                careerCalendar.CurrentDayNumber);
         }
 
         // --- Save / load (career-arc addition, session 8, Phase 5) - see
