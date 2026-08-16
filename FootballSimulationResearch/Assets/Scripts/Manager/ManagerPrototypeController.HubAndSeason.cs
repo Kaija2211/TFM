@@ -11,6 +11,9 @@ using Manager.Save;
 
 namespace Manager
 {
+    // Partial: mentality controls, season hub, season rollover, player aging,
+    // retirement and wages. See MANAGER_CONTROLLER_ARCHITECTURE.md for the full
+    // partial-file ownership map.
     public partial class ManagerPrototypeController
     {
         public void SelectAttackingMentality() => SetMentality(ManagerMentality.Attacking);

@@ -7,6 +7,9 @@ using UnityEngine;
 
 namespace Manager
 {
+    // Partial: world-profile loading, squad creation, live strength and
+    // reserve/role lookup. See MANAGER_CONTROLLER_ARCHITECTURE.md for the full
+    // partial-file ownership map.
     public partial class ManagerPrototypeController
     {
         private void InitializeWorldGenerationService()

@@ -4,6 +4,10 @@ using Data;
 
 namespace Sim
 {
+    // Trains per-team attack/defence strength ratings from real historical match data
+    // (imported via Tools/OpenFootballImport) and derives league-average goals/match.
+    // Match simulation uses these ratings to calibrate scoring rates against real-world
+    // football, rather than an arbitrarily chosen constant.
     public class StatisticalModel
     {
         public class TeamStrength

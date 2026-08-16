@@ -17,6 +17,10 @@ namespace Sim
         }
     }
 
+    // Procedural squad generation - the source of every club's players at world/career
+    // creation. Generates the full 30-player pool (starting XI, bench and reserve
+    // tiers) against a per-club SquadQualityTarget rather than one flat quality number,
+    // so weaker clubs field a visibly weaker but still internally coherent squad.
     public class AgentSquadGenerator
     {
         // Expanded from an original 30 to cut down on birthday-paradox collisions across

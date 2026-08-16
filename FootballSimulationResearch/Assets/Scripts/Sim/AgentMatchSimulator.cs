@@ -3,6 +3,10 @@ using UnityEngine;
 
 namespace Sim
 {
+    // The original agent-based match simulator, kept byte-for-byte stable as the
+    // baseline Research Mode's evaluation runner compares against. Manager Mode uses
+    // its own fork instead (Assets/Scripts/ManagerSim/AgentMatchSimulator.cs) so it
+    // can add new mechanics without disturbing this class or the comparison it backs.
     public class AgentMatchSimulator
     {
         private enum ChanceType
