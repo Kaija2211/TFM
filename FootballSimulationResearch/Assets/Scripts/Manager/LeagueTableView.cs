@@ -93,6 +93,9 @@ namespace Manager
 
         private void EnsureLayoutComponents()
         {
+            ScrollRect scrollRect = rowContainer.GetComponentInParent<ScrollRect>();
+            if (scrollRect != null) scrollRect.scrollSensitivity = 70f;
+
             if (!rowContainer.TryGetComponent(out VerticalLayoutGroup layout))
             {
                 layout = rowContainer.gameObject.AddComponent<VerticalLayoutGroup>();

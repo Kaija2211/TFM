@@ -1,6 +1,8 @@
 # Player-Derived Club Strength Design
 
-Status: architecture draft for implementation and simulation testing.
+Status: first live implementation complete; retained as architecture and calibration reference.
+
+`ManagerPlayerDerivedStrength` now calculates the component profile from each selected XI, and Manager match simulation consumes its matchup prediction rather than a persistent club-name strength modifier. Historical/Elo club profiles are generation priors only. The tactical-sensitivity suite and a 76,000-match holy-balance run have passed; remaining work is calibration across more divisions, long careers, AI squad management and richer UI explanation.
 
 ## Objective
 

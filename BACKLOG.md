@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-08-15
 
-This is the current post-v0.1 game-development backlog. It replaces scattered memory-only lists as the primary place to record unfinished work. Items should move to `DEVLOG.md` when completed rather than remaining here indefinitely.
+This is the current post-v0.1 game-development backlog. It replaces scattered memory-only lists as the primary place to record unfinished work. Completed work is summarized in `DEVLOG.md`; checked regression items may remain inside a named playtest cluster temporarily so the report and its resolution stay traceable.
 
 Priority labels:
 
@@ -11,30 +11,87 @@ Priority labels:
 - **P2** — meaningful feature or systemic improvement.
 - **Epic** — requires design/planning before implementation.
 
+## Current priority snapshot
+
+No known save-corruption or match-result P0 remains after the August 15 Sunderland regression pass. The next ordered work is:
+
+1. AI squad evaluation and coherent rotation across 30-player clubs.
+2. Structured match events and position-specific performance ratings, preserving the current holy-balance benchmark.
+3. AI recruitment, replacement and long-career squad-health safeguards.
+4. Contracts, player interest, shortlists and richer negotiations.
+5. Unified senior/youth scouting department.
+6. Narrow formations and named player roles, followed by holy-balance regression.
+
+Balance watch: Sunderland opened one manual career 1W–1D–6L. Keep collecting lower-club seasons and generated-world distributions; do not retune from that single save.
+
 ## Newly reported after v0.1 testing
 
 ### P0 — State, persistence, and misleading UI
 
-- [ ] **In-match substitutions and tactical changes persist after full time.** Mid-match changes mutate the real `AgentTeam` XI/formation. Snapshot the pre-match tactical state and restore it after the fixture, while preserving deliberately permanent pre-match changes.
-- [ ] **In-match changes are committed while they are still being edited.** Dragging a player off the pitch currently performs the substitution immediately, preventing the user from simply dragging them back and carrying on. Treat the mid-match Tactics Board as a reversible draft: snapshot the live XI/formation/tactics on entry; allow any number of drag/drop changes and reversals locally; and do not update the substitution log, subbed-off lockout, simulator state, or remaining match until the user leaves the board and resumes play. Cancelling/undoing the draft must restore the exact entry state. Only the final difference should count as official substitutions.
-- [x] **Persist the complete tactical setup in saves.** Formation/XI/bench and role assignments round-trip with the squad; Width, Defensive Depth and Tempo now use version-tolerant save-v4 fields. Match mentality remains deliberately match-scoped and resets to Balanced at kickoff.
-- [ ] **Full-time banner sometimes shows Matchday 1 / Liverpool v Bournemouth.** Investigate stale fixture/banner state separately from the score/events mismatch below. Reproduce across normal play, skip-to-results, in-match tactics changes, and save/load.
+- [x] **League-table Form disappears after closing the game.** Save v5 persists each club's last-five W/D/L sequence and restores it defensively; legacy saves without the field continue with an empty Form strip until new matches are played.
+
+- [x] **In-match substitutions and tactical changes persist after full time.** The complete pre-match team sheet, formation, Width, Depth, Tempo and player instructions now restore after the fixture.
+- [x] **In-match changes are committed while they are still being edited.** The live Tactics Board is a reversible draft; only its final difference commits when leaving the board, and half-time Back commits then resumes play.
+- [x] **Persist the complete tactical setup in saves.** Formation/XI/bench and role assignments round-trip with the squad; Width, Defensive Depth and Tempo use version-tolerant fields retained by save v5. Match mentality remains deliberately match-scoped and resets to Balanced at kickoff.
+- [x] **Full-time banner sometimes shows Matchday 1 / Liverpool v Bournemouth.** All live-match presentation now reads the immutable fixture snapshot captured at kickoff. Silent fallback to the calendar's current fixture has been removed, so a missing snapshot fails loudly during development instead of showing a plausible stale Matchday 1 banner.
 - [x] **Scout 2 accepts a mission brief but never returns youth prospects.** The daily-calendar implementation resolves both slots independently. The permanent Manager Career Systems audit assigns distinct briefs and proves both slots generate discoveries under a deterministic 500-day run.
 
 ### P1 — UX and quality-of-life
 
 - [x] **Thomas's wishlist: use a real position dropdown in Transfer Search.** Transfer Search now has a scrollable direct-selection dropdown with `Any position` plus every position.
 - [x] **Increase mouse-wheel scrolling speed on every list/dropdown without a draggable scrollbar.** Runtime scroll views now share a central 70px sensitivity, including role assignments and the matchday bench.
-- [ ] **Auto-pick must consider Condition.** Candidate score should combine ability, position fit, availability, and Condition so a tired star is not blindly selected over fit cover.
+- [x] **Auto-pick must consider Condition.** Selection combines categorical position fit with condition-adjusted ability and excludes injured/ineligible players.
 - [x] **Collapse expanded Inbox emails when leaving the Inbox.** Reopening starts from a clean collapsed list.
 - [x] **Mark unread Inbox messages as read when pressing Back.** Back marks every message in the Inbox read.
-- [ ] **Change 3-4-2-1 wing-back slots from LWB/RWB to LM/RM.** Update formation slot definitions and verify tactics-board labels, auto-pick, position fit, and AI-generated team compatibility.
-- [ ] **Audit chronically low generated attributes.** Leadership and physical attributes were specifically reported; sample large generated populations by position/age/team strength before changing distributions.
+- [x] **Change 3-4-2-1 wing-back slots from LWB/RWB to LM/RM.** Starting and generated bench slots now use LM/RM; the Manager Career Systems audit locks both templates against regression.
+- [ ] **Continue the generated-attribute audit beyond Leadership.** Leadership now has a tested sparse natural-leader tail; physical attributes and any other chronically compressed distributions still need population evidence before tuning.
 - [ ] **Finish academy-player inspect note.** Original report was cut off after: “When looking at your academy player, …” Await Thomas’s missing detail.
+
+### 2026-08-15 Sunderland playtest
+
+#### P0 — Confirmed behavioural bugs
+
+- [x] **Continue reverts to matchday-sized jumps after the first fixture.** Hub Continue now advances exactly one calendar day; it opens Matchday Prep only when Continue is pressed on the fixture date.
+- [x] **Auto-pick can return an injured player to the matchday bench.** Matchday auto-pick is restricted to the named XI/bench and rebuilds the bench from healthy eligible players, preventing injured or already-subbed players from returning.
+- [x] **Temporary mid-match player instructions persist after full-time.** Attacking/Balanced/Defensive roles are now included in the pre-match snapshot and restored after full-time; assignment controls are locked during a live match.
+- [x] **Transfer bid failure is silent inside the modal.** Bid validation, closed-window and budget failures now appear inside the blocking dialog, and decimal input accepts invariant (`45.1`) as well as local formatting. Pre-window agreements remain part of the wider transfer redesign below.
+- [x] **Player Detail Back loses the originating sub-view.** Transfer and Scouting inspection now preserve the originating tab, filters, sort and exact scroll position; returning from Sell no longer defaults to Buy.
+- [x] **Youth scout brief output is suspiciously uneven.** Scout slots resolve independently and now have a persisted ten-day maximum active drought. Updating an active brief retains its cadence instead of artificially waking it; the Manager Career Systems audit checks both slots, balance, maximum gaps and brief changes over 700 deterministic days.
+
+#### P1 — Immediate UX and squad-management work
+
+- [x] **Player Detail attributes overflow behind the bottom action band.** Attribute rows now use compact spacing so all technical/mental/physical stats remain above the fixed action band.
+- [x] **Use per-view scroll sensitivity.** Compact assignment dropdowns now use a restrained 12px sensitivity while long lists and the Hub table use 70px.
+- [x] **Make secondary positions obvious and add position-slot selection.** Clicking a pitch player's badge/card opens Player Detail; clicking the name/position strip opens eligible primary, secondary and adjacent choices ranked by fit and Condition. Primary and secondary options carry no redundant label, adjacent cover is labelled, emergency mismatches are omitted, and live matches are strictly restricted to the originally named squad. Bench cards list primary position first followed directly by secondary positions.
+- [x] **Restyle Transfer Search text fields.** Search inputs now have visible field backgrounds/outlines, corrected margins and non-italic entered text/placeholders.
+- [x] **Add a Scouted Players recruitment view — first pass.** Transfers now has a dedicated SCOUTED tab listing completed senior reports with club, position, exact reported Overall, bounded potential clue and recommended fee; existing recruitment filters and direct Player Detail/bid actions work there. Ongoing reports and manual shortlists remain for the scouting overhaul.
+- [x] **Remove Loan Out from in-match Player Detail.** Loans belong in a later contracts/transfer workflow and are now hidden from paused matchday Player Detail.
+- [x] **Prevent reserves entering the active matchday squad during half-time.** Matchday auto-pick and Player Detail controls are restricted to the named pre-match XI/bench once kickoff occurs.
+- [ ] **Improve reserve/matchday squad management.** The existing Player Detail `Select as Substitute` route is discoverable only by accident. Design direct bench/reserve swaps and injured-player replacement from Squad/Tactics without repeatedly opening Player Detail.
+- [x] **Surface development deltas — first pass.** Player Detail shows live Overall change plus the five largest whole-number attribute gains/losses against a season-start baseline for senior and academy players. Persistent multi-season career progression history remains a later enhancement.
+
+- [x] **Do not persist live-match tactical overrides.** Formation, XI, bench, reserves, player instructions, Width, Defensive Depth and Tempo all restore to their pre-match state after full time.
+- [x] **Reduce repetitive scouting bands.** Youth Potential and unscouted senior Overall reports now use deterministic but asymmetric uncertainty rather than fixed 15-point bands snapped to multiples of five. The Career Systems audit requires meaningful range variety.
+- [x] **Cap newly discovered academy prospects at 18.** Existing players may naturally remain in the academy at 19 as they age, but scouts no longer introduce a fresh 19-year-old prospect.
+
+#### P2 — Transfer and generation redesign evidence
+
+- [x] **Overhaul outgoing transfers — first functional pass.** Sell now includes the full squad; listing requires confirmation, interest arrives after three days through Inbox, offers require separate acceptance, and listing/offer state survives save/load. Transfers cannot complete outside the window, below an 18-player floor or when selling the only goalkeeper. Named bidding clubs, competing offers and richer AI demand remain part of the intelligent-club phase.
+- [ ] **Redesign bid amount entry and pre-window agreements.** Explore a clear digit-stepper/nine-box control as an alternative to fragile free text. Decide whether pre-window agreements are allowed and, if so, queue registration/arrival for the opening date rather than blocking negotiation entirely.
+- [x] **Expose bounded senior-potential clues.** Completed senior reports now classify players as Near Peak, Established, Room to Grow, Promising or High Potential without revealing the hidden numeric Potential.
+- [ ] **Audit generated transfer values and lower-club squad economics.** Sunderland's bench/reserves reportedly contain many £30m–£50m players, making liquidation unrealistically lucrative. Sample value distributions by division, club tier, XI/bench/reserve status, age and Overall before changing the formula.
+
+  First correction implemented: intrinsic value now uses an elite-weighted exponential ability curve, a youth-only potential premium and progressive post-27 depreciation. The World Generation Profiles audit now reports mean XI/bench/reserve values per club; run and review that CSV before closing this item or tuning individual club tiers.
+
+  First audit result: across the generated English top flight, mean player values are £32.1m for XIs, £21.8m for benches and £14.3m for reserves. Sunderland now average £30.9m/£21.0m/£14.1m; Liverpool £47.3m/£31.8m/£20.7m. The remaining Sunderland concern is primarily their 80.1/77.8/74.9 squad-quality prior and instant-sale mechanics, not the intrinsic valuation curve. Retain this item until lower divisions and the selling overhaul can be audited too.
+- [ ] **Monitor squad-quality depth before retuning.** Liverpool's bench/reserves appeared slightly too rich in 80+ players, but no change is authorized from one observation. Include XI-to-bench and XI-to-reserve rating gaps in the world-generation audit.
+- [x] **Audit Leadership generation.** Leadership now retains its ordinary-player baseline while adding a sparse natural-leader tail, weighted toward veterans and organizing central positions with a small precocious-youth chance. The permanent 6,000-player Leadership Distribution audit bounds the median, upper percentiles, 70+/80+ prevalence and veteran-versus-youth gap.
+- [x] **Clarify positional-fit tiers in UI and mechanics.** Primary and listed secondary positions now carry full fit, adjacent families carry a 0.80 modifier and unrelated assignments 0.60. The pitch-slot selector communicates the tier directly and the Manager Career Systems audit locks the values.
+- [ ] **Add genuinely narrow shapes/roles where structurally appropriate.** Formation width must arise from pins plus the Width instruction; assess narrow 4-2-3-1/diamond variants instead of assuming every nominal 4-2-3-1 is wide.
 
 ### Epic — Tactical shape and matchups
 
-- [ ] **Make formation-versus-formation shape matter.** Current formation influence is primarily player-to-slot fit; it does not model tactical interactions such as overloading the wings against a 3-4-3.
+- [x] **Make formation-versus-formation shape matter — first systemic slice.** Formation pins, tactical sliders and player instructions generate bounded lane occupancy, route advantages, transition exposure, pre-match feedback and opponent-aware AI adjustment. Named roles, narrow formations, richer feedback and in-match AI adaptation remain follow-up work.
 
 Initial overhaul complete: formation pins produce bounded lane occupancy and route modifiers for crosses, through balls, dribbles, long shots, set pieces and counters. Per-player Attacking/Defensive instructions shift the player's occupancy, while the existing chance-resolution model rewards the relevant real attributes. Matchday Prep reports the clearest route edge and opponent risk. AI clubs evaluate the opposing formation and make one deliberate width, depth or tempo adjustment, avoiding a universal extreme preset. Tactical-sensitivity tests pass, and the AI-enabled 76,000-match holy-balance audit passes at 2.699 goals per game. Richer named role types and in-match AI adaptation can follow later.
 
@@ -50,7 +107,28 @@ Planning must cover at least:
 - exploit resistance and bounded modifiers;
 - holy-balance regression testing before acceptance.
 
-Do not implement this as a hardcoded rock-paper-scissors formation table without first designing a general zone/shape model.
+Do not implement tactical shape as a hardcoded rock-paper-scissors formation table; continue using the general zone/shape model.
+
+### Epic — Structured match simulation and player performance
+
+- [ ] **Evolve the match simulator from isolated chance events into an authoritative football-event model.** Preserve the existing simulator as a benchmark until the replacement reproduces or intentionally improves its scoreline and table balance. This epic must support trustworthy statistics, player ratings, tactical explanations, AI decisions, persistent career records, Moneyball recruitment and save-specific stories from one shared event truth.
+
+Planning must cover at least:
+
+- possession sequences moving through recovery, buildup, progression, chance creation, shooting and save/goal resolution;
+- authoritative participants for every action, including creator, assister, shooter, pressured defender, error-maker and goalkeeper;
+- tactical route, pitch zone, chance quality and defensive pressure attached to structured events rather than inferred from prose;
+- possession, chances, shots, shots on target, expected-goal quality, assists, saves, turnovers, progression, recoveries, tackles, aerials and errors derived from those events;
+- position-specific player-rating models for goalkeepers, defenders, midfielders and attackers, normalized for minutes and bounded against rating inflation;
+- tactical execution and role suitability without rewarding decorative event volume or double-counting the same contribution;
+- a persistent match state so substitutions, fatigue, score state and tactical changes alter the remaining simulation rather than replacing it with an unrelated reroll;
+- deterministic/debuggable event traces and readable explanations for why a player or tactical route performed well or badly;
+- performance-history persistence feeding Player Detail, form, scouting, recruitment, AI selection and narrative systems;
+- computational cost suitable for simulating many background fixtures and long careers;
+- migration/coexistence strategy while old and new simulation paths are compared;
+- holy-balance acceptance across goals per game, score distribution, home advantage, points, GD, table spread, upset frequency and positional player-rating distributions.
+
+Recommended delivery slices: structured event schema and benchmark capture; possession/chance sequence prototype; derived statistics; position-specific ratings; continuous mid-match state; downstream career/AI integration; then full holy-balance acceptance.
 
 ### Epic — Promotion, relegation, and the football pyramid
 
@@ -158,7 +236,7 @@ The product promise is not “an LLM inside a football game”; it is that the p
 
 ### Epic — Player-derived club strength and world generation
 
-- [ ] **Replace persistent historical club-strength ratings with strength derived from the players on the pitch.** The current architecture begins with trained team attack/defence values, generates players from those values, and continues using team-level values in match simulation. This makes player quality partly a presentation of pre-existing club strength rather than its true cause. Redesign the system so transfers, development, decline, injuries, selection, and tactical fit naturally change a club’s strength immediately.
+- [x] **Replace persistent historical club-strength ratings with strength derived from the players on the pitch — first live implementation.** Historical/Elo profiles now seed world-generation squad quality only. Live manager matches calculate control, creation, threat, defensive resistance and goalkeeping from the selected players, position fit and Condition, so transfers, development, injuries and selection alter performance immediately. Continue calibrating this implementation against the acceptance criteria below as leagues and AI behaviour expand.
 
 Use a two-stage model to avoid circular generation:
 
@@ -192,15 +270,15 @@ Recommended research sequence: preserve the current eight-season model as a benc
 
 ### P0 / bugs
 
-- [ ] **Match result/events mismatch.** One report showed a 0-1 result after two apparent live goals, followed by View Match Events showing 3-0 against the wrong opponent. Static review never reproduced it. May share stale-state causes with the full-time banner bug, but treat them as separate until proven otherwise.
+- [x] **Match result/events mismatch.** Result, banner, replay and Match Events now share the immutable fixture/result state captured for the active match; the follow-up Sunderland playtest found no recurrence.
 - [ ] **Guard `PickGoalkeeper` against an empty Starting XI.** Current sale rules make this difficult to reach, but the underlying unsafe index fallback still exists.
 - [x] **Academy “Bring In Scouted Player” needs live verification.** Claiming is now one atomic scouting-to-academy operation and the permanent Manager Career Systems audit proves the discovery is placed and removed from the scouting list.
 
 ### P1 / UX and matchday
 
-- [ ] **Add a real half-time checkpoint.** Stop the replay after minute 45 and show a full-time-style summary containing the score and statistics accumulated only from the first half, with **Make Changes** and **Resume** actions. Do not reveal or process second-half events until Resume. Half-time tactical edits use the same reversible draft flow as other mid-match changes; on commit, preserve every first-half event/stat/result and regenerate only the remaining match from minute 46. Skip to Results must have a deliberate behaviour (recommended: bypass the checkpoint and complete the fixture).
-- [ ] **Decide and enforce the substitution rule.** Mid-match substitutions are currently uncapped. Decide between the real five-sub rule, competition-configurable rules, or an intentionally permissive system.
-- [ ] **Show secondary positions before transfer scouting.** Current inspect UI can display secondary positions, but the transfer browse/scouting-information policy still needs a deliberate implementation.
+- [x] **Add a real half-time checkpoint.** The replay stops after minute 45 with score, first-half statistics, Make Changes and Resume actions. Returning from half-time changes now commits the draft and immediately resumes the second half; Skip to Results bypasses the checkpoint.
+- [x] **Decide and enforce the substitution rule.** Manager matches enforce five substitutions; the reversible draft validates its final incoming/outgoing difference against the remaining allowance.
+- [x] **Show secondary positions before transfer scouting.** Positions are treated as public information and displayed without requiring a completed report.
 - [x] **Music volume slider.** Settings now has a persistent 0–100% slider alongside a separately persisted ON/OFF toggle; muting preserves the selected level.
 - [ ] **Player career statistics on Player Detail.** Matches, starts/minutes if tracked, goals, assists, and average rating; requires persistent per-player stat tracking first.
 - [ ] **Improve in-match team-name sizing/alignment.** Earlier build feedback requested larger names aligned more closely with the central score.
@@ -209,7 +287,7 @@ Recommended research sequence: preserve the current eight-season model as a benc
 
 ### P2 / systems and content
 
-- [ ] **Give every club a genuinely deep senior/reserve squad.** The current transferable `AgentTeam` contains only 20 players (11 starters + 9 bench). The separate 21-player reserve pool is generated only for the managed club, is primarily an injury call-up safety net, and does not provide AI clubs with transfer depth. Replace this split with a consistent all-club squad model. Recommended TFM target: **30 available players per club**—a 25-player senior group, matching the Premier League registration ceiling, plus five reserve/development players (academy prospects remain separate). Include three goalkeepers overall and at least two credible options in every formation-critical position. Distinguish the selected nine-player matchday bench from the wider squad and expose the full pool appropriately in Squad and Transfers. Revisit sale refusal thresholds after expansion so clubs protect true positional shortages but do not reject ordinary bids merely because the old 20-player structure has only 5–7 bench players remaining. Include save migration, retirements/replacements, development, wages/value generation, UI scrolling, auto-pick, injuries, and transfer-market source/removal logic. Run holy-balance and long-career squad-health tests because larger pools can affect selection quality and team strength.
+- [x] **Give every club a genuinely deep senior/reserve squad — generation slice.** Every generated club now has 30 players: 11 starters, nine named-bench options and ten reserves, including three goalkeepers overall and wider positional cover. Matchday selection distinguishes the named squad from reserves. AI rotation, transfer rebuilding and long-career squad-health behaviour remain under the Intelligent AI Clubs epic.
 - [ ] **Immediate squad-quality effect after transfers.** Superseded by the Player-derived club strength epic above: every lineup/squad change should feed live strength without waiting for season rollover.
 - [ ] **AI squad rebuilding and transfer activity.** Superseded by the Intelligent AI club management epic above; retain this as the first major implementation slice after all-club squad depth exists.
 - [ ] **Generate a varied fixture order each season while keeping the same league membership.** v0.1 reuses the season-one schedule structure because relegation was locked.

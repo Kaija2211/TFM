@@ -566,11 +566,13 @@ namespace Manager
                     break;
                 case PlayerInspectReturnTarget.Scouting:
                     playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
-                    OnOpenScoutingClicked();
+                    ShowScouting(resetToWorldTab: false);
+                    StartCoroutine(RestoreScoutingScrollNextFrame());
                     break;
                 case PlayerInspectReturnTarget.TransferMarket:
                     playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
-                    OnOpenTransferMarketClicked();
+                    ShowTransferMarket(resetToBuyTab: false);
+                    StartCoroutine(RestoreTransferScrollNextFrame());
                     break;
                 default:
                     playerInspectReturnTarget = PlayerInspectReturnTarget.Hub;
@@ -888,6 +890,24 @@ namespace Manager
                 ManagerUITheme.BuildLabel(ovrDelta.transform, $"{deltaSign}{overallDelta}", 17, deltaColor, TextAlignmentOptions.MidlineRight, FontStyles.Bold);
             }
 
+            IReadOnlyList<ManagerPlayerDevelopment.AttributeChange> developmentChanges =
+                ManagerPlayerDevelopment.GetCurrentSeasonAttributeChanges(player, 5);
+            if (developmentChanges.Count > 0)
+            {
+                GameObject developmentLabel = new GameObject("DevelopmentChanges", typeof(RectTransform));
+                developmentLabel.transform.SetParent(headerBand.transform, false);
+                RectTransform developmentRect = developmentLabel.GetComponent<RectTransform>();
+                developmentRect.anchorMin = new Vector2(0f, 1f);
+                developmentRect.anchorMax = new Vector2(1f, 1f);
+                developmentRect.pivot = new Vector2(0f, 1f);
+                developmentRect.sizeDelta = new Vector2(-460f, 28f);
+                developmentRect.anchoredPosition = new Vector2(300f, -210f);
+                string summary = string.Join("   ·   ", developmentChanges.Select(change =>
+                    $"{change.Name} {(change.Delta >= 0f ? "+" : string.Empty)}{change.Delta:F0}"));
+                ManagerUITheme.BuildLabel(developmentLabel.transform, $"THIS SEASON  {summary}", 14,
+                    ManagerUITheme.Accent, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+            }
+
             // Captain/vice-captain/penalty/free-kick/corner-taker assignment moved to the
             // Tactics screen (see BuildTacticsScreenChrome) - a centralized dropdown-
             // picker layout reads better than clicking into each individual player's own
@@ -924,20 +944,22 @@ namespace Manager
                     roleX = BuildRoleToggleButton(rolesBand.transform, allowedRole.ToString().ToUpperInvariant(), roleX, currentAttackDefendRole == allowedRole, () => SetAttackDefendRole(player, allowedRole));
                 }
 
-                // Loan system (session 9) - right-anchored so it sits at the far edge of
-                // the band regardless of how many attack/defend toggles are on the left
-                // (goalkeepers get none at all - see GetAllowedAttackDefendRoles).
-                Button loanButton = ManagerUITheme.BuildButton(rolesBand.transform, "LOAN OUT", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
-                ManagerUITheme.SetPointAnchor(loanButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-16f, 0f), new Vector2(130f, 40f));
-                loanButton.onClick.AddListener(() => OnLoanOutClicked(player));
-
-                AgentTeam ownTeam = GetOrCreateAgentTeam(managedTeamName);
-                if (!ownTeam.StartingEleven.Contains(player))
+                // Loans and matchday-squad registration changes are career actions, not
+                // legal live-match changes. Hide both while inspecting from Make Changes.
+                if (!tacticsBoardOpenedMidMatch)
                 {
-                    string selectionLabel = ownTeam.Bench.Contains(player) ? "CHANGE SUBSTITUTE" : "SELECT AS SUBSTITUTE";
-                    Button selectionButton = ManagerUITheme.BuildButton(rolesBand.transform, selectionLabel, ManagerUITheme.CardNeutral, ManagerUITheme.Accent, 12);
-                    ManagerUITheme.SetPointAnchor(selectionButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-235f, 0f), new Vector2(190f, 40f));
-                    selectionButton.onClick.AddListener(() => ShowMatchdaySquadSwapDialog(player));
+                    Button loanButton = ManagerUITheme.BuildButton(rolesBand.transform, "LOAN OUT", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+                    ManagerUITheme.SetPointAnchor(loanButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-16f, 0f), new Vector2(130f, 40f));
+                    loanButton.onClick.AddListener(() => OnLoanOutClicked(player));
+
+                    AgentTeam ownTeam = GetOrCreateAgentTeam(managedTeamName);
+                    if (!ownTeam.StartingEleven.Contains(player))
+                    {
+                        string selectionLabel = ownTeam.Bench.Contains(player) ? "CHANGE SUBSTITUTE" : "SELECT AS SUBSTITUTE";
+                        Button selectionButton = ManagerUITheme.BuildButton(rolesBand.transform, selectionLabel, ManagerUITheme.CardNeutral, ManagerUITheme.Accent, 12);
+                        ManagerUITheme.SetPointAnchor(selectionButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(-235f, 0f), new Vector2(190f, 40f));
+                        selectionButton.onClick.AddListener(() => ShowMatchdaySquadSwapDialog(player));
+                    }
                 }
             }
             else if (inspectIsAcademyProspect)
@@ -1318,7 +1340,10 @@ namespace Manager
 
             const float titleHeight = 22f;
             const float titleGap = 14f;
-            const float rowSpacing = 42f;
+            // The richer schema grew Technical to 13 rows; 42px per row now extends
+            // behind the fixed footer at 1080p. A compact 34px cadence retains the
+            // label+bar treatment while keeping every column inside the visible body.
+            const float rowSpacing = 34f;
             float contentHeight = titleHeight + titleGap + attributes.Length * rowSpacing;
 
             // Top-aligned (matches the "PLAYER DETAIL" mockup's align-items:start), not
@@ -1347,11 +1372,12 @@ namespace Manager
 
             foreach ((string label, float value) in attributes)
             {
-                offset = BuildAttributeRow(stack.transform, offset, label, value);
+                offset = BuildAttributeRow(stack.transform, offset, label, value, rowSpacing);
             }
+
         }
 
-        private static float BuildAttributeRow(Transform parent, float topOffset, string label, float value)
+        private static float BuildAttributeRow(Transform parent, float topOffset, string label, float value, float rowSpacing)
         {
             GameObject labelRow = new GameObject($"AttrLabel_{label}", typeof(RectTransform));
             labelRow.transform.SetParent(parent, false);
@@ -1380,7 +1406,7 @@ namespace Manager
             ManagerUITheme.AnchorTopStretch(barRow, topOffset + 21f, 7f);
             ManagerUITheme.BuildBar(barRow.transform, value / 100f, ManagerUITheme.RatingColor(value), 7f);
 
-            return topOffset + 42f;
+            return topOffset + rowSpacing;
         }
 
         // Weak foot uses a star rating rather than a raw number - unlike the attribute

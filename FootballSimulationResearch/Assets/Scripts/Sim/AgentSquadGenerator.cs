@@ -323,7 +323,7 @@ namespace Sim
             }
         }
 
-        private List<PlayerPosition> GetBenchPositions(Formation formation)
+        public List<PlayerPosition> GetBenchPositions(Formation formation)
         {
             // Nine-player bench (matches the current Premier League matchday-squad rule of
             // 9 named subs, though only 5 are usable per match - see
@@ -351,8 +351,8 @@ namespace Sim
                         PlayerPosition.GK,
                         PlayerPosition.CB,
                         PlayerPosition.CB,
-                        PlayerPosition.RWB,
-                        PlayerPosition.LWB,
+                        PlayerPosition.RM,
+                        PlayerPosition.LM,
                         PlayerPosition.CM,
                         PlayerPosition.AM,
                         PlayerPosition.RM,
@@ -364,8 +364,8 @@ namespace Sim
                         PlayerPosition.GK,
                         PlayerPosition.CB,
                         PlayerPosition.CB,
-                        PlayerPosition.RWB,
-                        PlayerPosition.LWB,
+                        PlayerPosition.RM,
+                        PlayerPosition.LM,
                         PlayerPosition.CM,
                         PlayerPosition.AM,
                         PlayerPosition.RM,
@@ -652,6 +652,20 @@ namespace Sim
             float youthFactor = Mathf.Clamp01((24f - player.Age) / 6f);
             float veteranFactor = Mathf.Clamp01((player.Age - 29f) / 8f);
             player.Leadership += (veteranFactor * 12f) - (youthFactor * 10f);
+
+            // Leadership needs a sparse upper tail rather than a higher universal
+            // average. Experienced players and organizing central positions are more
+            // likely to become genuine captain candidates, while a small independent
+            // chance preserves the rare precocious young leader. This is personality,
+            // not club strength: elite clubs do not automatically manufacture leaders.
+            bool organizingPosition = position == PlayerPosition.GK || position == PlayerPosition.CB ||
+                position == PlayerPosition.DM || position == PlayerPosition.CM;
+            float naturalLeaderChance = 0.075f + veteranFactor * 0.20f + (organizingPosition ? 0.06f : 0f);
+            if (Random.value < naturalLeaderChance)
+            {
+                float maturity = Mathf.Lerp(0.65f, 1f, Mathf.Clamp01((player.Age - 20f) / 10f));
+                player.Leadership += RollAttribute(15f, 32f) * maturity;
+            }
 
             // Potential (career-arc progression) - a hidden ceiling GetOverallRating()
             // can climb toward over a career (see ManagerPlayerDevelopment). Every stat

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEngine;
 using Sim;
 
@@ -117,10 +118,51 @@ namespace Manager
         // lump sum.
         private const int AssumedMatchdaysPerSeason = 38;
         private static readonly Dictionary<PlayerAgent, int> seasonStartDisplayRating = new();
+        private static readonly Dictionary<PlayerAgent, Dictionary<string, float>> seasonStartAttributes = new();
+        private static readonly string[] TrackedAttributeNames =
+        {
+            "Finishing", "Passing", "Dribbling", "Crossing", "Heading", "LongShots", "ThroughBalls",
+            "Creativity", "Positioning", "Composure", "OffTheBall", "Defending", "Tackling", "Marking",
+            "FirstTouch", "Technique", "Anticipation", "Decisions", "Vision", "DefensivePositioning", "WorkRate",
+            "Pace", "Acceleration", "Agility", "Balance", "Strength", "Stamina", "JumpingReach",
+            "Goalkeeping", "Reflexes", "Handling", "OneOnOnes", "AerialCommand", "Distribution", "GoalkeeperPositioning"
+        };
+
+        public sealed class AttributeChange
+        {
+            public string Name;
+            public float Delta;
+        }
 
         public static void SnapshotSeasonStart(PlayerAgent player)
         {
             seasonStartDisplayRating[player] = GetDisplayRating(player.GetOverallRating());
+            Dictionary<string, float> values = new();
+            foreach (string name in TrackedAttributeNames)
+            {
+                FieldInfo field = typeof(PlayerAgent).GetField(name);
+                if (field != null) values[name] = (float)field.GetValue(player);
+            }
+            seasonStartAttributes[player] = values;
+        }
+
+        public static void EnsureSeasonStartSnapshot(PlayerAgent player)
+        {
+            if (!seasonStartDisplayRating.ContainsKey(player)) SnapshotSeasonStart(player);
+        }
+
+        public static IReadOnlyList<AttributeChange> GetCurrentSeasonAttributeChanges(PlayerAgent player, int maximum = 6)
+        {
+            if (!seasonStartAttributes.TryGetValue(player, out Dictionary<string, float> before)) return System.Array.Empty<AttributeChange>();
+            List<AttributeChange> changes = new();
+            foreach (KeyValuePair<string, float> entry in before)
+            {
+                FieldInfo field = typeof(PlayerAgent).GetField(entry.Key);
+                if (field == null) continue;
+                float delta = (float)field.GetValue(player) - entry.Value;
+                if (Mathf.Abs(delta) >= 0.5f) changes.Add(new AttributeChange { Name = entry.Key, Delta = delta });
+            }
+            return changes.OrderByDescending(change => Mathf.Abs(change.Delta)).Take(Mathf.Max(1, maximum)).ToList();
         }
 
         public static void FinalizeSeasonDelta(PlayerAgent player)
@@ -169,6 +211,7 @@ namespace Manager
         // unaffected.
         public static void ApplyMatchdayProgression(PlayerAgent player, bool playedThisMatchday, float moraleGrowthMultiplier = 1f, IReadOnlyCollection<string> focusAttributes = null)
         {
+            EnsureSeasonStartSnapshot(player);
             float headroom = player.Potential - player.GetOverallRating();
             bool isGoalkeeper = player.PrimaryPosition == PlayerPosition.GK;
 

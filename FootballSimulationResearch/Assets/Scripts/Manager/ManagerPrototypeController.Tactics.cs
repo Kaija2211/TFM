@@ -42,16 +42,16 @@ namespace Manager
             }
 
             if (tacticsBoardPanel != null) tacticsBoardPanel.SetActive(false);
+            ClosePositionSelectionDialog();
             CloseTacticsBoardFormationDropdown();
             CleanupStrayDragGhosts();
 
             if (tacticsBoardOpenedMidMatch)
             {
-                // Opened via "Make Changes" during a live match - return there instead of
-                // the Hub, and don't auto-resume (matches every other manual pause/resume
-                // flow in this file - the user hits Resume explicitly when ready).
+                bool resumeSecondHalf = waitingAtHalfTime;
                 tacticsBoardOpenedMidMatch = false;
                 if (matchdayPanel != null) matchdayPanel.SetActive(true);
+                if (resumeSecondHalf) OnResumeFromHalfTimeClicked();
             }
             else
             {
@@ -652,6 +652,15 @@ namespace Manager
             rightColumnRect.offsetMax = new Vector2(rightColumnLeft + rightColumnWidth, -(TacticsScreenHeaderHeight + columnTopMargin));
             spawnedTacticsScreenElements.Add(rightColumn);
 
+            if (tacticsBoardOpenedMidMatch)
+            {
+                ManagerUITheme.BuildLabel(rightColumn.transform,
+                    "MATCH IN PROGRESS\nLeadership and set-piece assignments are locked until full-time.",
+                    16, ManagerUITheme.TextMuted, TextAlignmentOptions.Center, FontStyles.Bold, noWrap: false);
+                StartCoroutine(RecoverBlankLabelsNextFrame(tacticsScreenPanel.transform));
+                return;
+            }
+
             GameObject leadershipCaption = new GameObject("Caption", typeof(RectTransform));
             leadershipCaption.transform.SetParent(rightColumn.transform, false);
             ManagerUITheme.AnchorTopStretch(leadershipCaption, 0f, 20f, 0f);
@@ -908,7 +917,7 @@ namespace Manager
             scrollRect.viewport = viewportRect;
             scrollRect.content = contentRect;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
-            scrollRect.scrollSensitivity = UiScrollSensitivity;
+            scrollRect.scrollSensitivity = UiCompactDropdownScrollSensitivity;
 
             dropdownPanel.SetActive(false);
             return dropdownPanel;
@@ -1110,7 +1119,13 @@ namespace Manager
             ManagerSquadRoles benchRoles = GetOrCreateSquadRoles(managedTeamName);
             List<PlayerAgent> availableBench = new List<PlayerAgent>();
             List<PlayerAgent> unavailableBench = new List<PlayerAgent>();
-            foreach (PlayerAgent player in team.Bench)
+            IEnumerable<PlayerAgent> displayedBench = team.Bench;
+            if (tacticsBoardOpenedMidMatch && midMatchDraftStartingEleven != null && midMatchDraftBench != null)
+            {
+                HashSet<PlayerAgent> namedMatchdaySquad = new HashSet<PlayerAgent>(midMatchDraftStartingEleven.Concat(midMatchDraftBench));
+                displayedBench = namedMatchdaySquad.Where(player => !team.StartingEleven.Contains(player));
+            }
+            foreach (PlayerAgent player in displayedBench)
             {
                 if (benchRoles.IsInjured(player, careerCalendar.CurrentDayNumber)) unavailableBench.Add(player);
                 else availableBench.Add(player);
@@ -1150,7 +1165,7 @@ namespace Manager
             // only if a specific formation still shows real overlap.
             Vector2 anchor = new Vector2(pinPercent.x, 1f - pinPercent.y);
 
-            // Three tiers now, matching PlayerAgent.GetPositionFit: 1.00 primary or 0.85
+            // Three tiers now, matching PlayerAgent.GetPositionFit: 1.00 primary or
             // listed secondary both read as comfortable (plain slot label, no color) -
             // 0.80 "adjacent but never rolled as an actual secondary" (e.g. an LW never
             // got LM) reads as a lenient orange warning - anything below that is a
@@ -1230,7 +1245,20 @@ namespace Manager
             TacticsBoardPlayerCard card = pinObj.AddComponent<TacticsBoardPlayerCard>();
             // isDraggable: true now (was false) - lets a pin be dragged onto another
             // pin to swap their positions, not just a bench card dragged onto a pin.
-            card.Configure(player, isDraggable: true, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin, OnPinPlayersSwapped, isPinCard: true);
+            card.Configure(player, isDraggable: true, isDropTarget: true, OpenTacticsBoardPlayerDetail, OnBenchPlayerDroppedOnPin, OnPinPlayersSwapped, isPinCard: true);
+
+            // Keep player inspection and slot replacement as separate actions: the
+            // badge/card opens Player Detail, while the name/position strip selects
+            // who should occupy this formation slot.
+            Transform label = pinObj.transform.Find("Label");
+            if (label != null)
+            {
+                Image hitArea = label.gameObject.AddComponent<Image>();
+                hitArea.color = new Color(0f, 0f, 0f, 0f);
+                Button slotButton = label.gameObject.AddComponent<Button>();
+                slotButton.targetGraphic = hitArea;
+                slotButton.onClick.AddListener(() => ShowPositionSelectionDialog(player, slotPosition));
+            }
         }
 
         // Playtest backlog (session 14) - divider between the available bench and the
@@ -1300,20 +1328,112 @@ namespace Manager
             posRect.anchorMax = new Vector2(1f, 0.5f);
             posRect.offsetMin = new Vector2(18f, 2f);
             posRect.offsetMax = new Vector2(-18f, 0f);
-            ManagerUITheme.BuildLabel(posObj.transform, player.PrimaryPosition.ToString(), 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
+            string secondaryText = player.SecondaryPositions.Count > 0
+                ? $"{player.PrimaryPosition}  ·  {string.Join(", ", player.SecondaryPositions)}"
+                : player.PrimaryPosition.ToString();
+            ManagerUITheme.BuildLabel(posObj.transform, secondaryText, 14, ManagerUITheme.TextMuted, TextAlignmentOptions.MidlineLeft);
 
             TacticsBoardPlayerCard card = cardObj.AddComponent<TacticsBoardPlayerCard>();
             // isDropTarget: true now (was false), and OnBenchPlayerDroppedOnPin wired
             // (was null) - playtest backlog (session 14): dragging a starter pin onto a
             // bench card now substitutes them, same as the existing bench-onto-pin
             // direction (see TacticsBoardPlayerCard.OnDrop's isPinCard branch).
-            card.Configure(player, isDraggable: true, isDropTarget: true, OnTacticsBoardPlayerTapped, OnBenchPlayerDroppedOnPin, isPinCard: false);
+            card.Configure(player, isDraggable: true, isDropTarget: true, OpenTacticsBoardPlayerDetail, OnBenchPlayerDroppedOnPin, isPinCard: false);
         }
 
-        private void OnTacticsBoardPlayerTapped(PlayerAgent player)
+        private void OpenTacticsBoardPlayerDetail(PlayerAgent player)
         {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
             playerInspectReturnTarget = PlayerInspectReturnTarget.TacticsBoard;
-            OpenPlayerInspect(player);
+            OpenPlayerInspect(player, new List<PlayerAgent>(team.Players), ownSquad: true);
+        }
+
+        private void ShowPositionSelectionDialog(PlayerAgent currentPlayer, PlayerPosition slot)
+        {
+            ClosePositionSelectionDialog();
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            IEnumerable<PlayerAgent> eligiblePool = team.Players;
+            if (tacticsBoardOpenedMidMatch && midMatchDraftStartingEleven != null && midMatchDraftBench != null)
+                eligiblePool = midMatchDraftStartingEleven.Concat(midMatchDraftBench);
+            List<PlayerAgent> candidates = eligiblePool
+                .Where(player => (slot == PlayerPosition.GK) == (player.PrimaryPosition == PlayerPosition.GK))
+                .Where(player => !roles.IsInjured(player, careerCalendar.CurrentDayNumber))
+                .Where(player => !tacticsBoardOpenedMidMatch || !playersSubbedOffThisMatch.Contains(player))
+                .Where(player => player.GetPositionFit(slot) >= 0.8f)
+                .OrderByDescending(player => player.GetPositionFit(slot))
+                .ThenByDescending(player => player.GetOverallRating() * roles.GetConditionMultiplier(player))
+                .ToList();
+
+            Transform root = tacticsBoardPanel.transform.parent;
+            positionSelectionDialog = new GameObject("PositionSelectionDialog", typeof(RectTransform), typeof(Image));
+            positionSelectionDialog.transform.SetParent(root, false);
+            RectTransform backdrop = positionSelectionDialog.GetComponent<RectTransform>();
+            backdrop.anchorMin = Vector2.zero;
+            backdrop.anchorMax = Vector2.one;
+            backdrop.offsetMin = backdrop.offsetMax = Vector2.zero;
+            positionSelectionDialog.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.78f);
+            positionSelectionDialog.transform.SetAsLastSibling();
+
+            GameObject card = new GameObject("Card", typeof(RectTransform), typeof(Image));
+            card.transform.SetParent(positionSelectionDialog.transform, false);
+            ManagerUITheme.SetPointAnchor(card.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(860f, 650f));
+            card.GetComponent<Image>().color = ManagerUITheme.PanelDark;
+
+            GameObject title = new GameObject("Title", typeof(RectTransform));
+            title.transform.SetParent(card.transform, false);
+            ManagerUITheme.AnchorTopStretch(title, 24f, 34f, 28f);
+            ManagerUITheme.BuildLabel(title.transform, $"SELECT {slot}  ·  {candidates.Count} AVAILABLE", 22, ManagerUITheme.TextPrimary, TextAlignmentOptions.MidlineLeft, FontStyles.Bold);
+
+            Button close = ManagerUITheme.BuildButton(card.transform, "CANCEL", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(close.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-28f, -22f), new Vector2(130f, 38f));
+            close.onClick.AddListener(ClosePositionSelectionDialog);
+
+            GameObject list = BuildEmptyDropdownScaffold(card.transform, candidates.Count);
+            RectTransform listRect = list.GetComponent<RectTransform>();
+            listRect.anchorMin = new Vector2(0f, 0f);
+            listRect.anchorMax = new Vector2(1f, 1f);
+            listRect.offsetMin = new Vector2(28f, 28f);
+            listRect.offsetMax = new Vector2(-28f, -82f);
+            list.SetActive(true);
+            Transform content = list.transform.Find("Viewport/Content");
+            foreach (PlayerAgent candidate in candidates)
+            {
+                float fit = candidate.GetPositionFit(slot);
+                string[] details = fit < 1f
+                    ? new[] { $"OVR {GetDisplayRating(candidate.GetOverallRating())}", $"{roles.GetCondition(candidate):F0}%", "ADJACENT" }
+                    : new[] { $"OVR {GetDisplayRating(candidate.GetOverallRating())}", $"{roles.GetCondition(candidate):F0}%" };
+                BuildOptionRow(content, candidate.Name,
+                    details,
+                    42f, () => SelectPlayerForPosition(currentPlayer, candidate));
+            }
+            StartCoroutine(RecoverBlankLabelsNextFrame(positionSelectionDialog.transform));
+        }
+
+        private void SelectPlayerForPosition(PlayerAgent currentPlayer, PlayerAgent selectedPlayer)
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            if (selectedPlayer != currentPlayer)
+            {
+                if (team.StartingEleven.Contains(selectedPlayer))
+                    team.SwapStartingPositions(currentPlayer, selectedPlayer);
+                else if (tacticsBoardOpenedMidMatch)
+                    team.SubstitutePlayer(currentPlayer, selectedPlayer);
+                else
+                {
+                    List<PlayerAgent> eleven = new List<PlayerAgent>(team.StartingEleven);
+                    eleven[eleven.IndexOf(currentPlayer)] = selectedPlayer;
+                    team.ChangeFormation(team.Formation, eleven);
+                }
+            }
+            ClosePositionSelectionDialog();
+            RefreshTacticsBoardUI();
+        }
+
+        private void ClosePositionSelectionDialog()
+        {
+            if (positionSelectionDialog != null) Destroy(positionSelectionDialog);
+            positionSelectionDialog = null;
         }
 
         private void OnBenchPlayerDroppedOnPin(PlayerAgent benchPlayer, PlayerAgent pinPlayer)
@@ -1429,7 +1549,13 @@ namespace Manager
             // Same two exclusions OnBenchPlayerDroppedOnPin already enforces one player
             // at a time - applied here up front so auto-pick can never do in one click
             // what a manual drag isn't allowed to do at all.
-            List<PlayerAgent> pool = new List<PlayerAgent>(team.Players);
+            // Once a match starts, only the named XI and bench are eligible. Reserves
+            // cannot be promoted into a half-time/live matchday squad.
+            List<PlayerAgent> originalMatchdayOrder = new List<PlayerAgent>(team.StartingEleven);
+            originalMatchdayOrder.AddRange(team.Bench);
+            List<PlayerAgent> pool = tacticsBoardOpenedMidMatch
+                ? new List<PlayerAgent>(originalMatchdayOrder)
+                : new List<PlayerAgent>(team.Players);
             pool.RemoveAll(p => roles.IsInjured(p, careerCalendar.CurrentDayNumber)
                 || (tacticsBoardOpenedMidMatch && playersSubbedOffThisMatch.Contains(p)));
 
@@ -1508,7 +1634,23 @@ namespace Manager
                 return;
             }
 
+            List<PlayerAgent> previousOrder = new List<PlayerAgent>(team.Bench);
+            previousOrder.AddRange(team.Reserves);
+            previousOrder.AddRange(team.StartingEleven);
             team.ChangeFormation(team.Formation, bestXI);
+
+            // ChangeFormation preserves old list order but knows nothing about injuries;
+            // rebuild the named bench from healthy eligible players so an injured player
+            // cannot be reintroduced immediately after being excluded from the XI.
+            List<PlayerAgent> healthyRemainder = previousOrder
+                .Where(player => !bestXI.Contains(player)
+                    && !roles.IsInjured(player, careerCalendar.CurrentDayNumber)
+                    && (!tacticsBoardOpenedMidMatch || originalMatchdayOrder.Contains(player))
+                    && (!tacticsBoardOpenedMidMatch || !playersSubbedOffThisMatch.Contains(player)))
+                .Distinct()
+                .ToList();
+            team.Bench = healthyRemainder.Take(9).ToList();
+            team.Reserves = team.Players.Where(player => !bestXI.Contains(player) && !team.Bench.Contains(player)).ToList();
             RefreshTacticsBoardUI();
         }
 

@@ -38,7 +38,9 @@ namespace Manager
         private GameObject transferMarketStatusLabelObj;
         private Button transferMarketBuyTabButton;
         private Button transferMarketSellTabButton;
+        private Button transferMarketScoutedTabButton;
         private bool transferMarketShowingBuyTab = true;
+        private bool transferMarketShowingScoutedTab;
         private readonly ManagerTransferSearch transferSearch = new();
         private TMP_InputField transferPlayerSearchInput;
         private TMP_InputField transferClubSearchInput;
@@ -48,6 +50,10 @@ namespace Manager
         private Button transferPositionFilterButton;
         private GameObject transferPositionDropdown;
         private Button transferClearFiltersButton;
+        private ScrollRect transferMarketScrollRect;
+        private float transferInspectReturnScroll = 1f;
+        private readonly Dictionary<PlayerAgent, int> outgoingListedDay = new();
+        private readonly Dictionary<PlayerAgent, float> outgoingOffers = new();
 
         // Session 13 - looks up a player's current AI club purely by scanning
         // squadsByTeamName, rather than trusting transferMarketRowClubs (only ever
@@ -69,13 +75,22 @@ namespace Manager
 
         public void OnOpenTransferMarketClicked()
         {
+            ShowTransferMarket(resetToBuyTab: true);
+        }
+
+        private void ShowTransferMarket(bool resetToBuyTab)
+        {
             if (!transferMarketChromeBuilt)
             {
                 BuildTransferMarketChrome();
                 transferMarketChromeBuilt = true;
             }
 
-            transferMarketShowingBuyTab = true;
+            if (resetToBuyTab)
+            {
+                transferMarketShowingBuyTab = true;
+                transferMarketShowingScoutedTab = false;
+            }
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (transferMarketPanel != null) transferMarketPanel.SetActive(true);
@@ -94,12 +109,21 @@ namespace Manager
         private void OnTransferMarketBuyTabClicked()
         {
             transferMarketShowingBuyTab = true;
+            transferMarketShowingScoutedTab = false;
             RefreshTransferMarketUI();
         }
 
         private void OnTransferMarketSellTabClicked()
         {
             transferMarketShowingBuyTab = false;
+            transferMarketShowingScoutedTab = false;
+            RefreshTransferMarketUI();
+        }
+
+        private void OnTransferMarketScoutedTabClicked()
+        {
+            transferMarketShowingBuyTab = false;
+            transferMarketShowingScoutedTab = true;
             RefreshTransferMarketUI();
         }
 
@@ -151,6 +175,10 @@ namespace Manager
             transferMarketSellTabButton = ManagerUITheme.BuildButton(header.transform, "SELL", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
             ManagerUITheme.SetPointAnchor(transferMarketSellTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-406f, -27f), new Vector2(120f, 36f));
             transferMarketSellTabButton.onClick.AddListener(OnTransferMarketSellTabClicked);
+
+            transferMarketScoutedTabButton = ManagerUITheme.BuildButton(header.transform, "SCOUTED", ManagerUITheme.CardNeutral, ManagerUITheme.TextBody, 13);
+            ManagerUITheme.SetPointAnchor(transferMarketScoutedTabButton.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(-536f, -27f), new Vector2(120f, 36f));
+            transferMarketScoutedTabButton.onClick.AddListener(OnTransferMarketScoutedTabClicked);
 
             const float filterTop = 122f;
             const float filterHeight = 38f;
@@ -205,6 +233,7 @@ namespace Manager
             transferMarketListView.Bind(contentRect);
 
             ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            transferMarketScrollRect = scrollRect;
             scrollRect.content = contentRect;
             scrollRect.viewport = viewportRect;
             scrollRect.horizontal = false;
@@ -262,6 +291,21 @@ namespace Manager
             container.transform.SetParent(parent, false);
             ManagerUITheme.SetPointAnchor(container.GetComponent<RectTransform>(), new Vector2(0f, 1f), new Vector2(x, -top), new Vector2(width, height));
             TMP_InputField input = ManagerUITheme.BuildInputField(container.transform, placeholder, 13, numeric ? 2 : 32);
+            Image inputBackground = input.GetComponent<Image>();
+            inputBackground.color = ManagerUITheme.CardNeutralAlt;
+            Outline outline = input.gameObject.AddComponent<Outline>();
+            outline.effectColor = ManagerUITheme.BarTrack;
+            outline.effectDistance = new Vector2(1f, -1f);
+            if (input.textComponent != null)
+            {
+                input.textComponent.fontStyle = FontStyles.Normal;
+                input.textComponent.margin = new Vector4(4f, 0f, 0f, 0f);
+            }
+            if (input.placeholder is TextMeshProUGUI placeholderLabel)
+            {
+                placeholderLabel.fontStyle = FontStyles.Normal;
+                placeholderLabel.margin = new Vector4(4f, 0f, 0f, 0f);
+            }
             RectTransform inputRect = input.GetComponent<RectTransform>();
             inputRect.anchorMin = Vector2.zero;
             inputRect.anchorMax = Vector2.one;
@@ -280,7 +324,7 @@ namespace Manager
             transferSearch.Nationality = transferNationSearchInput?.text ?? string.Empty;
             transferSearch.MinimumAge = int.TryParse(transferMinAgeInput?.text, out int minimumAge) ? minimumAge : null;
             transferSearch.MaximumAge = int.TryParse(transferMaxAgeInput?.text, out int maximumAge) ? maximumAge : null;
-            if (transferMarketShowingBuyTab) RefreshTransferMarketUI();
+            if (transferMarketShowingBuyTab || transferMarketShowingScoutedTab) RefreshTransferMarketUI();
         }
 
         private void BuildTransferPositionDropdown(Transform parent, float x, float top)
@@ -383,7 +427,9 @@ namespace Manager
                     // than expected and how close the two new caps are to being hit.
                     bylineTMP.text = transferMarketShowingBuyTab
                         ? $"Transfer budget: £{budget:F1}m   ·   {transferNegotiation.PendingBidCount}/{ManagerTransferNegotiation.MaxConcurrentBids} bids pending (£{transferNegotiation.GetTotalEscrowed():F1}m committed)   ·   {transferNegotiation.ActiveTransferScoutAssignmentCount}/{ManagerTransferNegotiation.MaxConcurrentTransferScouts} scouts assigned"
-                        : $"Transfer budget: £{budget:F1}m   ·   Only bench players can be sold - your Starting XI is protected from an accidental sale.";
+                        : transferMarketShowingScoutedTab
+                            ? $"Transfer budget: £{budget:F1}m   ·   {transferNegotiation.TransferScoutedPlayers.Count} completed senior reports"
+                            : $"Transfer budget: £{budget:F1}m   ·   List players, wait for interest, then review each offer before accepting.";
                 }
             }
 
@@ -395,11 +441,18 @@ namespace Manager
 
             if (transferMarketSellTabButton != null && transferMarketSellTabButton.TryGetComponent(out Image sellImage))
             {
-                sellImage.color = !transferMarketShowingBuyTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
-                ManagerUITheme.NormalizeButtonLabel(transferMarketSellTabButton, "SELL", !transferMarketShowingBuyTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+                bool sellActive = !transferMarketShowingBuyTab && !transferMarketShowingScoutedTab;
+                sellImage.color = sellActive ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(transferMarketSellTabButton, "SELL", sellActive ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
             }
 
-            bool showSearch = transferMarketShowingBuyTab;
+            if (transferMarketScoutedTabButton != null && transferMarketScoutedTabButton.TryGetComponent(out Image scoutedImage))
+            {
+                scoutedImage.color = transferMarketShowingScoutedTab ? ManagerUITheme.Accent : ManagerUITheme.CardNeutral;
+                ManagerUITheme.NormalizeButtonLabel(transferMarketScoutedTabButton, "SCOUTED", transferMarketShowingScoutedTab ? ManagerUITheme.OnAccent : ManagerUITheme.TextBody, 13);
+            }
+
+            bool showSearch = transferMarketShowingBuyTab || transferMarketShowingScoutedTab;
             if (transferPlayerSearchInput != null) transferPlayerSearchInput.transform.parent.gameObject.SetActive(showSearch);
             if (transferClubSearchInput != null) transferClubSearchInput.transform.parent.gameObject.SetActive(showSearch);
             if (transferNationSearchInput != null) transferNationSearchInput.transform.parent.gameObject.SetActive(showSearch);
@@ -412,7 +465,11 @@ namespace Manager
             transferMarketListView.Clear();
             transferMarketRowClubs.Clear();
 
-            if (transferMarketShowingBuyTab)
+            if (transferMarketShowingScoutedTab)
+            {
+                RefreshScoutedSeniorPlayersList();
+            }
+            else if (transferMarketShowingBuyTab)
             {
                 RefreshTransferMarketBuyList(budget);
             }
@@ -430,6 +487,25 @@ namespace Manager
         private static readonly float[] TransferBuyColumnFractions = { 0.24f, 0.09f, 0.07f, 0.20f, 0.09f, 0.31f };
         private static readonly string[] TransferSellColumnHeaders = { "PLAYER", "POS", "AGE", "OVR", "SELL FOR" };
         private static readonly float[] TransferSellColumnFractions = { 0.34f, 0.14f, 0.12f, 0.14f, 0.26f };
+        private static readonly string[] TransferScoutedColumnHeaders = { "PLAYER", "POS", "AGE", "CLUB", "OVR", "POTENTIAL / FEE" };
+        private static readonly float[] TransferScoutedColumnFractions = { 0.24f, 0.08f, 0.07f, 0.20f, 0.08f, 0.33f };
+
+        private void RefreshScoutedSeniorPlayersList()
+        {
+            transferMarketListView.AddCustomGridHeaderRow(TransferScoutedColumnHeaders, TransferScoutedColumnFractions, null, -1, true);
+            foreach (PlayerAgent player in transferNegotiation.TransferScoutedPlayers.ToList())
+            {
+                AgentTeam team = FindTeamContainingPlayer(player);
+                string club = squadsByTeamName.FirstOrDefault(pair => pair.Value == team).Key ?? "Unknown club";
+                if (!transferSearch.Matches(player, club)) continue;
+                float recommended = ManagerTransferNegotiation.GetRecommendedBid(player, team);
+                string[] cells = { player.Name, player.PrimaryPosition.ToString(), player.Age.ToString(), club,
+                    GetDisplayRating(player.GetOverallRating()).ToString(),
+                    $"{ManagerTransferNegotiation.GetPotentialClue(player)} · ~£{recommended:F1}m" };
+                transferMarketListView.AddCustomGridRow(player, cells, TransferScoutedColumnFractions, OnBuyRowClicked,
+                    onNameClicked: p => OpenTransferTargetDetail(p, transferNegotiation.TransferScoutedPlayers.ToList()));
+            }
+        }
 
         private void RefreshTransferMarketBuyList(float budget)
         {
@@ -637,6 +713,7 @@ namespace Manager
 
         private void OpenTransferTargetDetail(PlayerAgent player, List<PlayerAgent> browseList)
         {
+            transferInspectReturnScroll = transferMarketScrollRect != null ? transferMarketScrollRect.verticalNormalizedPosition : 1f;
             playerInspectReturnTarget = PlayerInspectReturnTarget.TransferMarket;
             OpenPlayerInspect(player, browseList, ownSquad: false);
         }
@@ -648,7 +725,7 @@ namespace Manager
             // Squad or playing a match (squads generate lazily), which would otherwise
             // silently show an empty Sell list instead of your real bench.
             AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
-            List<PlayerAgent> players = new List<PlayerAgent>(team.Bench);
+            List<PlayerAgent> players = new List<PlayerAgent>(team.Players);
 
             if (transferSellSortColumn >= 0)
             {
@@ -659,14 +736,19 @@ namespace Manager
 
             foreach (PlayerAgent player in players)
             {
-                float sellPrice = ManagerClubFinance.GetSellPrice(player);
+                float marketValue = ManagerClubFinance.GetMarketValue(player);
+                string status = outgoingOffers.TryGetValue(player, out float offer)
+                    ? $"OFFER £{offer:F1}m — REVIEW"
+                    : outgoingListedDay.ContainsKey(player)
+                        ? "LISTED — AWAITING INTEREST"
+                        : $"VALUE £{marketValue:F1}m — LIST PLAYER";
                 string[] cells =
                 {
                 player.Name,
                 player.PrimaryPosition.ToString(),
                 player.Age.ToString(),
                 GetDisplayRating(player.GetOverallRating()).ToString(),
-                $"£{sellPrice:F1}m"
+                status
             };
 
                 // Session 9 - unlike Buy/Scouting, a Sell-list player IS on your own
@@ -680,8 +762,16 @@ namespace Manager
 
         private void OpenOwnSquadDetailFromTransferMarket(PlayerAgent player, List<PlayerAgent> browseList)
         {
+            transferInspectReturnScroll = transferMarketScrollRect != null ? transferMarketScrollRect.verticalNormalizedPosition : 1f;
             playerInspectReturnTarget = PlayerInspectReturnTarget.TransferMarket;
             OpenPlayerInspect(player, browseList, ownSquad: true);
+        }
+
+        private IEnumerator RestoreTransferScrollNextFrame()
+        {
+            yield return null;
+            Canvas.ForceUpdateCanvases();
+            if (transferMarketScrollRect != null) transferMarketScrollRect.verticalNormalizedPosition = transferInspectReturnScroll;
         }
 
         private void OnTransferSellColumnHeaderClicked(int column)
@@ -796,6 +886,7 @@ namespace Manager
 
         private GameObject bidDialogPanel;
         private TMP_InputField bidAmountInputField;
+        private TextMeshProUGUI bidDialogStatusLabel;
         private PlayerAgent bidDialogTarget;
         private string bidDialogSourceTeam;
 
@@ -866,6 +957,14 @@ namespace Manager
                 bidAmountInputField.placeholder.gameObject.SetActive(false);
             }
 
+            GameObject statusObj = new GameObject("Status", typeof(RectTransform));
+            statusObj.transform.SetParent(card.transform, false);
+            ManagerUITheme.SetPointAnchor(statusObj.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0f, -194f), new Vector2(680f, 40f));
+            bidDialogStatusLabel = ManagerUITheme.BuildLabel(statusObj.transform,
+                careerCalendar.IsTransferWindowOpen ? "" : "TRANSFER WINDOW CLOSED — offers are currently disabled",
+                13, careerCalendar.IsTransferWindowOpen ? ManagerUITheme.TextMuted : ManagerUITheme.Danger,
+                TextAlignmentOptions.Center, FontStyles.Bold, noWrap: false);
+
             Button confirmButton = ManagerUITheme.BuildButton(card.transform, "SUBMIT BID", ManagerUITheme.Accent, ManagerUITheme.OnAccent, 15);
             ManagerUITheme.SetPointAnchor(confirmButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(-100f, 36f), new Vector2(180f, 48f));
             confirmButton.onClick.AddListener(OnConfirmBidClicked);
@@ -887,15 +986,19 @@ namespace Manager
 
             PlayerAgent target = bidDialogTarget;
 
-            if (bidAmountInputField == null || !float.TryParse(bidAmountInputField.text, out float amount) || amount <= 0f)
+            string bidText = bidAmountInputField != null ? bidAmountInputField.text : "";
+            bool parsed = float.TryParse(bidText, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float amount)
+                || float.TryParse(bidText, out amount);
+            if (!parsed || amount <= 0f)
             {
-                SetTransferMarketStatus("Enter a bid amount above £0m.");
+                SetBidDialogStatus("Enter a valid bid amount above £0m.");
                 return;
             }
 
             if (!careerCalendar.IsTransferWindowOpen)
             {
-                SetTransferMarketStatus("The transfer window is closed.");
+                SetBidDialogStatus("The transfer window is closed. Pre-window agreements are not implemented yet.");
                 return;
             }
 
@@ -912,6 +1015,11 @@ namespace Manager
             RefreshTransferMarketUI();
         }
 
+        private void SetBidDialogStatus(string message)
+        {
+            if (bidDialogStatusLabel != null) bidDialogStatusLabel.text = message;
+        }
+
         private void CloseBidDialog()
         {
             if (bidDialogPanel != null)
@@ -922,6 +1030,7 @@ namespace Manager
 
             bidDialogTarget = null;
             bidAmountInputField = null;
+            bidDialogStatusLabel = null;
         }
 
         // Finalizes an accepted bid - moving the player onto the managed squad mirrors
@@ -1015,19 +1124,78 @@ namespace Manager
         private void OnSellRowClicked(PlayerAgent target)
         {
             if (!squadsByTeamName.TryGetValue(managedTeamName, out AgentTeam team)
-                || team.StartingEleven.Contains(target)
                 || !team.Players.Contains(target))
             {
                 return;
             }
 
-            float sellPrice = ManagerClubFinance.GetSellPrice(target);
+            if (outgoingOffers.TryGetValue(target, out float offer))
+            {
+                ShowConfirmDialog($"Accept the £{offer:F1}m offer for {target.Name}? This permanently removes him from your squad.", "ACCEPT OFFER", () => CompleteOutgoingSale(target, offer), "KEEP PLAYER", null);
+                return;
+            }
 
+            if (outgoingListedDay.ContainsKey(target))
+            {
+                ShowConfirmDialog($"Withdraw {target.Name} from the transfer list?", "WITHDRAW", () =>
+                {
+                    outgoingListedDay.Remove(target);
+                    SetTransferMarketStatus($"{target.Name} is no longer transfer-listed.");
+                    RefreshTransferMarketUI();
+                }, "CANCEL", null);
+                return;
+            }
+
+            string roleWarning = team.StartingEleven.Contains(target) ? " He is currently in your starting XI." : string.Empty;
+            ShowConfirmDialog($"Transfer-list {target.Name}? Clubs will assess him over the next few days; no sale happens without your approval.{roleWarning}", "LIST PLAYER", () =>
+            {
+                outgoingListedDay[target] = careerCalendar.CurrentDayNumber;
+                SetTransferMarketStatus($"{target.Name} has been placed on the transfer list.");
+                RefreshTransferMarketUI();
+            }, "CANCEL", null);
+        }
+
+        private void ResolveOutgoingTransferInterest(int currentDay)
+        {
+            foreach (KeyValuePair<PlayerAgent, int> listing in outgoingListedDay.ToList())
+            {
+                if (outgoingOffers.ContainsKey(listing.Key) || currentDay < listing.Value + 3) continue;
+                // Stable per-player/day variation avoids every club offering the exact
+                // same haircut while keeping the manager in control of the final sale.
+                System.Random roll = new System.Random((listing.Key.PlayerId + currentDay).GetHashCode());
+                float multiplier = 0.78f + (float)roll.NextDouble() * 0.22f;
+                float offer = ManagerClubFinance.GetMarketValue(listing.Key) * multiplier;
+                outgoingOffers[listing.Key] = offer;
+                inbox.Add(InboxMessageType.TransferOffer, $"Offer received: {listing.Key.Name}",
+                    $"A club has offered £{offer:F1}m for {listing.Key.Name}. Review it from Transfers > Sell.", currentDay);
+            }
+        }
+
+        private void CompleteOutgoingSale(PlayerAgent target, float offer)
+        {
+            AgentTeam team = GetOrCreateAgentTeam(managedTeamName);
+            if (!team.Players.Contains(target)) return;
+            if (!careerCalendar.IsTransferWindowOpen)
+            {
+                SetTransferMarketStatus("The offer remains available, but the transfer cannot complete while the window is closed.");
+                return;
+            }
+            if (team.Players.Count <= 18)
+            {
+                SetTransferMarketStatus("The board will not approve a sale that leaves fewer than 18 senior players.");
+                return;
+            }
+            if (target.PrimaryPosition == PlayerPosition.GK && team.Players.Count(player => player.PrimaryPosition == PlayerPosition.GK) <= 1)
+            {
+                SetTransferMarketStatus("You cannot sell the club's only goalkeeper.");
+                return;
+            }
             team.RemovePlayer(target);
-            finance.AdjustBudget(managedTeamName, sellPrice);
-            finance.RecordTransferIncome(managedTeamName, sellPrice);
-
-            SetTransferMarketStatus($"Sold {target.Name} for £{sellPrice:F1}m.");
+            outgoingListedDay.Remove(target);
+            outgoingOffers.Remove(target);
+            finance.AdjustBudget(managedTeamName, offer);
+            finance.RecordTransferIncome(managedTeamName, offer);
+            SetTransferMarketStatus($"Accepted £{offer:F1}m for {target.Name}.");
             RefreshTransferMarketUI();
         }
 

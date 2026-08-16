@@ -26,9 +26,13 @@ namespace Manager
             DateTime fixtureDate = careerCalendar.GetFixtureDate(currentFixtureIndex);
             if (careerCalendar.CurrentDate.Date < fixtureDate.Date)
             {
-                bool interrupted = AdvanceCalendarTo(fixtureDate, stopForNewInboxMessage: true);
+                // CONTINUE means one calendar day. Reaching the next fixture can take
+                // several presses and may be interrupted by Inbox events; only a press
+                // made on the actual fixture date opens Matchday Prep.
+                DateTime nextDay = careerCalendar.CurrentDate.Date.AddDays(1);
+                bool interrupted = AdvanceCalendarTo(nextDay, stopForNewInboxMessage: true);
                 RefreshHubUI();
-                if (interrupted || careerCalendar.CurrentDate.Date < fixtureDate.Date) return;
+                return;
             }
 
             currentFixture = managedTeamFixtures[currentFixtureIndex];
@@ -48,6 +52,7 @@ namespace Manager
                 scouting.ResolveDailyTick(currentDay, squadGenerator, inbox);
                 transferNegotiation.ResolveDueTransferScoutAssignments(currentDay, inbox, FindTeamContainingPlayer);
                 transferNegotiation.ResolveDueBids(currentDay, finance, managedTeamName, inbox, FindTeamContainingPlayer);
+                ResolveOutgoingTransferInterest(currentDay);
                 transferNegotiation.ResolveExpiredSignatures(currentDay, finance, managedTeamName, inbox);
                 ResolveDailyInjuryRecoveries();
 
@@ -1174,7 +1179,7 @@ namespace Manager
             // Real two-team comparison (green/red split at the home team's actual share),
             // not just a single-color fill - managed-team-relative like the rest of this
             // session's coloring work, not simply home=green/away=red.
-            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
+            bool managedIsHome = RequireActiveMatchFixture().HomeTeam == managedTeamName;
             Color homeColor = managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger;
             Color awayColor = managedIsHome ? ManagerUITheme.Danger : ManagerUITheme.Accent;
             ManagerUITheme.BuildSplitBar(barRect, homeSharePct, homeColor, awayColor, 6f);
@@ -1265,7 +1270,7 @@ namespace Manager
             // simply home=green/away=red.
             int total = homeValue + awayValue;
             float homeSharePct = total > 0 ? homeValue / (float)total : 0.5f;
-            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
+            bool managedIsHome = RequireActiveMatchFixture().HomeTeam == managedTeamName;
             Color homeColor = managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger;
             Color awayColor = managedIsHome ? ManagerUITheme.Danger : ManagerUITheme.Accent;
             ManagerUITheme.BuildSplitBar(barsRect, homeSharePct, homeColor, awayColor, 6f);
@@ -2669,7 +2674,7 @@ namespace Manager
             // home/away - same `currentFixture.HomeTeam == managedTeamName` check used
             // elsewhere (e.g. OnConfirmTeamClicked, matchStatsBarsContainer's possession
             // math) so it stays correct on the (roughly half the time) away fixtures too.
-            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
+            bool managedIsHome = RequireActiveMatchFixture().HomeTeam == managedTeamName;
             string homeTeamName = matchHomeNameLabel != null ? matchHomeNameLabel.text : "";
             string awayTeamName = matchAwayNameLabel != null ? matchAwayNameLabel.text : "";
             string homeHex = ColorUtility.ToHtmlStringRGB(managedIsHome ? ManagerUITheme.Accent : ManagerUITheme.Danger);
@@ -2713,7 +2718,7 @@ namespace Manager
             // same above(home)/below(away) split as the marker itself.
             const float markerOffset = 26f;
             const float labelOffset = 54f;
-            bool managedIsHome = (hasActiveMatchFixture ? activeMatchFixture : currentFixture).HomeTeam == managedTeamName;
+            bool managedIsHome = RequireActiveMatchFixture().HomeTeam == managedTeamName;
 
             foreach (AgentMatchSimulator.AgentMatchEvent evt in result.Events)
             {
@@ -2759,7 +2764,7 @@ namespace Manager
         public void OnFullTimeContinueClicked()
         {
             RestorePreMatchTeamSheet();
-            ApplyFixtureResult(hasActiveMatchFixture ? activeMatchFixture : currentFixture, lastSimulatedResult);
+            ApplyFixtureResult(RequireActiveMatchFixture(), lastSimulatedResult);
 
             currentFixtureIndex++;
             ResolveMatchdayInboxTicks();
@@ -2786,6 +2791,11 @@ namespace Manager
             preMatchStartingEleven = new List<PlayerAgent>(team.StartingEleven);
             preMatchBench = new List<PlayerAgent>(team.Bench);
             preMatchReserves = new List<PlayerAgent>(team.Reserves);
+            ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+            preMatchAttackDefendRoles = team.Players.ToDictionary(player => player, player => roles.GetRole(player));
+            preMatchWidth = tacticalSliders.Width;
+            preMatchDefensiveDepth = tacticalSliders.DefensiveDepth;
+            preMatchTempo = tacticalSliders.Tempo;
         }
 
         private void RestorePreMatchTeamSheet()
@@ -2802,9 +2812,21 @@ namespace Manager
                 player.IsStartingEleven = team.StartingEleven.Contains(player);
             }
 
+            if (preMatchAttackDefendRoles != null)
+            {
+                ManagerSquadRoles roles = GetOrCreateSquadRoles(managedTeamName);
+                foreach (KeyValuePair<PlayerAgent, AttackDefendRole> entry in preMatchAttackDefendRoles)
+                    roles.SetRole(entry.Key, entry.Value);
+            }
+
+            tacticalSliders.Width = preMatchWidth;
+            tacticalSliders.DefensiveDepth = preMatchDefensiveDepth;
+            tacticalSliders.Tempo = preMatchTempo;
+
             preMatchStartingEleven = null;
             preMatchBench = null;
             preMatchReserves = null;
+            preMatchAttackDefendRoles = null;
         }
 
         // --- Full-Time Summary -> Match Events (new screen, no Editor-placed panel to
@@ -2819,7 +2841,7 @@ namespace Manager
                 matchEventsChromeBuilt = true;
             }
 
-            OpenFootballMatch displayedFixture = hasActiveMatchFixture ? activeMatchFixture : currentFixture;
+            OpenFootballMatch displayedFixture = RequireActiveMatchFixture();
             if (matchEventsHomeNameLabel != null) matchEventsHomeNameLabel.text = displayedFixture.HomeTeam.ToUpperInvariant();
             if (matchEventsAwayNameLabel != null) matchEventsAwayNameLabel.text = displayedFixture.AwayTeam.ToUpperInvariant();
             if (matchEventsScoreText != null && lastSimulatedResult != null)
@@ -2837,6 +2859,13 @@ namespace Manager
         {
             if (matchEventsPanel != null) matchEventsPanel.SetActive(false);
             if (matchdayPanel != null) matchdayPanel.SetActive(true);
+        }
+
+        private OpenFootballMatch RequireActiveMatchFixture()
+        {
+            if (!hasActiveMatchFixture)
+                throw new InvalidOperationException("Match UI requested without an immutable active-fixture snapshot.");
+            return activeMatchFixture;
         }
 
         private void BuildMatchEventsPanel()

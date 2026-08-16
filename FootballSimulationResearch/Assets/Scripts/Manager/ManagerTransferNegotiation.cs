@@ -81,8 +81,19 @@ namespace Manager
         public int PendingBidCount => bidsByPlayer.Count;
 
         public bool IsTransferScouted(PlayerAgent player) => transferScoutedPlayers.Contains(player);
+        public IReadOnlyCollection<PlayerAgent> TransferScoutedPlayers => transferScoutedPlayers;
         public bool IsTransferScoutAssigned(PlayerAgent player) => transferScoutAssignmentResolveMatchday.ContainsKey(player);
         public int ActiveTransferScoutAssignmentCount => transferScoutAssignmentResolveMatchday.Count;
+
+        public static string GetPotentialClue(PlayerAgent player)
+        {
+            float gap = player.Potential - player.GetOverallRating();
+            if (player.Age <= 21 && player.Potential >= 86f) return "HIGH POTENTIAL";
+            if (player.Age <= 23 && gap >= 8f) return "PROMISING";
+            if (gap >= 4f) return "ROOM TO GROW";
+            if (gap <= 1.5f) return "NEAR PEAK";
+            return "ESTABLISHED";
+        }
 
         // Total £m currently tied up in escrow across every pending/awaiting-signature
         // bid - used both for the Transfer Market header ("£Xm committed") and to
@@ -225,11 +236,13 @@ namespace Manager
             float trueOverall = player.GetOverallRating();
 
             System.Random fuzzRandom = new System.Random(player.PlayerId.GetHashCode());
-            float noise = (float)(fuzzRandom.NextDouble() * 16f) - 8f;
+            float noise = (float)(fuzzRandom.NextDouble() * 12f) - 6f;
             float fuzzyCenter = trueOverall + noise;
 
-            int lowerBand = Mathf.Clamp(Mathf.FloorToInt((fuzzyCenter - 7f) / 5f) * 5, 1, 95);
-            int upperBand = Mathf.Clamp(lowerBand + 15, lowerBand + 5, 99);
+            int lowerUncertainty = fuzzRandom.Next(5, 10);
+            int upperUncertainty = fuzzRandom.Next(5, 10);
+            int lowerBand = Mathf.Clamp(Mathf.RoundToInt(fuzzyCenter) - lowerUncertainty, 1, 94);
+            int upperBand = Mathf.Clamp(Mathf.RoundToInt(fuzzyCenter) + upperUncertainty, lowerBand + 5, 99);
 
             return $"{lowerBand}-{upperBand}";
         }

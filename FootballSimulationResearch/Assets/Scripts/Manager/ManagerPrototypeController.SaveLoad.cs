@@ -117,7 +117,11 @@ namespace Manager
             // matchday it was found on so the poach timer resumes correctly.
             for (int slot = 0; slot < ManagerScouting.ScoutSlots; slot++)
             {
-                data.ScoutMissions.Add(new ScoutMissionSaveData { TargetPositions = new List<PlayerPosition>(scouting.GetMissionPositions(slot)) });
+                data.ScoutMissions.Add(new ScoutMissionSaveData
+                {
+                    TargetPositions = new List<PlayerPosition>(scouting.GetMissionPositions(slot)),
+                    DaysWithoutDiscovery = scouting.GetDaysWithoutDiscovery(slot)
+                });
             }
 
             foreach (PlayerAgent prospect in scouting.DiscoveredProspects)
@@ -134,6 +138,25 @@ namespace Manager
             // assignments don't round-trip by reference and are refunded instead.
             data.InboxMessages = inbox.BuildSaveList();
             data.PendingBidRefundOnLoad = transferNegotiation.GetTotalEscrowed();
+            foreach (KeyValuePair<PlayerAgent, int> listing in outgoingListedDay)
+            {
+                data.OutgoingTransfers.Add(new OutgoingTransferSaveData
+                {
+                    PlayerId = listing.Key.PlayerId,
+                    ListedDay = listing.Value,
+                    HasOffer = outgoingOffers.TryGetValue(listing.Key, out float offer),
+                    OfferAmount = offer
+                });
+            }
+
+            foreach (KeyValuePair<int, List<char>> form in recentFormByTeamId)
+            {
+                data.RecentForm.Add(new TeamFormSaveData
+                {
+                    TeamId = form.Key,
+                    Results = new string(form.Value.TakeLast(5).ToArray())
+                });
+            }
 
             return data;
         }
@@ -173,14 +196,22 @@ namespace Manager
                 playableTable.EnsureTeam(teamRegistry.GetTeamId(teamName));
             }
 
-            // recentFormByTeamId isn't part of the save DTO (same documented scope limit
-            // as condition/injuries/appearances not persisting), so clear it here too -
-            // otherwise a loaded career could show pre-save Form strips that no longer
-            // correspond to anything in the restored fixture list.
             recentFormByTeamId.Clear();
+            if (data.RecentForm != null)
+            {
+                foreach (TeamFormSaveData savedForm in data.RecentForm)
+                {
+                    if (savedForm == null || string.IsNullOrEmpty(savedForm.Results)) continue;
+                    List<char> validResults = savedForm.Results
+                        .Where(result => result == 'W' || result == 'D' || result == 'L')
+                        .TakeLast(5)
+                        .ToList();
+                    if (validResults.Count > 0) recentFormByTeamId[savedForm.TeamId] = validResults;
+                }
+            }
 
-            // Same scope limit as recentFormByTeamId just above - none of this survives
-            // save/load either, so it's reset here rather than left holding stale
+            // The notification/cooldown state below still doesn't survive save/load, so
+            // it is reset here rather than left holding stale
             // pre-load state (a mid-season-review flag from a different season, an
             // injured-player tracked set for a squad about to be rebuilt fresh below).
             midSeasonReviewSentForCurrentSeason = false;
@@ -216,9 +247,20 @@ namespace Manager
             loanTracker.Clear();
             academy.Clear();
             transferNegotiation.Clear();
+            outgoingListedDay.Clear();
+            outgoingOffers.Clear();
 
             AgentTeam managedTeam = data.ManagedSquad.ToTeam();
             squadsByTeamName[managedTeamName] = managedTeam;
+            Dictionary<string, PlayerAgent> outgoingPlayersById = managedTeam.Players
+                .Where(player => !string.IsNullOrEmpty(player.PlayerId))
+                .ToDictionary(player => player.PlayerId, player => player);
+            foreach (OutgoingTransferSaveData outgoing in data.OutgoingTransfers ?? new List<OutgoingTransferSaveData>())
+            {
+                if (!outgoingPlayersById.TryGetValue(outgoing.PlayerId, out PlayerAgent player)) continue;
+                outgoingListedDay[player] = outgoing.ListedDay;
+                if (outgoing.HasOffer) outgoingOffers[player] = outgoing.OfferAmount;
+            }
 
             // Live team strength (session 16) - this bypasses GetOrCreateAgentTeam
             // entirely (the managed squad is restored directly from save data, not
@@ -360,6 +402,7 @@ namespace Manager
             for (int slot = 0; slot < data.ScoutMissions.Count && slot < ManagerScouting.ScoutSlots; slot++)
             {
                 scouting.RestoreMissionBrief(slot, data.ScoutMissions[slot].TargetPositions);
+                scouting.RestoreMissionDrought(slot, data.ScoutMissions[slot].DaysWithoutDiscovery);
             }
 
             List<PlayerAgent> restoredDiscoveries = new();

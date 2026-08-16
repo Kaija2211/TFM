@@ -34,8 +34,8 @@ public static class WorldGenerationProfileAudit
             .OrderBy(profile => profile.CountryCode).ThenBy(profile => profile.ClubId)
             .ToList();
 
-        Dictionary<string, List<(float starters, float bench, float display)>> results = targets
-            .ToDictionary(target => target.ClubId, _ => new List<(float, float, float)>(AuditWorlds));
+        Dictionary<string, List<(float starters, float bench, float reserves, float display, float starterValue, float benchValue, float reserveValue)>> results = targets
+            .ToDictionary(target => target.ClubId, _ => new List<(float, float, float, float, float, float, float)>(AuditWorlds));
         for (int world = 0; world < AuditWorlds; world++)
         {
             Random.InitState(AuditSeed + world);
@@ -48,18 +48,26 @@ public static class WorldGenerationProfileAudit
                 results[target.ClubId].Add((
                     team.StartingEleven.Average(player => player.GetOverallRating()),
                     team.Bench.Average(player => player.GetOverallRating()),
-                    profile.DisplayOverall));
+                    team.Reserves.Average(player => player.GetOverallRating()),
+                    profile.DisplayOverall,
+                    team.StartingEleven.Average(ManagerClubFinance.GetMarketValue),
+                    team.Bench.Average(ManagerClubFinance.GetMarketValue),
+                    team.Reserves.Average(ManagerClubFinance.GetMarketValue)));
             }
         }
 
-        StringBuilder csv = new("Country,ClubId,Club,Worlds,TargetFirstTeam,ActualFirstTeam,TargetBench,ActualBench,MeanPlayerDerivedDisplay\n");
+        StringBuilder csv = new("Country,ClubId,Club,Worlds,TargetFirstTeam,ActualFirstTeam,TargetBench,ActualBench,ActualReserves,MeanPlayerDerivedDisplay,MeanStarterValueM,MeanBenchValueM,MeanReserveValueM\n");
         foreach (ClubWorldGenerationProfileRecord target in targets)
         {
-            List<(float starters, float bench, float display)> rows = results[target.ClubId];
+            List<(float starters, float bench, float reserves, float display, float starterValue, float benchValue, float reserveValue)> rows = results[target.ClubId];
             csv.Append(target.CountryCode).Append(',').Append(Escape(target.ClubId)).Append(',').Append(Escape(target.ClubName)).Append(',')
                 .Append(AuditWorlds).Append(',').Append(Number(target.FirstTeamOverall)).Append(',').Append(Number(rows.Average(row => row.starters))).Append(',')
                 .Append(Number(target.BenchOverall)).Append(',').Append(Number(rows.Average(row => row.bench))).Append(',')
-                .Append(Number(rows.Average(row => row.display))).Append('\n');
+                .Append(Number(rows.Average(row => row.reserves))).Append(',')
+                .Append(Number(rows.Average(row => row.display))).Append(',')
+                .Append(Number(rows.Average(row => row.starterValue))).Append(',')
+                .Append(Number(rows.Average(row => row.benchValue))).Append(',')
+                .Append(Number(rows.Average(row => row.reserveValue))).Append('\n');
         }
 
         string output = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Temp", "WorldGenerationProfileAudit.csv"));

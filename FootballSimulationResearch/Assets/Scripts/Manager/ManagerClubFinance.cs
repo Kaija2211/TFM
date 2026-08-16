@@ -127,27 +127,42 @@ namespace Manager
 
         public static float GetMarketValue(PlayerAgent player)
         {
-            float overall = player.GetOverallRating();
-            float potential = player.Potential;
-            float youthFactor = Mathf.Clamp01((26f - player.Age) / 10f);
+            return CalculateMarketValue(player.GetOverallRating(), player.Potential, player.Age);
+        }
 
-            // Ramps from 28 to a full discount at 35 (VeteranRetirementAge) rather than
-            // 31-39 - playtest finding (session 16): the old curve only discounted a
-            // 33-year-old by ~14%, letting an aging player price like they were still
-            // mid-career. Most players don't play meaningfully past retirement age, so
-            // the discount should be most of the way there well before it.
-            float veteranDiscount = Mathf.Clamp01((player.Age - 28f) / 7f);
+        // Pure valuation curve kept public so economic audits can test stable benchmark
+        // profiles without manufacturing an entire PlayerAgent attribute sheet. This is
+        // intrinsic value only: the selling club's depth/importance premium belongs in
+        // ManagerTransferNegotiation, while reputation belongs in budgets, attraction
+        // and bargaining power. Mixing those into this number made lower-club reserve
+        // players liquidate for superstar fees.
+        public static float CalculateMarketValue(float overall, float potential, int age)
+        {
+            overall = Mathf.Clamp(overall, 1f, 99f);
+            potential = Mathf.Clamp(potential, overall, 99f);
 
-            float overAllowance = Mathf.Max(overall - 45f, 0f);
-            float baseValue = overAllowance * overAllowance * 0.045f;
+            // Exponential ability curve: approximately £1.1m at 60, £6m at 70,
+            // £31m at 80 and £165m at 90 before age/upside adjustments. This preserves
+            // genuine scarcity at the elite end without pricing every 70-rated reserve
+            // like a Premier League starter.
+            float abilityValue = 0.5f * Mathf.Pow(1.18f, overall - 55f);
 
-            // The wonderkid premium - a big Potential gap over current Overall is worth
-            // real money on its own, more so the younger the player is (more years for
-            // it to actually be realised, see ManagerPlayerDevelopment).
-            float potentialUpside = Mathf.Max(potential - overall, 0f) * (1.2f + youthFactor * 1.8f);
+            // Potential is valuable only while there is realistic development runway.
+            // A large gap produces a meaningful wonderkid premium, but does not make a
+            // merely decent 24-year-old worth tens of millions for unrealised upside.
+            float developmentRunway = Mathf.Clamp01((25f - age) / 8f);
+            float potentialGap = Mathf.Max(potential - overall, 0f);
+            float potentialPremium = Mathf.Pow(potentialGap, 1.25f) * 0.45f * developmentRunway;
 
-            float value = (baseValue + potentialUpside) * (1f - veteranDiscount * 0.55f);
-            return Mathf.Max(value, 0.2f);
+            // Prime players retain full value through 27. Resale value then falls
+            // progressively rather than waiting until retirement is imminent.
+            float ageMultiplier;
+            if (age <= 27) ageMultiplier = 1f;
+            else if (age <= 30) ageMultiplier = Mathf.Lerp(1f, 0.70f, (age - 27f) / 3f);
+            else if (age <= 33) ageMultiplier = Mathf.Lerp(0.70f, 0.32f, (age - 30f) / 3f);
+            else ageMultiplier = Mathf.Lerp(0.32f, 0.12f, Mathf.Clamp01((age - 33f) / 4f));
+
+            return Mathf.Max((abilityValue + potentialPremium) * ageMultiplier, 0.2f);
         }
 
         // Your own player - no random refusal (you're not asking permission), just a

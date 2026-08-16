@@ -7,6 +7,20 @@ file accumulates — new entries go at the top.
 
 ---
 
+## 2026-08-15 — Sunderland playtest repair cycle and career-state hardening
+
+Thomas completed the first sustained lower-club playtest on the post-v0.1 world-generation build. The repair cycle shipped exact Player Detail return-state restoration; daily Continue behaviour; condition-aware, injury-safe auto-pick; reversible in-match substitution drafts; complete post-match restoration of formation, team sheet, player instructions and tactical sliders; an immutable active-fixture/result snapshot; and a real half-time checkpoint that resumes when changes are committed.
+
+Recruitment and squad UX gained visible transfer search fields, a real position dropdown, a first Scouted Players view, outgoing-transfer listings/offers, bounded senior-potential clues, corrected value curves, clickable tactics-board position selection, clear primary/secondary/adjacent suitability, and strict live-match exclusion of reserves. The 3-4-2-1 now uses LM/RM in both XI and bench templates.
+
+Development/scouting gained live season Overall and whole-number attribute deltas, a tested Leadership tail, independent youth scouts with persisted ten-day drought protection, varied asymmetric report ranges and a maximum discovery age of 18. Save format v5 now persists league-table Form; legacy saves remain compatible but cannot reconstruct Form already discarded by earlier versions.
+
+Verification: runtime and editor assemblies compile with zero errors; Manager Career Systems and Leadership Distribution audits passed in Unity; the latest holy-balance run remained at 2.699 goals per game across 76,000 simulated matches. Sunderland's observed 1W–1D–6L opening is retained as balance evidence, not grounds for a one-save retune.
+
+Next systemic milestone: intelligent AI club squad evaluation, rotation and recruitment, followed by contracts/player interest and the unified senior/youth scouting department. Narrow formations and richer named roles remain the next tactical slice and require another holy-balance regression.
+
+---
+
 ## 2026-08-10 — Elite aging curve, an autopilot backlog sweep (loans/academy/scouting rework/nationalities), and two real live-caught bugs
 
 **Commits:**

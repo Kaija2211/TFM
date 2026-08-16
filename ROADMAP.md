@@ -6,7 +6,7 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 
 ## 1. Finish the transfer overhaul
 
-- Replace the temporary position-cycle control with a proper dropdown.
+- [x] Replace the temporary position-cycle control with a proper dropdown.
 - Add filters for Overall/potential bands, value, height, preferred foot and scouting status.
 - Add shortlists, recent searches and saved searches.
 - Separate scouted, shortlisted, transfer-listed, loan-listed and free-agent views.
@@ -22,6 +22,8 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 - [x] Select the starting XI and nine-player matchday bench separately.
 - [x] Move players between the matchday bench and wider reserves.
 - [x] Make auto-pick consider Condition, injuries, quality and position fit.
+- [x] Click a pitch position to select eligible primary, secondary and adjacent players ranked by fit, ability and Condition.
+- [x] Treat explicitly listed secondary positions as full suitability; label adjacent cover and omit emergency mismatches from the quick selector.
 - Automate captain, set-piece and role reassignment when necessary.
 - Make AI clubs select and rotate coherent matchday squads.
 - Model fixture congestion and recovery using actual calendar dates.
@@ -35,8 +37,10 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 - [x] Decide and enforce the five-substitution rule.
 - [x] Bind fixture banners, results and Match Events to one active-match snapshot and validate score/event consistency.
 - [x] Prevent scorer/provider duplication in the manager match simulator by excluding the creator from shooter selection.
-- Relocate the substitutions panel and Make Changes button.
-- Improve tactical-board stamina colours and match-screen team-name sizing.
+- [x] Relocate the substitutions panel and Make Changes button so growing substitution history cannot overlap controls/statistics.
+- [x] Improve tactical-board Condition colours.
+- Improve match-screen team-name sizing and alignment.
+- Add genuinely narrow formations, beginning with 4-1-2-1-2 Diamond, then assess 4-3-2-1 and 4-3-1-2.
 
 ## 4. Formation and tactical-shape overhaul
 
@@ -47,8 +51,22 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 - [x] Explain the clearest tactical route advantage and vulnerability on Matchday Prep.
 - [x] Add first-generation opponent-aware AI adaptation with one bounded matchup adjustment.
 - [x] Require tactical-sensitivity and holy-balance audits for the first interaction slice.
+- Add named player roles and duties that alter occupancy and route contribution without replacing real attributes.
+- Add genuinely narrow shapes whose central overloads and exposed flanks emerge from their pins.
+- Add readable post-match evidence showing which tactical routes actually produced chances.
 
-## 5. Intelligent AI clubs
+## 5. Match simulation and performance model
+
+- Preserve the current simulator and holy-balance results as the benchmark rather than rewriting blindly.
+- Replace isolated chance events with a structured sequence: recovery, buildup, progression, creation, shot and save/goal.
+- Record authoritative participants, tactical route, location, chance quality and outcome for every contribution.
+- Derive possession, chances, shots, assists and other match statistics from those structured events.
+- Rebuild player ratings around position-specific positive contributions, errors, tactical execution, minutes and opposition difficulty.
+- Continue the existing match state after substitutions and tactical changes rather than regenerating an unrelated remainder.
+- Expose enough evidence for tactical explanations, AI decisions, persistent career statistics, Moneyball recruitment and narrative systems.
+- Recalibrate goals, scorelines, GD, points and table shape through holy-balance regression before replacing the benchmark.
+
+## 6. Intelligent AI clubs
 
 - [x] Partition the Manager Unity coordinator by screen/system responsibility before adding further AI complexity.
 - Evaluate positional depth, squad quality and age profile.
@@ -59,18 +77,19 @@ This is the ordered post-v0.1 roadmap following completion of the day-by-day car
 - Give clubs distinct recruitment and financial personalities.
 - Run long-career safeguards against hoarding, churn and squad collapse.
 
-## 6. Scouting, academy and player development
+## 7. Scouting, academy and player development
 
 - [x] Verify both youth scouts under daily simulation.
-- Tune discovery and poaching pacing against calendar time.
+- [x] Tune first-pass discovery pacing against calendar time: independent scouts, 2–3-player batches and a persisted ten-day maximum drought. Poaching pressure remains subject to longer playtests.
 - Add training schedules and individual development plans.
-- Explain the causes of player growth and decline.
+- [x] Surface first-pass season Overall and whole-number attribute deltas. Richer explanations and persistent career histories remain.
 - Persist matches, goals, assists, minutes and average rating.
 - Let staff/scout quality affect report speed and accuracy.
-- Show public secondary positions before full scouting.
-- Continue auditing generated mental and physical attribute variety.
+- [x] Show public secondary positions before full scouting and treat them as full positional suitability.
+- [x] Audit Leadership generation with a permanent 6,000-player distribution test.
+- Continue auditing physical and other generated attribute variety.
 
-## 7. Define TFM's identity
+## 8. Define TFM's identity
 
 Hold a dedicated design pass around the question: **Why play TFM instead of a smaller Football Manager?**
 
@@ -84,7 +103,7 @@ Leading pillars:
 - Fewer chores and more consequential decisions than Football Manager.
 - Post-alpha candidate: an offline-first narrative/media engine, with optional enhanced generation, that turns verified save events and emergent relationships into unique career history.
 
-## 8. Activate the football pyramid and wider world
+## 9. Activate the football pyramid and wider world
 
 - Make the Championship, League One and League Two playable.
 - Add promotion, relegation and playoffs.
@@ -96,7 +115,7 @@ Leading pillars:
 - Keep wider world clubs available as transfer participants and European opponents.
 - Generate future fixture calendars rather than replaying one historical order.
 
-## 9. Reputation, finances and manager career
+## 10. Reputation, finances and manager career
 
 - Add slowly changing club reputation distinct from match strength.
 - Model player interest through reputation, role, wages and competition level.
@@ -105,8 +124,9 @@ Leading pillars:
 - Add board expectations and club philosophies.
 - Let historical honours influence—but never permanently dictate—reputation.
 
-## 10. UI, accessibility and release preparation
+## 11. UI, accessibility and release preparation
 
+- Use `CLAUDE_DESIGN_MOCKUP_QUEUE.md` as the ordered mockup brief and `UI_HANDOFF.md` as the stable interaction contract.
 - Complete a desktop-first visual redesign.
 - [x] Add a proper transfer-position dropdown and fast scrolling. Additional filter chips remain part of the transfer overhaul.
 - [x] Add the music-volume slider and Inbox read/collapse improvements.
@@ -118,8 +138,11 @@ Leading pillars:
 
 ## Immediate continuation order
 
-1. Extend tactical shape into player roles, readable feedback and opponent-aware AI adaptation.
-2. Add AI squad evaluation, rotation and recruitment.
-3. Add contracts, player interest and richer transfer negotiations.
-4. Hold the TFM identity and manager-skill-system design session.
-5. Activate the wider football pyramid.
+1. Build AI squad evaluation and coherent rotation on top of the completed 30-player club squads.
+2. Design and implement the structured match-event/performance-model slice while preserving the current holy-balance benchmark.
+3. Let AI clubs identify needs, recruit replacements and protect genuine depth using trustworthy performance evidence.
+4. Add contracts, player interest, shortlists and richer transfer negotiations.
+5. Replace the fixed youth-scout abstraction with the unified senior/youth scouting department.
+6. Add narrow formations and the next player-role/tactical-feedback slice, followed by holy-balance regression.
+7. Hold the TFM identity and manager-skill-system design session.
+8. Activate the wider football pyramid once club-management systems can sustain promotion/relegation.

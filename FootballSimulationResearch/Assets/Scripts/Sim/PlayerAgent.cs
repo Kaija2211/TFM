@@ -139,7 +139,7 @@ namespace Sim
 
             if (SecondaryPositions.Contains(position))
             {
-                return 0.85f;
+                return 1.00f;
             }
 
             // Half the full penalty (1.00 -> 0.60 is -0.40; adjacent is -0.20) rather

@@ -52,8 +52,15 @@ namespace Manager
         private Button scoutingAcademyTabButton;
         private Button scoutingWorldTabButton;
         private bool scoutingShowingAcademyTab;
+        private ScrollRect scoutingScrollRect;
+        private float scoutingInspectReturnScroll = 1f;
 
         public void OnOpenScoutingClicked()
+        {
+            ShowScouting(resetToWorldTab: true);
+        }
+
+        private void ShowScouting(bool resetToWorldTab)
         {
             CloseAcademyIntakeDropdown();
 
@@ -63,7 +70,7 @@ namespace Manager
                 scoutingChromeBuilt = true;
             }
 
-            scoutingShowingAcademyTab = false;
+            if (resetToWorldTab) scoutingShowingAcademyTab = false;
 
             if (seasonHubPanel != null) seasonHubPanel.SetActive(false);
             if (scoutingPanel != null) scoutingPanel.SetActive(true);
@@ -196,6 +203,7 @@ namespace Manager
             scoutingListView.Bind(contentRect);
 
             ScrollRect scrollRect = scrollViewObj.GetComponent<ScrollRect>();
+            scoutingScrollRect = scrollRect;
             scrollRect.content = contentRect;
             scrollRect.viewport = viewportRect;
             scrollRect.horizontal = false;
@@ -800,6 +808,7 @@ namespace Manager
 
         private void OpenAcademyProspectDetail(PlayerAgent prospect, List<PlayerAgent> browseList)
         {
+            scoutingInspectReturnScroll = scoutingScrollRect != null ? scoutingScrollRect.verticalNormalizedPosition : 1f;
             playerInspectReturnTarget = PlayerInspectReturnTarget.Scouting;
             OpenPlayerInspect(prospect, browseList, ownSquad: false, isAcademyProspect: true);
         }
@@ -882,8 +891,16 @@ namespace Manager
         // applies to a prospect you don't own yet.
         private void OpenScoutedProspectDetail(PlayerAgent prospect, List<PlayerAgent> browseList)
         {
+            scoutingInspectReturnScroll = scoutingScrollRect != null ? scoutingScrollRect.verticalNormalizedPosition : 1f;
             playerInspectReturnTarget = PlayerInspectReturnTarget.Scouting;
             OpenPlayerInspect(prospect, browseList, ownSquad: false);
+        }
+
+        private IEnumerator RestoreScoutingScrollNextFrame()
+        {
+            yield return null;
+            Canvas.ForceUpdateCanvases();
+            if (scoutingScrollRect != null) scoutingScrollRect.verticalNormalizedPosition = scoutingInspectReturnScroll;
         }
 
     }

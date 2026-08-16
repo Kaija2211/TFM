@@ -18,6 +18,7 @@ namespace Manager
     public partial class ManagerPrototypeController : MonoBehaviour
     {
         private const float UiScrollSensitivity = 70f;
+        private const float UiCompactDropdownScrollSensitivity = 12f;
         [Header("Season Data")]
         [SerializeField] private TextAsset seasonFile;
         [SerializeField] private TextAsset[] trainingSeasonFiles;
@@ -366,6 +367,7 @@ namespace Manager
         // a few seconds, then clears itself.
         private TextMeshProUGUI tacticsBoardWarningLabel;
         private Coroutine tacticsBoardWarningCoroutine;
+        private GameObject positionSelectionDialog;
 
         // Tactics screen (session 7) - reached from the Tactics Board via a new TACTICS
         // button beside FORMATION. Centralizes captaincy/set-piece-taker assignment
@@ -436,6 +438,10 @@ namespace Manager
         private List<PlayerAgent> preMatchStartingEleven;
         private List<PlayerAgent> preMatchBench;
         private List<PlayerAgent> preMatchReserves;
+        private Dictionary<PlayerAgent, AttackDefendRole> preMatchAttackDefendRoles;
+        private WidthSetting preMatchWidth;
+        private DefensiveDepthSetting preMatchDefensiveDepth;
+        private TempoSetting preMatchTempo;
 
 
         // Real football doesn't let a substituted-off player return - tracks who's

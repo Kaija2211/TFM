@@ -47,7 +47,7 @@ This is the working contract for the upcoming visual-design pass. The current UI
 - Match pauses automatically after minute 45.
 - Required content: `HALF TIME`, score, possession, chances created, shots and shots on target.
 - Required actions: `MAKE CHANGES` and `START SECOND HALF`.
-- Returning from Make Changes must return to the half-time state, not silently resume play.
+- Returning from half-time Make Changes commits the draft and resumes the second half automatically.
 
 ### Full-time and Match Events
 
@@ -86,10 +86,13 @@ This is the working contract for the upcoming visual-design pass. The current UI
 ## Known functional follow-ups outside the mockup pass
 
 - Automated assignment fallback when role holders leave the XI.
-- Formation-zone and overload model.
 - AI squad selection and recruitment intelligence.
+- Structured match events, richer statistics and position-specific player ratings.
 - Remaining transfer filters, contracts, wages and negotiations.
+- Unified senior/youth scouting department and training/development plans.
 - Visual treatment for the functional fast scrolling, music-volume slider and separate music toggle.
+
+The ordered design workload is maintained in `CLAUDE_DESIGN_MOCKUP_QUEUE.md`.
 
 ## Acceptance rule
 

@@ -239,6 +239,7 @@ namespace Manager.Save
     public class ScoutMissionSaveData
     {
         public List<PlayerPosition> TargetPositions = new();
+        public int DaysWithoutDiscovery;
     }
 
     // A discovered-but-unclaimed prospect, paired with the matchday it was found on so
@@ -263,7 +264,7 @@ namespace Manager.Save
     // ManagerPrototypeController, which don't branch on Type at all yet).
     public enum InboxMessageType
     {
-        ScoutingReport, BidAccepted, BidDeclined,
+        ScoutingReport, BidAccepted, BidDeclined, TransferOffer,
         WelcomeCareer, SeasonExpectations, RecruitmentTeaser,
         PostMatchReaction, FormStreak, MidSeasonReview, EndOfSeason,
         LowStamina, Injury, Recovery, Retirement
@@ -296,6 +297,15 @@ namespace Manager.Save
     }
 
     [Serializable]
+    public class OutgoingTransferSaveData
+    {
+        public string PlayerId;
+        public int ListedDay;
+        public bool HasOffer;
+        public float OfferAmount;
+    }
+
+    [Serializable]
     public class ManagerTacticsSaveData
     {
         public WidthSetting Width = WidthSetting.Balanced;
@@ -304,9 +314,17 @@ namespace Manager.Save
     }
 
     [Serializable]
+    public class TeamFormSaveData
+    {
+        public int TeamId;
+        // Oldest to newest, containing at most five W/D/L characters.
+        public string Results;
+    }
+
+    [Serializable]
     public class ManagerSaveData
     {
-        public int SaveVersion = 4;
+        public int SaveVersion = 5;
         // False for every pre-world-generation save because missing JSON boolean
         // fields deserialize to false. New careers opt in explicitly, preserving the
         // legacy squad/strength bootstrap for existing saves.
@@ -336,6 +354,7 @@ namespace Manager.Save
         public string ActiveSeasonFileName;
 
         public List<LeagueTableEntrySaveData> TableEntries = new();
+        public List<TeamFormSaveData> RecentForm = new();
         public AgentTeamSaveData ManagedSquad;
         public List<PlayerAgentSaveData> ManagedReservePool = new();
         public ManagerSquadRolesSaveData ManagedRoles;
@@ -382,5 +401,6 @@ namespace Manager.Save
         // and would need to be started over.
         public List<InboxMessageSaveData> InboxMessages = new();
         public float PendingBidRefundOnLoad;
+        public List<OutgoingTransferSaveData> OutgoingTransfers = new();
     }
 }

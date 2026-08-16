@@ -35,13 +35,15 @@ namespace Manager
         public const int ScoutSlots = 2;
         public const int MaxTargetPositions = 3;
         private const int MinYouthAge = 14;
-        private const int MaxYouthAge = 19;
+        private const int MaxYouthAge = 18;
         private const float DiscoveryChancePerActiveMissionPerDay = 0.08f;
+        private const int MaximumActiveMissionDroughtDays = 10;
         public const int DaysUntilPoached = 14;
 
         private readonly List<PlayerPosition>[] missionPositions = new List<PlayerPosition>[ScoutSlots];
         private readonly List<PlayerAgent> discoveredProspects = new();
         private readonly Dictionary<PlayerAgent, int> discoveredMatchday = new();
+        private readonly int[] daysWithoutDiscovery = new int[ScoutSlots];
 
         // Deliberately randomized per career rather than a fixed hierarchy - see the
         // original world-scattered rework's own reasoning (unchanged this session, just
@@ -55,6 +57,7 @@ namespace Manager
 
         public IReadOnlyList<PlayerPosition> GetMissionPositions(int slotIndex) => missionPositions[slotIndex];
         public bool IsMissionActive(int slotIndex) => missionPositions[slotIndex].Count > 0;
+        public int GetDaysWithoutDiscovery(int slotIndex) => daysWithoutDiscovery[slotIndex];
 
         public void SetMissionBrief(int slotIndex, List<PlayerPosition> positions)
         {
@@ -66,11 +69,13 @@ namespace Manager
             }
 
             missionPositions[slotIndex] = trimmed;
+            if (trimmed.Count == 0) daysWithoutDiscovery[slotIndex] = 0;
         }
 
         public void CancelMission(int slotIndex)
         {
             missionPositions[slotIndex].Clear();
+            daysWithoutDiscovery[slotIndex] = 0;
         }
 
         // Session 16 - a brand new career starting mid-session (OnConfirmTeamClicked)
@@ -83,6 +88,7 @@ namespace Manager
         public void Clear()
         {
             for (int i = 0; i < ScoutSlots; i++) missionPositions[i].Clear();
+            for (int i = 0; i < ScoutSlots; i++) daysWithoutDiscovery[i] = 0;
             discoveredProspects.Clear();
             discoveredMatchday.Clear();
             regionalQualityBiasByRegion = null;
@@ -110,7 +116,10 @@ namespace Manager
             for (int slot = 0; slot < ScoutSlots; slot++)
             {
                 if (!IsMissionActive(slot)) continue;
-                if (Random.value > DiscoveryChancePerActiveMissionPerDay) continue;
+                daysWithoutDiscovery[slot]++;
+                bool droughtGuarantee = daysWithoutDiscovery[slot] >= MaximumActiveMissionDroughtDays;
+                if (!droughtGuarantee && Random.value > DiscoveryChancePerActiveMissionPerDay) continue;
+                daysWithoutDiscovery[slot] = 0;
 
                 List<PlayerPosition> positions = missionPositions[slot];
 
@@ -230,6 +239,11 @@ namespace Manager
             return discoveredProspects.Remove(prospect);
         }
 
+        public void RestoreMissionDrought(int slotIndex, int days)
+        {
+            daysWithoutDiscovery[slotIndex] = Mathf.Clamp(days, 0, MaximumActiveMissionDroughtDays - 1);
+        }
+
         public bool TryClaimProspectToAcademy(PlayerAgent prospect, ManagerAcademy academy, int slotIndex)
         {
             if (prospect == null || academy == null || !discoveredProspects.Contains(prospect)) return false;
@@ -273,11 +287,13 @@ namespace Manager
         public string GetDisplayPotential(PlayerAgent player)
         {
             System.Random fuzzRandom = new System.Random(player.PlayerId.GetHashCode());
-            float noise = (float)(fuzzRandom.NextDouble() * 16f) - 8f;
+            float noise = (float)(fuzzRandom.NextDouble() * 12f) - 6f;
             float fuzzyCenter = player.Potential + noise;
 
-            int lowerBand = Mathf.Clamp(Mathf.FloorToInt((fuzzyCenter - 7f) / 5f) * 5, 1, 95);
-            int upperBand = Mathf.Clamp(lowerBand + 15, lowerBand + 5, 99);
+            int lowerUncertainty = fuzzRandom.Next(5, 10);
+            int upperUncertainty = fuzzRandom.Next(5, 10);
+            int lowerBand = Mathf.Clamp(Mathf.RoundToInt(fuzzyCenter) - lowerUncertainty, 1, 94);
+            int upperBand = Mathf.Clamp(Mathf.RoundToInt(fuzzyCenter) + upperUncertainty, lowerBand + 5, 99);
 
             return $"{lowerBand}-{upperBand}";
         }
