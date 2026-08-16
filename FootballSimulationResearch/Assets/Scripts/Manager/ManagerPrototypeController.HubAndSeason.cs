@@ -692,7 +692,7 @@ namespace Manager
             // season, no manual recall), so every active loan returns right here.
             ReturnLoanedPlayersForNewSeason();
 
-            DeductManagedTeamWageBill();
+            DeductWageBillForAllClubs();
 
             playableTable.Reset();
             foreach (string teamName in availableTeamNames)
@@ -964,26 +964,47 @@ namespace Manager
             }
         }
 
-        // Only the managed team's budget is ever spent or displayed (see the Transfer
-        // Market screen below) - AI clubs never buy or sell anything (explicit scope
-        // boundary, see HANDOFF), so there's no point maintaining an accurate wage bill
-        // for squads nobody ever checks the finances of.
-        private void DeductManagedTeamWageBill()
+        // AI-club finance foundation (roadmap: prerequisite for ManagerAiTransferTargetSearch's
+        // output to ever be acted on) - every club that has an actual generated squad
+        // by season rollover (every AI club plays fixtures all season, so this is the
+        // whole league by the time this runs, not just the managed team) now gets a
+        // seeded budget and pays its own annual wage bill, the same as the managed
+        // team always has. AI clubs still can't buy or sell anything yet (that needs
+        // its own transaction/decision layer) - this only gives them a real number to
+        // eventually check against.
+        private void DeductWageBillForAllClubs()
         {
-            if (!squadsByTeamName.TryGetValue(managedTeamName, out AgentTeam team))
+            DeductWageBill(managedTeamName, notifyHuman: true);
+
+            foreach (string teamName in squadsByTeamName.Keys.ToList())
+            {
+                if (teamName == managedTeamName)
+                {
+                    continue;
+                }
+
+                // Silent for AI clubs - the human should only ever be notified about
+                // their own club's finances, same principle ManagerMatchdayCondition's
+                // AI Condition/injury tracking already established (see DEVLOG's
+                // 2026-08-16 AI squad rotation entry).
+                DeductWageBill(teamName, notifyHuman: false);
+            }
+        }
+
+        private void DeductWageBill(string teamName, bool notifyHuman)
+        {
+            if (!squadsByTeamName.TryGetValue(teamName, out AgentTeam team))
             {
                 return;
             }
 
-            float totalWage = 0f;
-            foreach (PlayerAgent player in team.Players)
-            {
-                totalWage += ManagerClubFinance.GetAnnualWage(player);
-            }
+            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(teamName);
+            float totalWage = finance.ApplyAnnualWageBill(team, strength.AttackStrength, strength.DefenceStrength);
 
-            StatisticalModel.TeamStrength strength = statisticalModel.GetTeamStrength(managedTeamName);
-            finance.GetOrSeedBudget(managedTeamName, strength.AttackStrength, strength.DefenceStrength);
-            finance.AdjustBudget(managedTeamName, -totalWage);
+            if (!notifyHuman)
+            {
+                return;
+            }
 
             // Playtest report (2026-08-16, "can't bid on a player in season 2") - this
             // deduction was previously invisible everywhere (not shown on the End-of-
@@ -992,7 +1013,7 @@ namespace Manager
             // deliberately unclamped (a real overspend consequence, not a bug to hide),
             // but the player needs to be told it happened.
             inbox.Add(InboxMessageType.WageBill, "Annual Wage Bill Paid",
-                $"The squad's annual wages of £{totalWage:F1}m have been deducted from the transfer budget. Remaining budget: £{finance.GetBudget(managedTeamName):F1}m.",
+                $"The squad's annual wages of £{totalWage:F1}m have been deducted from the transfer budget. Remaining budget: £{finance.GetBudget(teamName):F1}m.",
                 careerCalendar.CurrentDayNumber);
         }
 

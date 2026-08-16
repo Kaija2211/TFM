@@ -30,6 +30,26 @@ Working tree not yet committed (three batches today: AI rotation, Liverpool play
 
 ---
 
+## 2026-08-16 — AI club finance foundation
+
+**Goal**
+Fourth slice of the Intelligent AI Clubs epic, same day as the target search: give AI clubs the finance/budget foundation that piece flagged as the real prerequisite before its output could ever be acted on. Only the managed team had a budget of any kind before this - `DeductManagedTeamWageBill` (the only wage-deduction call site in the project) was hardcoded to `managedTeamName`, and nothing ever seeded a budget for any other club.
+
+**What shipped**
+- `ManagerClubFinance.ApplyAnnualWageBill(AgentTeam, attackStrength, defenceStrength)` (new instance method) - extracted the managed team's existing seed-then-deduct sequence out of the controller and onto the finance class itself, where it's a real, independently-testable method rather than logic that only ever ran inside a live scene. Returns the total wage deducted so a caller can report it without recomputing.
+- `ManagerPrototypeController.HubAndSeason.cs`'s `DeductManagedTeamWageBill` became `DeductWageBillForAllClubs`/`DeductWageBill(teamName, notifyHuman)`, called once per club at season rollover for every club with a generated squad (every AI club plays fixtures all season, so by rollover time this is the whole league, not just whoever's been touched). AI clubs get the same wage bill silently - no Inbox message, matching the same "the human is only told about their own club" principle `ManagerMatchdayCondition`'s AI Condition/injury tracking already established earlier today.
+- `GetOrCreateAgentTeam` (`ManagerPrototypeController.World.cs`) now also seeds every club's budget the moment its squad first exists, not only at the first season rollover - a club's budget should be a real number from the start of a career, matching how the managed team's own budget was already seeded early via several call sites.
+
+**Verification**
+New `ManagerAiClubFinanceAudit`: stronger clubs seed bigger budgets than weaker ones, stronger generated squads carry clearly higher wage bills than weaker ones, ten consecutive wage-only seasons with no income stay numerically sane (no NaN, budget trends below its seed value, same unclamped-by-design behaviour the managed team's budget already has), and a full 20-club generated league gets sane positive budgets/wages for every club with the stronger half's mean wage bill clearly exceeding the weaker half's. One test bug caught and fixed before the audit passed (not a production bug): `GetOrSeedBudget`'s idempotent seed-once behaviour meant re-calling it *after* a wage-deduction loop just returned the already-depleted current budget instead of the original seed, silently making the "budget went down" assertion compare a number against itself - fixed by capturing the seed value before the loop.
+
+Live in-Editor verification against a real season: new Liverpool career, full season 1, "Start New Season" (the actual rollover trigger) - all ~20 clubs' wage bills processed with zero errors, and the resulting Inbox message confirmed exact arithmetic: Liverpool's wage bill of £140.8m deducted from a £285.5m budget leaving £144.7m, matching precisely. All 10 audits (nine existing plus this one) pass with no regressions.
+
+**State at session end**
+Working tree not yet committed (today's fifth batch - AI rotation and the Liverpool playtest fixes are already committed by Thomas via GitHub Desktop; the depth evaluator, target search and this finance foundation remain pending). `ROADMAP.md`/`BACKLOG.md` updated. AI clubs still can't spend their new budget on anything - the actual transaction/decision layer (bid, sale, contract) is the next slice, and it's now unblocked rather than needing its own finance groundwork first.
+
+---
+
 ## 2026-08-16 — AI transfer target search
 
 **Goal**

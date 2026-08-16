@@ -20,7 +20,7 @@
 
 ## Boundary rule
 
-Partial files are a navigation and merge-conflict improvement, not permission to keep growing the controller indefinitely. New reusable football logic should live in focused classes and be called by the relevant partial. Examples include `ManagerAiTacticalPlanner`, `ManagerTacticalShape`, `ManagerPlayerDerivedStrength`, `ManagerSquadAutoPicker` (shared best-XI selection, used by the managed team's Auto-Pick button), `ManagerMatchdayCondition` (shared Condition decay/injury-risk simulation, no human-facing side effects), `ManagerAiSquadRotation` (the AI-club matchday selection policy built on both of those), `ManagerAiSquadDepthEvaluator` (pure positional depth/quality/succession analysis) and `ManagerAiTransferTargetSearch` (read-only target ranking consuming the depth evaluator's output) - none of the last two are wired to any transfer action yet, see DEVLOG's 2026-08-16 entries.
+Partial files are a navigation and merge-conflict improvement, not permission to keep growing the controller indefinitely. New reusable football logic should live in focused classes and be called by the relevant partial. Examples include `ManagerAiTacticalPlanner`, `ManagerTacticalShape`, `ManagerPlayerDerivedStrength`, `ManagerSquadAutoPicker` (shared best-XI selection, used by the managed team's Auto-Pick button), `ManagerMatchdayCondition` (shared Condition decay/injury-risk simulation, no human-facing side effects), `ManagerAiSquadRotation` (the AI-club matchday selection policy built on both of those), `ManagerAiSquadDepthEvaluator` (pure positional depth/quality/succession analysis), `ManagerAiTransferTargetSearch` (read-only target ranking consuming the depth evaluator's output), and `ManagerClubFinance.ApplyAnnualWageBill` (budget seed/wage-deduction logic now shared by every club, not just the managed team) - the target search and squad-depth pieces aren't wired to any transfer action yet, see DEVLOG's 2026-08-16 entries.
 
 Code belongs in a controller partial only when it directly coordinates Unity views, navigation, or the career lifecycle. Rules that can be evaluated without a scene object should be plain C# services with deterministic editor audits.
 
@@ -34,4 +34,4 @@ Future structural work should proceed one responsibility at a time:
 4. Run the Manager Career Systems audit and any relevant specialist audit.
 5. Run the holy-balance audit whenever football outcomes, selection, development or squad quality may change.
 
-The next intended piece is an AI-club finance/budget foundation - no AI club has any budget tracking today, so `ManagerAiTransferTargetSearch`'s targets can't yet be acted on. Actual recruitment/bid decisions follow once that exists.
+The next intended piece is the actual AI recruitment/transaction layer (bid, sale, contract decisions) acting on `ManagerAiTransferTargetSearch`'s output using each club's now-real `ManagerClubFinance` budget.

@@ -128,6 +128,15 @@ namespace Manager
             // RecalculateLiveTeamStrength for how this gets used every season rollover.
             baselineAverageOverallByTeam[teamName] = GetAverageOverall(newTeam);
 
+            // AI-club finance foundation - seed a budget the moment any club's squad
+            // first exists, not just at season rollover (DeductWageBillForAllClubs
+            // would eventually seed it anyway, but a club's budget should be a real
+            // number from the start of a career, matching how the managed team's own
+            // budget is already seeded well before its first rollover). Idempotent -
+            // GetOrSeedBudget only ever seeds once per team name.
+            StatisticalModel.TeamStrength budgetSeedStrength = statisticalModel.GetTeamStrength(teamName);
+            finance.GetOrSeedBudget(teamName, budgetSeedStrength.AttackStrength, budgetSeedStrength.DefenceStrength);
+
             return newTeam;
         }
 

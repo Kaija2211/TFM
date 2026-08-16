@@ -89,6 +89,27 @@ namespace Manager
             budgetByTeamName[teamName] = GetBudget(teamName) + delta;
         }
 
+        // AI-club finance foundation (roadmap: prerequisite for ManagerAiTransferTargetSearch's
+        // output to ever be acted on) - the exact seed-then-deduct sequence the
+        // managed team's own season rollover always used, pulled out here so any club
+        // (managed or AI) can pay its own annual wage bill through one call, and so it
+        // has a deterministic Editor audit rather than only ever running inside a live
+        // scene controller. Returns the total wage deducted so a caller can report it
+        // (e.g. an Inbox message) without needing to recompute it.
+        public float ApplyAnnualWageBill(AgentTeam team, float attackStrength, float defenceStrength)
+        {
+            float totalWage = 0f;
+            foreach (PlayerAgent player in team.Players)
+            {
+                totalWage += GetAnnualWage(player);
+            }
+
+            GetOrSeedBudget(team.TeamName, attackStrength, defenceStrength);
+            AdjustBudget(team.TeamName, -totalWage);
+
+            return totalWage;
+        }
+
         // Session 16 - a brand new career starting mid-session (OnConfirmTeamClicked)
         // never reset this, so a second career in the same Play Mode/app session opened
         // with every club still holding whatever budget/spend/income it had at the end
