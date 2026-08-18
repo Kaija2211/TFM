@@ -1,4 +1,4 @@
-# TFM - Football management Simulation
+# TFM - Football Management Simulation
 
 A Unity/C# football management simulation with a fully generated world — clubs,
 players, transfer history and league tables are procedurally created per save, not
