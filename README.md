@@ -6,6 +6,18 @@ pulled from a real-world database. You manage one club: matchday selection, tact
 transfers, scouting, youth development and finances, across a persistent multi-season
 career.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Season Hub](Docs/Screenshots/season_hub.png)<br>Season Hub — career overview, form and next fixture | ![Tactics Board](Docs/Screenshots/tactics_board.png)<br>Tactics Board — formation, pitch-zone occupancy and tactical sliders |
+| ![Squad list](Docs/Screenshots/squad_list.png)<br>Squad — starting XI, bench and reserves with live condition and value | ![Player Detail](Docs/Screenshots/player_details.png)<br>Player Detail — attributes, development trend and role instructions |
+| ![Live match](Docs/Screenshots/live_match.png)<br>Live match — event feed with live 0–10 player ratings | |
+
+A UI Toolkit rebuild of the interface above is in progress — see
+[`Docs/Design/ui_toolkit_hub_mockup.png`](Docs/Design/ui_toolkit_hub_mockup.png) for the
+planned Season Hub redesign (a design mockup, not yet shipped in-engine).
+
 ## What's implemented
 
 - A day-by-day career calendar with transfer windows, multi-save/load and long-term
